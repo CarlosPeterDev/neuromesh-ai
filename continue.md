@@ -13,6 +13,12 @@ CI run on commit de9bb01 succeeded: analyze + tests passed, arm64 APK, universal
 - Original logo + adaptive launcher icon generated (navy / cyan / violet / lime node network).
 - CI: `.github/workflows/android-release.yml` (analyze, test, arm64 APK, universal APK, AAB, SHA-256, tag `v1.0.N` + moving `latest`).
 
+## Models screen (added after v1.0.4)
+- Browse tab replaced by a live Hugging Face GGUF search (`lib/services/hf_service.dart`, `lib/views/hf_browser.dart`): search box, per-repo file list with sizes/quants, download into the app or save to the phone's public Downloads folder. Hard-coded catalog links are no longer shown (catalog data still exists in code for already-downloaded models and image models).
+- Import sheet gained a "Get from Hugging Face" shortcut. File/folder import is unchanged.
+- UNVERIFIED on a device; only analyze/unit tests in CI.
+- Not handled: gated repos (hidden behind a notice), split multi-part GGUFs and vision projector files (filtered out).
+
 ## Not done / unverified
 - Native JNI rename is untested on a device (build compiles, runtime unverified).
 - Not implemented: new cluster wizard, model manager rework, agents, document RAG, voice, performance center, Arabic/RTL, theme redesign, new navigation. Existing features from the base remain as inherited.

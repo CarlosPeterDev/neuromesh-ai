@@ -10,6 +10,7 @@ import '../models/ai_model.dart';
 import '../services/download_service.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
+import 'hf_browser.dart';
 
 const _tabular = [FontFeature.tabularFigures()];
 
@@ -78,9 +79,7 @@ class ModelView extends GetView<ModelController> {
                 _buildImportingProgress(context),
                 ..._buildLibrary(context),
               ] else if (scope == 'browse') ...[
-                _buildFeatured(context),
-                _buildLocalFilterChips(context),
-                ..._buildBrowse(context),
+                const HfBrowser(),
               ] else
                 _buildOnlineProviders(context),
             ],
@@ -151,6 +150,16 @@ class ModelView extends GetView<ModelController> {
           onTap: () {
             Navigator.pop(ctx);
             controller.importModelFromStorage();
+          },
+        ),
+        AppRow(
+          icon: Icons.cloud_download_outlined,
+          title: 'Get from Hugging Face',
+          subtitle: 'Search and download GGUF models',
+          chevron: true,
+          onTap: () {
+            Navigator.pop(ctx);
+            controller.modelScope.value = 'browse';
           },
         ),
         if (controller.supportsFolderImport)
