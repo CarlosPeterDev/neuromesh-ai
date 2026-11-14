@@ -1,0 +1,122 @@
+name: Android release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One release job at a time per branch; a newer push cancels an older run that has not published yet.
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # create/update GitHub Releases
+
+env:
+  BASE_VERSION: "1.0"   # MAJOR.MINOR; PATCH and versionCode come from the CI run number (never committed back)
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Compute version
+        id: ver
+        run: |
+          echo "name=${BASE_VERSION}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "code=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare signing
+        id: sign
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
+            echo "$KS_B64" | base64 -d > android/release.jks
+            {
+              echo "storePassword=$KS_PASS"
+              echo "keyPassword=$KEY_PASS"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "storeFile=$GITHUB_WORKSPACE/android/release.jks"
+            } > android/key.properties
+            echo "production=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "production=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No signing secrets: building DEVELOPMENT-signed artifacts (published as pre-release)."
+          fi
+
+      - name: Dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Test
+        run: flutter test
+
+      - name: Build APKs and AAB
+        env:
+          NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.sign.outputs.production == 'true' && 'false' || 'true' }}
+        run: |
+          V='--build-name=${{ steps.ver.outputs.name }} --build-number=${{ steps.ver.outputs.code }}'
+          flutter build apk --release --target-platform android-arm64 --split-per-abi $V
+          flutter build apk --release $V
+          flutter build appbundle --release $V
+
+      - name: Collect and verify artifacts
+        id: art
+        run: |
+          set -e
+          V='${{ steps.ver.outputs.name }}'
+          SUF=""; [ '${{ steps.sign.outputs.production }}' = 'true' ] || SUF="-dev"
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "dist/NeuroMesh-AI-v${V}-arm64${SUF}.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/NeuroMesh-AI-v${V}-universal${SUF}.apk"
+          cp build/app/outputs/bundle/release/app-release.aab "dist/NeuroMesh-AI-v${V}${SUF}.aab"
+          for f in dist/*; do test -s "$f" || { echo "empty artifact $f"; exit 1; }; done
+          for f in dist/*.apk; do unzip -tq "$f"; done
+          unzip -tq dist/*.aab
+          (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neuromesh-ai-${{ steps.ver.outputs.name }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          V='${{ steps.ver.outputs.name }}'
+          PRE=""; [ '${{ steps.sign.outputs.production }}' = 'true' ] || PRE="--prerelease"
+          KIND="production-signed"; [ -n "$PRE" ] && KIND="DEVELOPMENT-signed (not production-ready)"
+          NOTES="NeuroMesh AI v${V}
+          - Build date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          - Commit: ${GITHUB_SHA}
+          - Signing: ${KIND}
+          - Checksums: SHA256SUMS.txt"
+          # Immutable version tag: never overwritten.
+          gh release create "v${V}" dist/* --target "${GITHUB_SHA}" --title "NeuroMesh AI v${V}" --notes "$NOTES" $PRE
+          # Moving 'latest' channel: replaced only after this build succeeded.
+          gh release delete latest --cleanup-tag --yes 2>/dev/null || true
+          gh release create latest dist/* --target "${GITHUB_SHA}" --title "NeuroMesh AI latest (v${V})" --notes "$NOTES" $PRE
