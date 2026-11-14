@@ -79,7 +79,8 @@ class ToolboxView extends StatelessWidget {
             title: 'Read last reply aloud',
             onTap: () {
               final msgs = Get.find<ChatController>().messages;
-              final last = msgs.lastWhereOrNull((m) => m.role == 'assistant');
+              final reversed = msgs.reversed.where((m) => m.role == 'assistant');
+              final last = reversed.isEmpty ? null : reversed.first;
               if (last == null) {
                 _toast('No reply to read yet.');
                 return;
