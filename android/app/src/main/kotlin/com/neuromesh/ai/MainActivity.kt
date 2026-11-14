@@ -37,8 +37,17 @@ class MainActivity : FlutterActivity() {
     private var pendingModelsDir: String? = null
     private val monitoredInAppDownloads = ConcurrentHashMap.newKeySet<Long>()
 
+    private val deviceBridge by lazy { DeviceBridge(this) }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        deviceBridge.handleIntent(intent)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        deviceBridge.register(flutterEngine)
+        deviceBridge.handleIntent(intent)
         importChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, importChannelName)
         importChannel?.setMethodCallHandler { call, result ->
             when (call.method) {

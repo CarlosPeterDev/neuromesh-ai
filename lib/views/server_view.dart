@@ -8,6 +8,8 @@ import 'package:http/http.dart' as http;
 import '../controllers/server_controller.dart';
 import '../core/ui.dart';
 import '../core/haptics.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'dart:convert';
 
 class ServerView extends GetView<ServerController> {
   const ServerView({super.key});
@@ -127,6 +129,35 @@ class ServerView extends GetView<ServerController> {
                         ? null
                         : controller.openAiBaseUrl),
               ]),
+              const SizedBox(height: 12),
+              if (controller.localUrl.value != null)
+                AppGroup(children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(children: [
+                      const Text('Scan to connect another device',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 4),
+                      const Text(
+                          'Contains the server address and, if enabled, the API key. Only show it to people you trust.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 12)),
+                      const SizedBox(height: 12),
+                      Container(
+                        color: Colors.white,
+                        padding: const EdgeInsets.all(8),
+                        child: QrImageView(
+                            data: jsonEncode({
+                              'url': controller.openAiBaseUrl,
+                              if (controller.requiresApiKey)
+                                'key': controller.apiKey.value,
+                            }),
+                            size: 200,
+                            padding: EdgeInsets.zero),
+                      ),
+                    ]),
+                  ),
+                ]),
               const SizedBox(height: 12),
               _HealthTest(baseUrl: controller.localUrl.value),
 

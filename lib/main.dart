@@ -16,6 +16,7 @@ import 'core/theme.dart';
 import 'core/routes.dart';
 import 'services/agent_service.dart';
 import 'services/toolbox_service.dart';
+import 'services/device_bridge.dart';
 import 'services/hive_service.dart';
 import 'services/inference_service.dart';
 import 'services/cluster_service.dart';
@@ -92,6 +93,7 @@ void main() {
     Get.put(InferenceService());
     Get.put(AgentService());
     Get.put(ToolboxService());
+    Get.put(DeviceBridge(), permanent: true);
     Get.put(CloudService());
     Get.put(DownloadService());
     if (UpdateService.isSupported) Get.put(UpdateService(), permanent: true);

@@ -3,7 +3,10 @@ import 'package:get/get.dart';
 
 import '../controllers/chat_controller.dart';
 import '../core/ui.dart';
+import '../services/device_bridge.dart';
+import '../services/diagnostics_service.dart';
 import '../services/toolbox_service.dart';
+import 'storage_view.dart';
 
 class ToolboxView extends StatelessWidget {
   const ToolboxView({super.key});
@@ -43,6 +46,16 @@ class ToolboxView extends StatelessWidget {
       backgroundColor: t.bg,
       appBar: appScreenBar(context, title: 'Toolbox'),
       body: ListView(padding: kPagePadding, children: [
+        Obx(() {
+          final adv = Get.find<DeviceBridge>().advisory;
+          if (adv == null) return const SizedBox.shrink();
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: AppGroup(children: [
+              AppRow(icon: Icons.thermostat_rounded, title: 'Heads up', subtitle: adv),
+            ]),
+          );
+        }),
         const SectionHeader('Roles'),
         AppGroup(dividerIndent: 60, children: [
           for (final r in kRolePresets)
@@ -139,6 +152,43 @@ class ToolboxView extends StatelessWidget {
             icon: Icons.restore_rounded,
             title: 'Restore from backup',
             onTap: () async => _toast(await _tb.restoreBackup()),
+          ),
+        ]),
+        const SectionHeader('Device & support'),
+        AppGroup(dividerIndent: 60, children: [
+          Obx(() {
+            final d = Get.find<DeviceBridge>();
+            return AppRow(
+              icon: Icons.battery_charging_full_rounded,
+              title: 'Battery & temperature',
+              subtitle:
+                  'Battery ${d.batteryLevel.value}%${d.charging.value ? ' (charging)' : ''} · thermal level ${d.thermal.value}',
+              onTap: d.refresh,
+            );
+          }),
+          AppRow(
+            icon: Icons.sd_storage_outlined,
+            title: 'Storage manager',
+            subtitle: 'See and delete downloaded models',
+            chevron: true,
+            onTap: () => Get.to(() => const StorageView()),
+          ),
+          AppRow(
+            icon: Icons.bug_report_outlined,
+            title: 'Export diagnostics',
+            subtitle: 'Version, device and recent log. Secrets are removed.',
+            onTap: () => DiagnosticsService.shareReport(),
+          ),
+          AppRow(
+            icon: Icons.feedback_outlined,
+            title: 'Send feedback',
+            subtitle: 'Prepares a GitHub issue draft. No account needed to write it.',
+            onTap: () async {
+              final text = await _ask(context, 'What happened?', 'Describe the problem or idea', lines: 4);
+              if (text == null || text.isEmpty) return;
+              final ok = await DiagnosticsService.openIssueDraft(text);
+              if (!ok) _toast('Could not open the browser.');
+            },
           ),
         ]),
       ]),
