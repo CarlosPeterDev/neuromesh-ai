@@ -14,6 +14,7 @@ import '../ffi/sd_ffi_bindings.dart';
 import '../services/cluster_service.dart';
 import 'cluster_view.dart';
 import 'log_view.dart';
+import 'toolbox_view.dart';
 import '../core/haptics.dart';
 
 const _tabular = [FontFeature.tabularFigures()];
@@ -126,6 +127,16 @@ class SettingsView extends GetView<SettingsController> {
                   chevron: true,
                   onTap: () => Get.to(() => const ClusterView()),
                 ),
+            ]),
+            const SectionHeader('Tools'),
+            AppGroup(dividerIndent: 60, children: [
+              AppRow(
+                icon: Icons.handyman_outlined,
+                title: 'Toolbox',
+                subtitle: 'Roles, prompts, profiles, export, backup',
+                chevron: true,
+                onTap: () => Get.to(() => const ToolboxView()),
+              ),
             ]),
             const SectionHeader('About'),
             AppGroup(dividerIndent: 60, children: [

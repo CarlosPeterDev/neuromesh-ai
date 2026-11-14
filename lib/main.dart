@@ -15,6 +15,7 @@ import 'core/theme.dart';
 //////
 import 'core/routes.dart';
 import 'services/agent_service.dart';
+import 'services/toolbox_service.dart';
 import 'services/hive_service.dart';
 import 'services/inference_service.dart';
 import 'services/cluster_service.dart';
@@ -90,6 +91,7 @@ void main() {
     if (ClusterService.isSupported) Get.put(ClusterService(), permanent: true);
     Get.put(InferenceService());
     Get.put(AgentService());
+    Get.put(ToolboxService());
     Get.put(CloudService());
     Get.put(DownloadService());
     if (UpdateService.isSupported) Get.put(UpdateService(), permanent: true);
