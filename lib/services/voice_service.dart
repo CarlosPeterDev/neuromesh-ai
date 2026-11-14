@@ -53,6 +53,40 @@ List<String> speechChunks(String text) {
   return parts.where((p) => p.trim().isNotEmpty).toList();
 }
 
+/// Streaming helper: from the reply text produced so far, returns the
+/// sentences that are complete since [from] and the new read position.
+/// Text inside <think>…</think> (even unfinished) is never spoken.
+({List<String> sentences, int next, String visible}) nextSentences(
+    String raw, int from,
+    {bool flush = false}) {
+  var visible = raw.replaceAll(RegExp(r'<think>[\s\S]*?</think>'), '');
+  final open = visible.indexOf('<think>');
+  if (open >= 0) visible = visible.substring(0, open);
+  if (from > visible.length) from = visible.length;
+  final out = <String>[];
+  var pos = from;
+  final re = RegExp(r'[.!?؟。\n]+(\s+|$)');
+  for (final m in re.allMatches(visible.substring(from))) {
+    final end = from + m.end;
+    // A trailing '.' at the very end may be a decimal point still being typed.
+    if (!flush && m.end == visible.length - from && !m.group(0)!.endsWith(' ') &&
+        !m.group(0)!.contains('\n')) {
+      break;
+    }
+    final piece = visible.substring(pos, end).trim();
+    if (piece.length >= 8 || (flush && piece.isNotEmpty)) {
+      out.add(piece);
+      pos = end;
+    }
+  }
+  if (flush && pos < visible.length) {
+    final rest = visible.substring(pos).trim();
+    if (rest.isNotEmpty) out.add(rest);
+    pos = visible.length;
+  }
+  return (sentences: out, next: pos, visible: visible);
+}
+
 class VoiceService extends GetxService {
   sherpa.OfflineRecognizer? _stt;
   String? _sttId;
@@ -65,6 +99,31 @@ class VoiceService extends GetxService {
   final AudioPlayer _player = AudioPlayer();
   FlutterTts? _system;
   bool _stopSpeaking = false;
+
+  /// Creates a Silero voice-activity detector, or null if it isn't installed.
+  Future<sherpa.VoiceActivityDetector?> createVad() async {
+    final store = Get.find<VoiceModelStore>();
+    final m = voiceModelById('silero-vad');
+    if (m == null || !store.installed.contains(m.id)) return null;
+    _initBindings();
+    final path = '${await store.dirFor(m)}/silero_vad.onnx';
+    if (!File(path).existsSync()) return null;
+    return sherpa.VoiceActivityDetector(
+      config: sherpa.VadModelConfig(
+        sileroVad: sherpa.SileroVadModelConfig(
+            model: path,
+            threshold: 0.5,
+            minSilenceDuration: 0.8,
+            minSpeechDuration: 0.3,
+            windowSize: 512,
+            maxSpeechDuration: 15),
+        sampleRate: 16000,
+        numThreads: 1,
+        debug: false,
+      ),
+      bufferSizeInSeconds: 30,
+    );
+  }
 
   bool get sttReady => _stt != null;
   bool get ttsReady => _tts != null;
@@ -153,8 +212,12 @@ class VoiceService extends GetxService {
     return text;
   }
 
+  Completer<void>? _stopSignal;
+
   Future<void> stopSpeaking() async {
     _stopSpeaking = true;
+    final sig = _stopSignal;
+    if (sig != null && !sig.isCompleted) sig.complete();
     await _player.stop();
     await _system?.stop();
   }
@@ -191,8 +254,10 @@ class VoiceService extends GetxService {
       final f = File('${dir.path}/nm_tts_${i % 2}.wav');
       await f.writeAsBytes(encodeWav(audio.samples, audio.sampleRate));
       final done = _player.onPlayerComplete.first;
+      _stopSignal = Completer<void>();
       await _player.play(DeviceFileSource(f.path));
-      await done;
+      await Future.any([done, _stopSignal!.future]);
+      if (_stopSpeaking) return;
     }
   }
 

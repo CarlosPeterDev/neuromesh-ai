@@ -18,6 +18,22 @@ void main() {
     expect(speechChunks('  '), isEmpty);
   });
 
+  test('streaming sentences are released as they complete', () {
+    var r = nextSentences('Hello there. How are', 0);
+    expect(r.sentences, ['Hello there.']);
+    r = nextSentences('Hello there. How are you today? Fine', r.next);
+    expect(r.sentences, ['How are you today?']);
+    r = nextSentences('Hello there. How are you today? Fine', r.next, flush: true);
+    expect(r.sentences, ['Fine']);
+  });
+
+  test('thinking is never spoken while streaming', () {
+    final r = nextSentences('<think>let me see. ok. ', 0);
+    expect(r.sentences, isEmpty);
+    final r2 = nextSentences('<think>x.</think>Answer is here. ', 0);
+    expect(r2.sentences, ['Answer is here.']);
+  });
+
   test('voice catalog ids unique and resolvable', () {
     final ids = kVoiceModels.map((m) => m.id).toSet();
     expect(ids.length, kVoiceModels.length);

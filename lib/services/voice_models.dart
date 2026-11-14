@@ -7,7 +7,7 @@ import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
-enum VoiceKind { stt, tts }
+enum VoiceKind { stt, tts, vad }
 
 class VoiceModelInfo {
   final String id;
@@ -19,6 +19,8 @@ class VoiceModelInfo {
   final String sizeLabel;
   /// espeak-ng voice used for Piper phonemization (TTS only).
   final String espeakVoice;
+  /// True when [archiveUrl] is a single file (saved as silero_vad.onnx).
+  final bool directFile;
   const VoiceModelInfo({
     required this.id,
     required this.kind,
@@ -28,13 +30,14 @@ class VoiceModelInfo {
     required this.dirName,
     required this.sizeLabel,
     this.espeakVoice = '',
+    this.directFile = false,
   });
 }
 
 const _asr = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models';
 const _tts = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models';
 
-const kVoiceModels = <VoiceModelInfo>[
+final kVoiceModels = <VoiceModelInfo>[
   VoiceModelInfo(
       id: 'whisper-tiny',
       kind: VoiceKind.stt,
@@ -69,6 +72,15 @@ const kVoiceModels = <VoiceModelInfo>[
       dirName: 'vits-piper-ar_JO-kareem-medium',
       sizeLabel: '67 MB',
       espeakVoice: 'ar'),
+  VoiceModelInfo(
+      id: 'silero-vad',
+      kind: VoiceKind.vad,
+      title: 'Smart speech detector (Silero)',
+      lang: 'multi',
+      archiveUrl: '$_asr/silero_vad.onnx',
+      dirName: 'silero-vad',
+      sizeLabel: '1 MB',
+      directFile: true),
 ];
 
 VoiceModelInfo? voiceModelById(String id) {
@@ -134,6 +146,14 @@ class VoiceModelStore extends GetxService {
         if (total > 0) progress[m.id] = got / total;
       }
       await sink.close();
+      if (m.directFile) {
+        final dir = Directory('${root.path}/${m.dirName}');
+        await dir.create(recursive: true);
+        await tmp.rename('${dir.path}/silero_vad.onnx');
+        await File('${dir.path}/.complete').writeAsString('ok');
+        installed.add(m.id);
+        return;
+      }
       progress[m.id] = -1;
       final src = tmp.path;
       final dst = root.path;
