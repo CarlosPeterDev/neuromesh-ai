@@ -152,7 +152,7 @@ class ToolboxService extends GetxService {
 
   /// Returns a message for the UI.
   Future<String> importChat() async {
-    final res = await FilePicker.platform
+    final res = await FilePicker
         .pickFiles(type: FileType.any, withData: false);
     final path = res?.files.single.path;
     if (path == null) return 'Cancelled.';
@@ -194,7 +194,7 @@ class ToolboxService extends GetxService {
   }
 
   Future<String> restoreBackup() async {
-    final res = await FilePicker.platform
+    final res = await FilePicker
         .pickFiles(type: FileType.any, withData: false);
     final path = res?.files.single.path;
     if (path == null) return 'Cancelled.';
