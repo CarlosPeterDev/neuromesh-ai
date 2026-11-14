@@ -19,6 +19,11 @@ CI run on commit de9bb01 succeeded: analyze + tests passed, arm64 APK, universal
 - UNVERIFIED on a device; only analyze/unit tests in CI.
 - Not handled: gated repos (hidden behind a notice), split multi-part GGUFs and vision projector files (filtered out).
 
+## Fixes after v1.0.5 (reported from a device)
+- "Failed to create context": native code now retries context creation at half the size (down to 512) and reports llama.cpp's real error; the app retries on CPU if a GPU load fails. UNVERIFIED on the reporting phone.
+- API server can now start without a loaded model (answers 'no model' until one is loaded).
+- Agent tab + MCP (remote URL servers) added; analyze/tests pass in CI; not tested on a device.
+
 ## Not done / unverified
 - Native JNI rename is untested on a device (build compiles, runtime unverified).
 - Not implemented: new cluster wizard, model manager rework, agents, document RAG, voice, performance center, Arabic/RTL, theme redesign, new navigation. Existing features from the base remain as inherited.

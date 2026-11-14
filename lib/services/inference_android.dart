@@ -177,13 +177,37 @@ class InferenceEngine {
     } catch (_) {}
 
     // ── Load ──
-    final visionError = await _controller!.loadModel(
-      modelPath: modelPath,
-      threads: threads,
-      contextSize: contextSize,
-      gpuLayers: gpuLayers,
-      mmprojPath: mmprojPath,
-    );
+    String? visionError;
+    try {
+      visionError = await _controller!.loadModel(
+        modelPath: modelPath,
+        threads: threads,
+        contextSize: contextSize,
+        gpuLayers: gpuLayers,
+        mmprojPath: mmprojPath,
+      );
+    } catch (e) {
+      // GPU/Vulkan memory problems are common on phones: retry on the CPU
+      // before giving up.
+      if (gpuLayers == 0) rethrow;
+      print('[Inference] GPU load failed ($e) - retrying on CPU');
+      gpuLayers = 0;
+      gpuNameStr = '';
+      threads = deviceTier == 'ultra'
+          ? 6
+          : deviceTier == 'high'
+              ? 5
+              : deviceTier == 'mid'
+                  ? 4
+                  : 3;
+      visionError = await _controller!.loadModel(
+        modelPath: modelPath,
+        threads: threads,
+        contextSize: contextSize,
+        gpuLayers: 0,
+        mmprojPath: mmprojPath,
+      );
+    }
     _hasLoadedModel = true;
     _ggufVisionLoaded = mmprojPath != null && visionError == null;
     if (visionError != null) {

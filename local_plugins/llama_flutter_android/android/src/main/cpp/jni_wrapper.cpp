@@ -839,13 +839,38 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     // over Wi-Fi to a worker in cluster mode.
     ctx_params.op_offload = n_gpu_layers != 0 && !has_cluster;
 
-    // Create context (using new API)
-    g_ctx = llama_init_from_model(g_model, ctx_params);
+    // Create the context. The KV cache is allocated up front, so a large
+    // context can exceed available memory; step the size down (halving, to a
+    // floor of 512) instead of failing outright, and keep llama.cpp's own
+    // error text so the user sees the real reason.
+    {
+        std::lock_guard<std::mutex> lock(g_load_log_mutex);
+        g_load_error.clear();
+        g_capture_load_error = true;
+    }
+    const uint32_t requested_ctx = ctx_size > 0 ? (uint32_t)ctx_size : 2048u;
+    uint32_t try_ctx = requested_ctx;
+    g_ctx = nullptr;
+    for (int attempt = 0; attempt < 8; attempt++) {
+        ctx_params.n_ctx = try_ctx;
+        g_ctx = llama_init_from_model(g_model, ctx_params);
+        if (g_ctx) break;
+        LOGE("Context creation failed with n_ctx=%u", try_ctx);
+        if (try_ctx <= 512) break;
+        try_ctx = std::max<uint32_t>(512u, try_ctx / 2);
+    }
+    if (g_ctx && try_ctx != requested_ctx) {
+        LOGI("Context reduced from %u to %u tokens to fit in memory", requested_ctx, try_ctx);
+    }
+    const std::string ctx_detail = consumeLoadError();
     if (!g_ctx) {
         llama_model_free(g_model);
         g_model = nullptr;
-        jclass exception = env->FindClass("java/lang/RuntimeException");
-        env->ThrowNew(exception, "Failed to create context");
+        std::string message = "Failed to create context even at " + std::to_string(try_ctx) +
+            " tokens. The phone is probably out of memory for this model: close other apps, "
+            "or pick a smaller model / lower quantization";
+        if (!ctx_detail.empty()) message += " (" + ctx_detail + ")";
+        throwLoadError(env, message);
         return;
     }
 

@@ -71,13 +71,6 @@ class ServerController extends GetxController {
   Future<void> startServer() async {
     if (isRunning.value || isStarting.value) return;
     lastError.value = null;
-    if (!hasLocalModel) {
-      lastError.value = 'Load a local GGUF or LiteRT-LM model first.';
-      showToast('Server not started', lastError.value!,
-          tone: ToastTone.warning);
-      return;
-    }
-
     isStarting.value = true;
     serverStatus.value = 'Starting server...';
     await saveSettings();
@@ -91,7 +84,9 @@ class ServerController extends GetxController {
       );
       localUrl.value = _server.localUrl;
       isRunning.value = true;
-      serverStatus.value = 'Server running';
+      serverStatus.value = hasLocalModel
+          ? 'Server running'
+          : 'Server running - load a model to answer requests';
       if (allowNetwork.value && Get.isRegistered<ClusterService>()) {
         Get.find<ClusterService>().serving.value = true;
       }
