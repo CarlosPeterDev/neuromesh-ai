@@ -8,6 +8,7 @@ import '../core/ui.dart';
 import '../models/ai_model.dart';
 import '../services/download_service.dart';
 import '../services/hf_service.dart';
+import '../services/download_queue.dart';
 import '../widgets/tonal_button.dart';
 
 String _compact(int n) {
@@ -224,6 +225,18 @@ class _RepoFilesState extends State<_RepoFiles> {
               Navigator.of(ctx).pop();
               Navigator.of(context).maybePop();
               controller.downloadModel(model);
+            },
+          ),
+          const SizedBox(height: 10),
+          TonalButton.neutral(
+            ctx,
+            label: 'Add to download queue',
+            onTap: () {
+              Navigator.of(ctx).pop();
+              Navigator.of(context).maybePop();
+              Get.find<DownloadQueue>().add(model);
+              Get.snackbar('Queued', model.name,
+                  snackPosition: SnackPosition.BOTTOM);
             },
           ),
           const SizedBox(height: 10),

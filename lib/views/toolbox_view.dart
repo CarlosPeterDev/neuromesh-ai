@@ -8,6 +8,9 @@ import '../services/diagnostics_service.dart';
 import '../services/toolbox_service.dart';
 import '../services/voice_service.dart';
 import 'storage_view.dart';
+import 'perf_views.dart';
+import '../services/hive_service.dart';
+import '../services/download_queue.dart';
 import 'voice_views.dart';
 
 class ToolboxView extends StatelessWidget {
@@ -90,6 +93,66 @@ class ToolboxView extends StatelessWidget {
                   .speak(last.content, systemLang: ar ? 'ar' : 'en-US');
             },
           ),
+        ]),
+        const SectionHeader('Performance & downloads'),
+        AppGroup(dividerIndent: 60, children: [
+          AppRow(
+            icon: Icons.speed_rounded,
+            title: 'Benchmark loaded model',
+            subtitle: 'Measures first-token time and tokens per second',
+            onTap: () async {
+              _toast('Running benchmark…');
+              final r = await runBenchmark();
+              if (!context.mounted) return;
+              showDialog<void>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                        title: const Text('Benchmark'),
+                        content: Text(r),
+                        actions: [
+                          TextButton(
+                              onPressed: () => Navigator.pop(ctx),
+                              child: const Text('OK'))
+                        ],
+                      ));
+            },
+          ),
+          AppRow(
+            icon: Icons.compare_rounded,
+            title: 'Compare two models',
+            subtitle: 'Same prompt, side-by-side answers',
+            chevron: true,
+            onTap: () => Get.to(() => const CompareView()),
+          ),
+          _SwitchRow(
+              icon: Icons.memory_rounded,
+              title: 'Auto context size',
+              subtitle: 'Lowers the context if the model would not fit in RAM',
+              keyName: 'auto_context',
+              defaultValue: true),
+          _SwitchRow(
+              icon: Icons.title_rounded,
+              title: 'Auto-title chats',
+              subtitle: 'Uses the loaded model to name new chats',
+              keyName: 'auto_title',
+              defaultValue: true),
+          _SwitchRow(
+              icon: Icons.wifi_rounded,
+              title: 'Download on Wi-Fi only',
+              subtitle: 'Applies to new in-app downloads',
+              keyName: 'wifi_only',
+              defaultValue: false),
+          Obx(() {
+            final q = Get.find<DownloadQueue>();
+            final cur = q.current.value;
+            return AppRow(
+              icon: Icons.queue_rounded,
+              title: 'Download queue',
+              subtitle: cur == null && q.queue.isEmpty
+                  ? 'Empty. Add models from Hugging Face.'
+                  : '${cur == null ? '' : 'Now: ${cur.name}. '}${q.queue.length} waiting',
+            );
+          }),
         ]),
         const SectionHeader('Roles'),
         AppGroup(dividerIndent: 60, children: [
@@ -242,4 +305,41 @@ class ToolboxView extends StatelessWidget {
       _toast('Nothing to export yet. Send a message first.');
     }
   }
+}
+
+
+class _SwitchRow extends StatefulWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String keyName;
+  final bool defaultValue;
+  const _SwitchRow(
+      {required this.icon,
+      required this.title,
+      required this.subtitle,
+      required this.keyName,
+      required this.defaultValue});
+
+  @override
+  State<_SwitchRow> createState() => _SwitchRowState();
+}
+
+class _SwitchRowState extends State<_SwitchRow> {
+  late bool _v = Get.find<HiveService>()
+          .getSetting<bool>(widget.keyName, defaultValue: widget.defaultValue) ??
+      widget.defaultValue;
+
+  @override
+  Widget build(BuildContext context) => AppRow(
+        icon: widget.icon,
+        title: widget.title,
+        subtitle: widget.subtitle,
+        trailing: Switch(
+            value: _v,
+            onChanged: (v) {
+              setState(() => _v = v);
+              Get.find<HiveService>().setSetting(widget.keyName, v);
+            }),
+      );
 }

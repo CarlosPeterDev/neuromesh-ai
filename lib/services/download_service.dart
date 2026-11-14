@@ -7,6 +7,7 @@ import 'package:get/get.dart';
 import '../controllers/model_controller.dart';
 import '../core/ui.dart';
 import 'update_service.dart';
+import 'hive_service.dart';
 
 import 'download_native.dart' if (dart.library.html) 'download_web.dart'
     as platform_dl;
@@ -276,6 +277,9 @@ class DownloadService extends GetxService with WidgetsBindingObserver {
           url: url,
           filename: filename,
           modelsDir: modelsDirectory,
+          wifiOnly: Get.find<HiveService>()
+                  .getSetting<bool>('wifi_only', defaultValue: false) ==
+              true,
         );
         if (result != null) {
           final id = result['downloadId'] as int;

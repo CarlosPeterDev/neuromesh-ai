@@ -118,6 +118,61 @@ class _ChatDrawerState extends State<ChatDrawer> {
     if (ok == true) _chat.deleteChat(s.id);
   }
 
+  Future<void> _showActions(BuildContext context, ChatSession s) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+              leading: Icon(s.pinned ? Icons.push_pin : Icons.push_pin_outlined),
+              title: Text(s.pinned ? 'Unpin' : 'Pin to top'),
+              onTap: () => Navigator.pop(ctx, 'pin')),
+          ListTile(
+              leading: const Icon(Icons.psychology_alt_outlined),
+              title: Text(s.systemPrompt == null
+                  ? 'Set instructions for this chat'
+                  : 'Edit instructions for this chat'),
+              onTap: () => Navigator.pop(ctx, 'prompt')),
+          ListTile(
+              leading: const Icon(Icons.delete_outline, color: Colors.red),
+              title: const Text('Delete', style: TextStyle(color: Colors.red)),
+              onTap: () => Navigator.pop(ctx, 'delete')),
+        ]),
+      ),
+    );
+    if (!context.mounted) return;
+    switch (choice) {
+      case 'pin':
+        _chat.togglePin(s.id);
+      case 'prompt':
+        final ctl = TextEditingController(text: s.systemPrompt ?? '');
+        final r = await showDialog<String>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Instructions for this chat'),
+            content: TextField(
+                controller: ctl,
+                maxLines: 6,
+                minLines: 3,
+                decoration: const InputDecoration(
+                    hintText: 'Leave empty to use the global system prompt')),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel')),
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, ctl.text),
+                  child: const Text('Save')),
+            ],
+          ),
+        );
+        if (r != null) _chat.setSessionSystemPrompt(s.id, r);
+      case 'delete':
+        await _confirmDelete(context, s);
+    }
+  }
+
   /// Buckets sessions (already sorted newest first) into date sections.
   List<(String, List<ChatSession>)> _group(List<ChatSession> list) {
     final now = DateTime.now();
@@ -133,6 +188,9 @@ class _ChatDrawerState extends State<ChatDrawer> {
     }
 
     final out = <(String, List<ChatSession>)>[];
+    final pinned = list.where((s) => s.pinned).toList();
+    if (pinned.isNotEmpty) out.add(('Pinned', pinned));
+    list = list.where((s) => !s.pinned).toList();
     for (final s in list) {
       final b = bucket(s.updatedAt);
       if (out.isEmpty || out.last.$1 != b) out.add((b, []));
@@ -284,7 +342,7 @@ class _ChatDrawerState extends State<ChatDrawer> {
                       text: text,
                       selected: selected,
                       onTap: () => _open(s),
-                      onLongPress: () => _confirmDelete(context, s),
+                      onLongPress: () => _showActions(context, s),
                     ),
                 ],
               ],
@@ -293,7 +351,7 @@ class _ChatDrawerState extends State<ChatDrawer> {
           // Footer hint
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-            child: Text('Long-press a chat to delete it',
+            child: Text('Long-press a chat for options',
                 style: GoogleFonts.inter(
                     fontSize: 12, color: muted.withValues(alpha: 0.8))),
           ),

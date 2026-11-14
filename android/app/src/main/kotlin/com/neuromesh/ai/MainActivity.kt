@@ -136,7 +136,8 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     try {
-                        val downloadId = enqueueDownloadInApp(url, filename, modelsDir)
+                        val wifiOnly = call.argument<Boolean>("wifiOnly") ?: false
+                        val downloadId = enqueueDownloadInApp(url, filename, modelsDir, wifiOnly)
                         result.success(mapOf("downloadId" to downloadId, "filename" to sanitizeFilename(filename)))
                     } catch (e: Exception) {
                         result.error("DOWNLOAD_FAILED", e.message ?: e.toString(), null)
@@ -423,7 +424,7 @@ class MainActivity : FlutterActivity() {
         return downloadId
     }
 
-    private fun enqueueDownloadInApp(url: String, filename: String, modelsDir: String): Long {
+    private fun enqueueDownloadInApp(url: String, filename: String, modelsDir: String, wifiOnly: Boolean = false): Long {
         val safeName = sanitizeFilename(filename)
         val tempDownloadsDir = File(getExternalFilesDir(null), "temp_downloads")
         tempDownloadsDir.mkdirs()
@@ -434,7 +435,7 @@ class MainActivity : FlutterActivity() {
             setTitle(safeName)
             setDescription("Downloading local AI model")
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
-            setAllowedOverMetered(true)
+            setAllowedOverMetered(!wifiOnly)
             setAllowedOverRoaming(true)
             setDestinationUri(Uri.fromFile(destFile))
             addRequestHeader("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")

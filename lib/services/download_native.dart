@@ -244,6 +244,7 @@ Future<Map<String, dynamic>?> startNativeDownload({
   required String url,
   required String filename,
   required String modelsDir,
+  bool wifiOnly = false,
 }) async {
   if (!Platform.isAndroid) return null;
   try {
@@ -253,6 +254,7 @@ Future<Map<String, dynamic>?> startNativeDownload({
         'url': url,
         'filename': filename,
         'modelsDir': modelsDir,
+        'wifiOnly': wifiOnly,
       },
     );
     return result;

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:get/get.dart';
+import '../controllers/chat_controller.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/chat_message.dart';
 import '../utils/thought_parser.dart';
@@ -33,6 +35,39 @@ class ChatBubble extends StatelessWidget {
     final thoughtParts = splitThoughtTags(_cleanAssistantText(visibleContent));
     final answerContent = thoughtParts.answer.trim();
     return _buildAssistant(context, isDark, thoughtParts, answerContent);
+  }
+
+  bool _isLastMessage() {
+    if (!Get.isRegistered<ChatController>()) return false;
+    final c = Get.find<ChatController>();
+    return c.messages.isNotEmpty && c.messages.last.id == message.id;
+  }
+
+  bool _isLastUserMessage() {
+    if (!Get.isRegistered<ChatController>()) return false;
+    final c = Get.find<ChatController>();
+    final i = c.messages.lastIndexWhere((m) => m.role == 'user');
+    return i >= 0 && c.messages[i].id == message.id;
+  }
+
+  Future<void> _editAndResend(BuildContext context, String text) async {
+    final ctl = TextEditingController(text: text);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit message'),
+        content: TextField(controller: ctl, maxLines: 6, minLines: 1, autofocus: true),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, ctl.text),
+              child: const Text('Resend')),
+        ],
+      ),
+    );
+    if (result != null && result.trim().isNotEmpty) {
+      Get.find<ChatController>().resendLast(result);
+    }
   }
 
   // ── User: compact neutral bubble on the right ──
@@ -80,6 +115,18 @@ class ChatBubble extends StatelessWidget {
                 imagePath: message.imagePath,
                 compact: true,
               ),
+            ),
+          ),
+        if (text.trim().isNotEmpty && _isLastUserMessage())
+          Align(
+            alignment: Alignment.centerRight,
+            child: IconButton(
+              tooltip: 'Edit and resend',
+              visualDensity: VisualDensity.compact,
+              iconSize: 16,
+              color: Theme.of(context).hintColor,
+              icon: const Icon(Icons.edit_outlined),
+              onPressed: () => _editAndResend(context, text),
             ),
           ),
         if (text.trim().isNotEmpty)
@@ -147,6 +194,15 @@ class ChatBubble extends StatelessWidget {
             child: Row(children: [
               if (answerContent.isNotEmpty)
                 _CopyButton(text: answerContent, color: muted),
+              if (_isLastMessage())
+                IconButton(
+                  tooltip: 'Regenerate',
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 18,
+                  color: muted,
+                  icon: const Icon(Icons.refresh_rounded),
+                  onPressed: () => Get.find<ChatController>().regenerate(),
+                ),
               if (meta.isNotEmpty) ...[
                 const SizedBox(width: 6),
                 Text(meta.join(' · '),

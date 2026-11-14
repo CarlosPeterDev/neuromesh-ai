@@ -6,6 +6,7 @@ import 'device_info_service.dart';
 import 'app_log_service.dart';
 import 'cluster_service.dart';
 import 'stop_sequence_filter.dart';
+import '../utils/auto_context.dart';
 
 // Conditionally import llama_flutter_android — only on Android
 import 'inference_android.dart' if (dart.library.html) 'inference_stub.dart'
@@ -121,8 +122,27 @@ class InferenceService extends GetxService {
           ) ??
           AppConstants.defaultContextSize;
 
-      final finalContextSize =
+      var finalContextSize =
           isLiteRt ? contextSize.clamp(512, 4096) : contextSize;
+      // Auto mode: shrink the context if this phone can't hold it. Never raises it.
+      if (!isLiteRt &&
+          _hive.getSetting<bool>('auto_context', defaultValue: true) == true &&
+          Get.isRegistered<DeviceInfoService>()) {
+        try {
+          final dev = Get.find<DeviceInfoService>();
+          await dev.refreshMemoryInfo();
+          final auto = autoContextSize(
+            requested: finalContextSize,
+            availableGb: dev.availableRamGB.value,
+            modelBytes: await _fileBytes(modelPath),
+          );
+          if (auto < finalContextSize) {
+            Get.find<AppLogService>().info(
+                'Auto context: $finalContextSize -> $auto (available RAM ${dev.availableRamGB.value.toStringAsFixed(1)} GB)');
+            finalContextSize = auto;
+          }
+        } catch (_) {}
+      }
 
       final lastLoadedContext =
           _hive.getSetting<int>('last_loaded_context_size') ?? 0;

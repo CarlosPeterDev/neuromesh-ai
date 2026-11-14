@@ -17,6 +17,7 @@ import 'core/routes.dart';
 import 'services/agent_service.dart';
 import 'services/toolbox_service.dart';
 import 'services/device_bridge.dart';
+import 'services/download_queue.dart';
 import 'services/voice_models.dart';
 import 'services/voice_service.dart';
 import 'services/hive_service.dart';
@@ -135,6 +136,7 @@ void main() {
     appLog.info('Notifications initialized');
     Get.put(ServerController(), permanent: true);
     Get.put(ModelController());
+    Get.put(DownloadQueue(), permanent: true);
     appLog.info('All services initialized, launching app');
 
     // Auto-configure inference settings based on device RAM

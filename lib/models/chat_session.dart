@@ -4,6 +4,8 @@ class ChatSession {
   final DateTime createdAt;
   final DateTime updatedAt;
   final String? lastMessage;
+  final bool pinned;
+  final String? systemPrompt;
 
   ChatSession({
     required this.id,
@@ -11,6 +13,8 @@ class ChatSession {
     DateTime? createdAt,
     DateTime? updatedAt,
     this.lastMessage,
+    this.pinned = false,
+    this.systemPrompt,
   })  : title = title ?? 'New Chat',
         createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
@@ -21,6 +25,8 @@ class ChatSession {
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
         'lastMessage': lastMessage,
+        'pinned': pinned,
+        'systemPrompt': systemPrompt,
       };
 
   factory ChatSession.fromMap(Map<dynamic, dynamic> map) => ChatSession(
@@ -29,12 +35,17 @@ class ChatSession {
         createdAt: DateTime.tryParse(map['createdAt'] ?? '') ?? DateTime.now(),
         updatedAt: DateTime.tryParse(map['updatedAt'] ?? '') ?? DateTime.now(),
         lastMessage: map['lastMessage'],
+        pinned: map['pinned'] == true,
+        systemPrompt: map['systemPrompt'] as String?,
       );
 
   ChatSession copyWith({
     String? title,
     DateTime? updatedAt,
     String? lastMessage,
+    bool? pinned,
+    String? systemPrompt,
+    bool clearSystemPrompt = false,
   }) =>
       ChatSession(
         id: id,
@@ -42,5 +53,8 @@ class ChatSession {
         createdAt: createdAt,
         updatedAt: updatedAt ?? DateTime.now(),
         lastMessage: lastMessage ?? this.lastMessage,
+        pinned: pinned ?? this.pinned,
+        systemPrompt:
+            clearSystemPrompt ? null : (systemPrompt ?? this.systemPrompt),
       );
 }

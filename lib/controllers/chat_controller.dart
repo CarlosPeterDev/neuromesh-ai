@@ -214,6 +214,122 @@ class ChatController extends GetxController {
     _scrollToBottom(force: true);
   }
 
+  void _updateSession(ChatSession updated) {
+    _hive.saveSession(updated.id, updated.toMap());
+    final idx = sessions.indexWhere((s) => s.id == updated.id);
+    if (idx >= 0) sessions[idx] = updated;
+  }
+
+  void togglePin(String sessionId) {
+    final s = sessions.firstWhereOrNull((x) => x.id == sessionId);
+    if (s == null) return;
+    // copyWith bumps updatedAt; keep the original so pinning doesn't reorder dates.
+    _updateSession(ChatSession(
+        id: s.id,
+        title: s.title,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+        lastMessage: s.lastMessage,
+        pinned: !s.pinned,
+        systemPrompt: s.systemPrompt));
+  }
+
+  void setSessionSystemPrompt(String sessionId, String text) {
+    final s = sessions.firstWhereOrNull((x) => x.id == sessionId);
+    if (s == null) return;
+    final t = text.trim();
+    _updateSession(ChatSession(
+        id: s.id,
+        title: s.title,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+        lastMessage: s.lastMessage,
+        pinned: s.pinned,
+        systemPrompt: t.isEmpty ? null : t));
+  }
+
+  ChatSession? get currentSession =>
+      sessions.firstWhereOrNull((s) => s.id == currentSessionId.value);
+
+  /// Removes the last user+assistant exchange and sends [text] again.
+  /// Used by "Regenerate" and "Edit & resend". Attachments are not re-sent.
+  Future<void> resendLast(String text) async {
+    if (isLoading.value || isStreaming.value) return;
+    final t = text.trim();
+    if (t.isEmpty) return;
+    // Drop everything from the last user message onward.
+    final lastUser = messages.lastIndexWhere((m) => m.role == 'user');
+    if (lastUser < 0) return;
+    final removed = messages.sublist(lastUser);
+    for (final m in removed) {
+      await _hive.messagesBox.delete(m.id);
+    }
+    messages.removeRange(lastUser, messages.length);
+    _resetInferenceContext();
+    textController.text = t;
+    await sendMessage();
+  }
+
+  Future<void> regenerate() async {
+    final lastUser = messages.lastIndexWhere((m) => m.role == 'user');
+    if (lastUser < 0) return;
+    final m = messages[lastUser];
+    final visible = m.fileName == null
+        ? m.content
+        : m.content.split('\n\nAttached file:').first;
+    await resendLast(visible);
+  }
+
+  Future<void> _autoTitle(int generationId) async {
+    try {
+      final settings = Get.find<SettingsController>();
+      if (settings.inferenceMode.value != 'local') return;
+      if (_hive.getSetting<bool>('auto_title', defaultValue: true) != true) {
+        return;
+      }
+      final inf = Get.find<InferenceService>();
+      if (!inf.isModelLoaded.value || generationId != _generationSerial) return;
+      final session = currentSession;
+      if (session == null || session.title != _autoTitleFor[session.id]) return;
+      final firstUser =
+          messages.firstWhereOrNull((m) => m.role == 'user')?.content ?? '';
+      final firstAi =
+          messages.firstWhereOrNull((m) => m.role == 'assistant')?.content ?? '';
+      if (firstUser.isEmpty || firstAi.isEmpty) return;
+      final raw = await inf.generate(
+        prompt:
+            'Write a title of at most 5 words for this conversation. Reply with the title only.\n\nUser: ${firstUser.length > 300 ? firstUser.substring(0, 300) : firstUser}\nAssistant: ${firstAi.length > 300 ? firstAi.substring(0, 300) : firstAi}',
+        systemPrompt: 'You write short conversation titles.',
+        source: 'title',
+        maxTokens: 20,
+      );
+      await inf.resetConversation();
+      final title = raw
+          .replaceAll(RegExp(r'<think>[\s\S]*?</think>'), '')
+          .replaceAll(RegExp('["*#\\n]'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (title.isEmpty || title.startsWith('ERROR') || title.length > 60) {
+        return;
+      }
+      final cur = currentSession;
+      if (cur != null && cur.id == session.id) {
+        _updateSession(ChatSession(
+            id: cur.id,
+            title: title,
+            createdAt: cur.createdAt,
+            updatedAt: cur.updatedAt,
+            lastMessage: cur.lastMessage,
+            pinned: cur.pinned,
+            systemPrompt: cur.systemPrompt));
+      }
+    } catch (_) {}
+  }
+
+  /// session id -> the provisional title we set, so we never overwrite a
+  /// title the user renamed.
+  final _autoTitleFor = <String, String>{};
+
   void deleteChat(String sessionId) {
     if (currentSessionId.value == sessionId && isLoading.value) {
       stopGenerating();
@@ -638,6 +754,7 @@ class ChatController extends GetxController {
       final session =
           sessions.firstWhere((s) => s.id == currentSessionId.value);
       final updated = session.copyWith(title: title, lastMessage: visibleText);
+      _autoTitleFor[updated.id] = title;
       _hive.saveSession(updated.id, updated.toMap());
       final idx = sessions.indexWhere((s) => s.id == updated.id);
       if (idx >= 0) sessions[idx] = updated;
@@ -902,6 +1019,7 @@ class ChatController extends GetxController {
     if (generationId == _generationSerial) {
       isLoading.value = false;
       _scrollToBottom();
+      unawaited(_autoTitle(generationId));
     }
   }
 
@@ -1004,6 +1122,8 @@ class ChatController extends GetxController {
   }
 
   String get _effectiveSystemPrompt {
+    final custom = currentSession?.systemPrompt;
+    if (custom != null && custom.trim().isNotEmpty) return custom;
     final settings = Get.find<SettingsController>();
     final inference = Get.find<InferenceService>();
     final modelName = settings.inferenceMode.value == 'local'
