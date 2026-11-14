@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../controllers/home_controller.dart';
 import '../widgets/chat_drawer.dart';
+import 'agent_view.dart';
 import 'chat_view.dart';
 import 'model_view.dart';
 import 'server_view.dart';
@@ -21,6 +22,10 @@ class HomeView extends GetView<HomeController> {
         icon: Icons.layers_outlined,
         activeIcon: Icons.layers_rounded,
         label: 'Models'),
+    _NavItem(
+        icon: Icons.smart_toy_outlined,
+        activeIcon: Icons.smart_toy_rounded,
+        label: 'Agent'),
     _NavItem(
         icon: Icons.lan_outlined,
         activeIcon: Icons.lan_rounded,
@@ -53,6 +58,7 @@ class HomeView extends GetView<HomeController> {
               children: const [
                 ChatView(),
                 ModelView(),
+                AgentView(),
                 ServerView(),
                 SettingsView()
               ],

@@ -1,0 +1,187 @@
+import 'dart:convert';
+import 'dart:math' as math;
+
+/// Parsed `<tool_call>{...}</tool_call>` from a model reply.
+class ParsedToolCall {
+  final String name;
+  final Map<String, dynamic> arguments;
+  final String textBefore;
+  const ParsedToolCall(this.name, this.arguments, this.textBefore);
+}
+
+/// Finds the first tool call in [reply]. Tolerates a missing closing tag
+/// and surrounding prose; returns null when there is no valid call.
+ParsedToolCall? parseToolCall(String reply) {
+  const open = '<tool_call>';
+  final start = reply.indexOf(open);
+  if (start < 0) return null;
+  final jsonStart = reply.indexOf('{', start + open.length);
+  if (jsonStart < 0) return null;
+  var depth = 0;
+  var inString = false;
+  var escaped = false;
+  for (var i = jsonStart; i < reply.length; i++) {
+    final c = reply[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (c == '\\') {
+        escaped = true;
+      } else if (c == '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (c == '"') {
+      inString = true;
+    } else if (c == '{') {
+      depth++;
+    } else if (c == '}') {
+      depth--;
+      if (depth == 0) {
+        try {
+          final obj = jsonDecode(reply.substring(jsonStart, i + 1));
+          if (obj is Map && obj['name'] is String) {
+            final args = obj['arguments'];
+            return ParsedToolCall(
+              obj['name'] as String,
+              args is Map ? Map<String, dynamic>.from(args) : <String, dynamic>{},
+              reply.substring(0, start).trim(),
+            );
+          }
+        } catch (_) {}
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+/// Safe arithmetic evaluator for the built-in calculator tool.
+/// Supports + - * / % ^, parentheses, unary minus, sqrt/abs/round/floor/ceil.
+double evaluateExpression(String input) {
+  final p = _ExprParser(input);
+  final v = p.parse();
+  if (v.isNaN || v.isInfinite) throw const FormatException('Result is not a number');
+  return v;
+}
+
+class _ExprParser {
+  _ExprParser(this.s);
+  final String s;
+  int i = 0;
+
+  double parse() {
+    final v = _expr();
+    _ws();
+    if (i != s.length) throw FormatException('Unexpected "${s[i]}"');
+    return v;
+  }
+
+  void _ws() {
+    while (i < s.length && s[i] == ' ') {
+      i++;
+    }
+  }
+
+  bool _eat(String c) {
+    _ws();
+    if (i < s.length && s[i] == c) {
+      i++;
+      return true;
+    }
+    return false;
+  }
+
+  double _expr() {
+    var v = _term();
+    while (true) {
+      if (_eat('+')) {
+        v += _term();
+      } else if (_eat('-')) {
+        v -= _term();
+      } else {
+        return v;
+      }
+    }
+  }
+
+  double _term() {
+    var v = _power();
+    while (true) {
+      if (_eat('*')) {
+        v *= _power();
+      } else if (_eat('/')) {
+        final d = _power();
+        if (d == 0) throw const FormatException('Division by zero');
+        v /= d;
+      } else if (_eat('%')) {
+        final d = _power();
+        if (d == 0) throw const FormatException('Division by zero');
+        v %= d;
+      } else {
+        return v;
+      }
+    }
+  }
+
+  double _power() {
+    final base = _unary();
+    if (_eat('^')) return math.pow(base, _power()).toDouble();
+    return base;
+  }
+
+  double _unary() {
+    if (_eat('-')) return -_unary();
+    if (_eat('+')) return _unary();
+    return _atom();
+  }
+
+  double _atom() {
+    _ws();
+    if (_eat('(')) {
+      final v = _expr();
+      if (!_eat(')')) throw const FormatException('Missing )');
+      return v;
+    }
+    final start = i;
+    while (i < s.length && RegExp(r'[a-zA-Z]').hasMatch(s[i])) {
+      i++;
+    }
+    if (i > start) {
+      final fn = s.substring(start, i).toLowerCase();
+      if (!_eat('(')) throw FormatException('Unknown name "$fn"');
+      final arg = _expr();
+      if (!_eat(')')) throw const FormatException('Missing )');
+      switch (fn) {
+        case 'sqrt':
+          return math.sqrt(arg);
+        case 'abs':
+          return arg.abs();
+        case 'round':
+          return arg.roundToDouble();
+        case 'floor':
+          return arg.floorToDouble();
+        case 'ceil':
+          return arg.ceilToDouble();
+        default:
+          throw FormatException('Unknown function "$fn"');
+      }
+    }
+    final numStart = i;
+    while (i < s.length && RegExp(r'[0-9.]').hasMatch(s[i])) {
+      i++;
+    }
+    if (i == numStart) {
+      throw FormatException(i < s.length ? 'Unexpected "${s[i]}"' : 'Unexpected end');
+    }
+    final v = double.tryParse(s.substring(numStart, i));
+    if (v == null) throw const FormatException('Bad number');
+    return v;
+  }
+}
+
+String formatNumber(double v) {
+  if (v == v.roundToDouble() && v.abs() < 1e15) return v.toInt().toString();
+  return v.toString();
+}
