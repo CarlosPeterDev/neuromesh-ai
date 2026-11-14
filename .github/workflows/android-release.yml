@@ -36,6 +36,18 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Install modern glslc (Vulkan shader compiler)
+        run: |
+          # The NDK's bundled glslc is too old for the cooperative-matrix shaders in llama.cpp's Vulkan backend.
+          mkdir -p "$RUNNER_TEMP/vksdk" && cd "$RUNNER_TEMP/vksdk"
+          curl -fsSL --retry 3 https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz -o sdk.tar.xz
+          tar -xf sdk.tar.xz
+          GLSLC=$(find . -type f -name glslc -path '*x86_64/bin/*' | head -1)
+          test -n "$GLSLC" || { echo "glslc not found in SDK"; ls; exit 1; }
+          sudo ln -sf "$(realpath "$GLSLC")" /usr/local/bin/glslc
+          echo "VULKAN_SDK=$(dirname "$(dirname "$(realpath "$GLSLC")")")" >> "$GITHUB_ENV"
+          glslc --version
+
       - name: Compute version
         id: ver
         run: |
