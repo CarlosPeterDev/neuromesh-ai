@@ -17,6 +17,8 @@ import 'core/routes.dart';
 import 'services/agent_service.dart';
 import 'services/toolbox_service.dart';
 import 'services/device_bridge.dart';
+import 'services/voice_models.dart';
+import 'services/voice_service.dart';
 import 'services/hive_service.dart';
 import 'services/inference_service.dart';
 import 'services/cluster_service.dart';
@@ -94,6 +96,8 @@ void main() {
     Get.put(AgentService());
     Get.put(ToolboxService());
     Get.put(DeviceBridge(), permanent: true);
+    Get.put(VoiceModelStore(), permanent: true);
+    Get.put(VoiceService(), permanent: true);
     Get.put(CloudService());
     Get.put(DownloadService());
     if (UpdateService.isSupported) Get.put(UpdateService(), permanent: true);

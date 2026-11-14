@@ -6,7 +6,9 @@ import '../core/ui.dart';
 import '../services/device_bridge.dart';
 import '../services/diagnostics_service.dart';
 import '../services/toolbox_service.dart';
+import '../services/voice_service.dart';
 import 'storage_view.dart';
+import 'voice_views.dart';
 
 class ToolboxView extends StatelessWidget {
   const ToolboxView({super.key});
@@ -56,6 +58,38 @@ class ToolboxView extends StatelessWidget {
             ]),
           );
         }),
+        const SectionHeader('Voice'),
+        AppGroup(dividerIndent: 60, children: [
+          AppRow(
+            icon: Icons.call_rounded,
+            title: 'Start a voice call',
+            subtitle: 'Talk to your local model hands-free',
+            chevron: true,
+            onTap: () => Get.to(() => const VoiceCallView()),
+          ),
+          AppRow(
+            icon: Icons.download_for_offline_outlined,
+            title: 'Voice models',
+            subtitle: 'Download listening and speaking models',
+            chevron: true,
+            onTap: () => Get.to(() => const VoiceModelsView()),
+          ),
+          AppRow(
+            icon: Icons.volume_up_rounded,
+            title: 'Read last reply aloud',
+            onTap: () {
+              final msgs = Get.find<ChatController>().messages;
+              final last = msgs.lastWhereOrNull((m) => m.role == 'assistant');
+              if (last == null) {
+                _toast('No reply to read yet.');
+                return;
+              }
+              final ar = RegExp(r'[\u0600-\u06FF]').hasMatch(last.content);
+              Get.find<VoiceService>()
+                  .speak(last.content, systemLang: ar ? 'ar' : 'en-US');
+            },
+          ),
+        ]),
         const SectionHeader('Roles'),
         AppGroup(dividerIndent: 60, children: [
           for (final r in kRolePresets)

@@ -22,6 +22,7 @@ import '../widgets/home_empty_state.dart';
 import '../core/ui.dart';
 import '../widgets/thought_disclosure.dart';
 import '../core/haptics.dart';
+import 'voice_views.dart';
 
 // ── Apple-style color helpers ──
 Color _appleBlue(BuildContext c) => Theme.of(c).brightness == Brightness.dark
@@ -203,6 +204,10 @@ class ChatView extends GetView<ChatController> {
             ),
           );
         }),
+        IconButton(
+            tooltip: 'Voice call',
+            icon: const Icon(Icons.call_outlined, size: 20),
+            onPressed: () => Get.to(() => const VoiceCallView())),
         Obx(() {
           // Already on a blank chat — a "new chat" button would only create
           // empty sessions.
