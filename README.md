@@ -13,6 +13,10 @@ NeuroMesh AI is an Android AI workspace for running language models privately on
 - Device clustering over the local network (worker discovery, QR / manual pairing)
 - Local OpenAI-compatible API server
 - Document text extraction, image generation plugin, background service
+- Hugging Face search and download for chat (GGUF) and image models, with queue and Wi-Fi-only option
+- Voice calls with on-device listening and speaking, optional voice cloning (English) and a worker phone
+- Chat with your documents (offline keyword search), agent with memory and remote MCP tools
+- Toolbox: roles, prompts, profiles, export/import, backup, compare, benchmark
 
 Anything not listed here is not implemented yet.
 

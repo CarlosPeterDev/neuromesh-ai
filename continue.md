@@ -24,6 +24,19 @@ CI run on commit de9bb01 succeeded: analyze + tests passed, arm64 APK, universal
 - API server can now start without a loaded model (answers 'no model' until one is loaded).
 - Agent tab + MCP (remote URL servers) added; analyze/tests pass in CI; not tested on a device.
 
+## Added after v1.0.7 (all CI-verified only; NOTHING tested on a device)
+- Toolbox (`lib/views/toolbox_view.dart`, `lib/services/toolbox_service.dart`): roles, prompt library, model profiles, chat export/import, backup/restore, storage manager, diagnostics, feedback draft, benchmark, compare, switches (auto context, auto-title, Wi-Fi-only, load last model).
+- Voice (`voice_models.dart`, `voice_service.dart`, `voice_views.dart`): sherpa-onnx Whisper STT, Piper TTS (needs piper_phonemize; Arabic untested), phone voice fallback, Silero VAD, streaming speech, barge-in, wake phrase.
+- Voice cloning (`voice_clone_view.dart`, `voice_clone_store.dart`): Pocket TTS int8 (English only), record/import reference WAV. Worker mode (`voice_worker.dart`): HTTP server on :8765 with bearer token; the caller phone falls back to local speech if the worker fails. Voice models cannot use the llama RPC cluster.
+- Chat: pin, per-chat prompt, regenerate, edit-resend, auto-title, full-text search, RTL direction detection.
+- Documents: offline BM25 keyword retrieval (`rag_service.dart`, `utils/bm25.dart`), not semantic.
+- Agent: memory, private files, fetch_url (confirm), always-allow, MCP presets (DeepWiki, Context7 URLs not verified).
+- Images: Models → Images tab searches Hugging Face `text-to-image` repos, root-level .safetensors only; loads through the base's stable-diffusion.cpp path (UNVERIFIED which checkpoints work).
+- Downloads: queue, Wi-Fi-only flag to the Android DownloadManager.
+- Device: battery/thermal (`DeviceBridge.kt`), share-to-chat, widget and quick tile (open a new chat), server QR, first-run tour, what's new.
+- Cluster load: failure to read the layer count now falls back to a single-phone load.
+- Not done: prompt caching, true background wake word, Arabic voice cloning, dead catalog code in model_view.dart still present.
+
 ## Not done / unverified
 - Native JNI rename is untested on a device (build compiles, runtime unverified).
 - Not implemented: new cluster wizard, model manager rework, agents, document RAG, voice, performance center, Arabic/RTL, theme redesign, new navigation. Existing features from the base remain as inherited.
