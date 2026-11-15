@@ -12,6 +12,7 @@ import '../utils/page_text.dart';
 import '../widgets/ask_user.dart';
 import 'agent_tools.dart';
 import 'device_bridge.dart';
+import 'voice_service.dart';
 import 'document_extractor_service.dart';
 import 'hive_service.dart';
 import 'inference_service.dart';
@@ -362,6 +363,31 @@ class AgentService extends GetxService {
           'Network: ${m['network']}${m['metered'] == true ? ' (metered)' : ''}',
           'Local time: ${DateTime.now()}',
         ].join('\n');
+      },
+    ),
+    AgentTool(
+      'transcribe_audio',
+      'Turn a workspace audio file (mp3, m4a, ogg, wav, video) into text with the on-device speech model.',
+      '{"name":"audio file name","language":"optional code such as en or ar"}',
+      (args) async {
+        final f = await _safeFile((args['name'] ?? '').toString());
+        if (!await f.exists()) return 'Error: file not found. Use list_files.';
+        final t = await Get.find<VoiceService>()
+            .transcribeFile(f.path, language: (args['language'] ?? '').toString());
+        return t.isEmpty ? '(no speech found)' : _page(t, 0);
+      },
+    ),
+    AgentTool(
+      'text_to_speech',
+      'Speak text with the on-device voice model and save it as a WAV file in the workspace. Show it to the user with [📎 name](nmfile:name).',
+      '{"text":"string","name":"output file name ending in .wav"}',
+      (args) async {
+        var name = (args['name'] ?? 'speech.wav').toString();
+        if (!name.toLowerCase().endsWith('.wav')) name = '$name.wav';
+        final wav = await Get.find<VoiceService>().synthesizeToWav((args['text'] ?? '').toString());
+        final f = await _safeFile(name);
+        await f.writeAsBytes(wav);
+        return 'Saved ${f.path.split('/').last} (${wav.length ~/ 1024} KB). Show it with [📎 ${f.path.split('/').last}](nmfile:${f.path.split('/').last}).';
       },
     ),
     AgentTool(

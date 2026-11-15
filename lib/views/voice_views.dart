@@ -20,34 +20,88 @@ const _kLang = 'voice_lang';
 const _kSystemTts = 'voice_system_tts';
 const _kBargeIn = 'voice_barge_in';
 const _kWakePhrase = 'voice_wake_phrase';
+const _kSttId = 'voice_stt_id';
+const _kTtsId = 'voice_tts_id';
+const _kSid = 'voice_sid';
+const _kSpeed = 'voice_speed';
 
-/// Download / delete voice models and choose language.
-class VoiceModelsView extends StatelessWidget {
+/// Download / delete voice models, pick which ones to use, choose the voice.
+class VoiceModelsView extends StatefulWidget {
   const VoiceModelsView({super.key});
+
+  @override
+  State<VoiceModelsView> createState() => _VoiceModelsViewState();
+}
+
+class _VoiceModelsViewState extends State<VoiceModelsView> {
+  final _hive = Get.find<HiveService>();
+  final _store = Get.find<VoiceModelStore>();
+  bool _previewing = false;
+
+  String get _sttId => _hive.getSetting<String>(_kSttId) ?? '';
+  String get _ttsId => _hive.getSetting<String>(_kTtsId) ?? '';
+  int get _sid => _hive.getSetting<int>(_kSid) ?? 0;
+  double get _speed => _hive.getSetting<double>(_kSpeed) ?? 1.0;
+
+  /// The model that will actually be used for [kind]: the picked one if it is
+  /// installed, otherwise the first installed one.
+  VoiceModelInfo? _effective(VoiceKind kind, String picked) {
+    final list = kVoiceModels
+        .where((m) => m.kind == kind && !m.clone && _store.installed.contains(m.id))
+        .toList();
+    for (final m in list) {
+      if (m.id == picked) return m;
+    }
+    return list.isEmpty ? null : list.first;
+  }
+
+  Future<void> _preview(VoiceModelInfo m) async {
+    setState(() => _previewing = true);
+    try {
+      final v = Get.find<VoiceService>();
+      v.sid = _sid;
+      v.speed = _speed;
+      if (!v.ttsLoadedFor(m)) await v.loadTts(m);
+      await v.speak(m.lang == 'ar'
+          ? 'مرحباً، هذا صوتي. كيف يبدو؟'
+          : 'Hello, this is how I sound. Do you like this voice?');
+    } catch (e) {
+      Get.snackbar('Could not play the voice', '$e');
+    } finally {
+      if (mounted) setState(() => _previewing = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final t = AppTokens.of(context);
-    final store = Get.find<VoiceModelStore>();
     return Scaffold(
       backgroundColor: t.bg,
       appBar: appScreenBar(context, title: 'Voice models'),
       body: Obx(() {
+        _store.installed.length; // rebuild when downloads finish / are removed
+        _store.progress.length;
         Widget group(VoiceKind k) => AppGroup(children: [
               for (final m in kVoiceModels.where((m) => m.kind == k))
-                _row(context, store, m),
+                _row(context, m),
             ]);
+        final tts = _effective(VoiceKind.tts, _ttsId);
         return ListView(padding: kPagePadding, children: [
           const Padding(
             padding: EdgeInsets.all(8),
             child: Text(
-                'Voice calls run fully on your phone. Download one listening model and one speaking voice. '
+                'Voice calls and the agent\'s audio tools run fully on your phone. '
+                'Download any models you like, then tap an installed one to make it the one that is used. '
                 'If no speaking voice is installed, the phone\'s built-in voice is used.'),
           ),
           const SectionHeader('Listening (speech to text)'),
           group(VoiceKind.stt),
           const SectionHeader('Speaking (text to speech)'),
           group(VoiceKind.tts),
+          if (tts != null) ...[
+            const SectionHeader('Voice options'),
+            _voiceOptions(tts),
+          ],
           const SectionHeader('Better turn-taking (recommended)'),
           group(VoiceKind.vad),
         ]);
@@ -55,19 +109,92 @@ class VoiceModelsView extends StatelessWidget {
     );
   }
 
-  Widget _row(BuildContext c, VoiceModelStore store, VoiceModelInfo m) {
+  Widget _voiceOptions(VoiceModelInfo tts) {
+    final sp = tts.speakers;
+    final sid = sp.isEmpty ? 0 : _sid.clamp(0, sp.length - 1);
+    return AppGroup(children: [
+      Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Using: ${tts.title}', style: const TextStyle(fontWeight: FontWeight.w600)),
+          if (sp.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            DropdownButton<int>(
+              isExpanded: true,
+              value: sid,
+              items: [
+                for (var i = 0; i < sp.length; i++)
+                  DropdownMenuItem(value: i, child: Text(sp[i])),
+              ],
+              onChanged: (v) {
+                _hive.setSetting(_kSid, v ?? 0);
+                setState(() {});
+              },
+            ),
+          ] else
+            const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text('This model has a single voice.')),
+          Row(children: [
+            const Text('Speed'),
+            Expanded(
+              child: Slider(
+                min: 0.6,
+                max: 1.6,
+                divisions: 10,
+                label: '${_speed.toStringAsFixed(1)}x',
+                value: _speed.clamp(0.6, 1.6),
+                onChanged: (v) {
+                  _hive.setSetting(_kSpeed, v);
+                  setState(() {});
+                },
+              ),
+            ),
+          ]),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.icon(
+              onPressed: _previewing ? null : () => _preview(tts),
+              icon: _previewing
+                  ? const SizedBox(
+                      width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.play_arrow_rounded),
+              label: const Text('Try this voice'),
+            ),
+          ),
+        ]),
+      ),
+    ]);
+  }
+
+  Widget _row(BuildContext c, VoiceModelInfo m) {
+    final store = _store;
     final p = store.progress[m.id];
     final err = store.errors[m.id];
     final has = store.installed.contains(m.id);
+    final picked = !m.clone &&
+        has &&
+        (m.kind == VoiceKind.stt
+            ? _effective(VoiceKind.stt, _sttId)?.id == m.id
+            : m.kind == VoiceKind.tts
+                ? _effective(VoiceKind.tts, _ttsId)?.id == m.id
+                : false);
     return AppRow(
       icon: m.kind == VoiceKind.stt ? Icons.hearing_rounded : Icons.record_voice_over_rounded,
       title: m.title,
       subtitle: err ??
           (p == null
-              ? '${m.sizeLabel}${has ? ' · installed' : ''}'
+              ? '${m.sizeLabel}${has ? ' · installed' : ''}${picked ? ' · in use' : ''}'
               : p < 0
                   ? 'Unpacking…'
                   : 'Downloading ${(p * 100).round()}%'),
+      onTap: has && !m.clone && m.kind != VoiceKind.vad
+          ? () {
+              _hive.setSetting(m.kind == VoiceKind.stt ? _kSttId : _kTtsId, m.id);
+              _hive.setSetting(_kSid, 0);
+              setState(() {});
+            }
+          : null,
       trailing: p != null
           ? Row(mainAxisSize: MainAxisSize.min, children: [
               SizedBox(
@@ -82,9 +209,15 @@ class VoiceModelsView extends StatelessWidget {
                     onPressed: () => store.cancel(m.id)),
             ])
           : has
-              ? IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () => store.remove(m))
+              ? Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (picked) const Icon(Icons.check_circle_rounded, size: 20),
+                  IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () {
+                        store.remove(m);
+                        setState(() {});
+                      }),
+                ])
               : IconButton(
                   icon: const Icon(Icons.download_rounded),
                   onPressed: () => store.download(m)),
@@ -166,6 +299,17 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   }
 
   VoiceModelInfo? _installed(VoiceKind k, {String? lang}) {
+    final picked = _hive.getSetting<String>(k == VoiceKind.stt ? _kSttId : _kTtsId) ?? '';
+    if (picked.isNotEmpty && (k == VoiceKind.stt || k == VoiceKind.tts)) {
+      final m = voiceModelById(picked);
+      if (m != null &&
+          m.kind == k &&
+          !m.clone &&
+          _store.installed.contains(m.id) &&
+          (lang == null || m.lang == lang || m.lang == 'multi')) {
+        return m;
+      }
+    }
     for (final m in kVoiceModels) {
       if (m.kind != k || !_store.installed.contains(m.id)) continue;
       if (m.clone) continue; // chosen separately by _ttsChoice
@@ -189,6 +333,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       _set(_CallState.error, 'Load a chat model first (Models tab).');
       return;
     }
+    _voice.sid = _hive.getSetting<int>(_kSid) ?? 0;
+    _voice.speed = _hive.getSetting<double>(_kSpeed) ?? 1.0;
     final stt = _installed(VoiceKind.stt);
     if (stt == null) {
       _set(_CallState.error, 'Download a listening model first (Toolbox → Voice models).');

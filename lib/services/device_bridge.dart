@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'dart:typed_data';
 import 'dart:async';
 
 import 'package:flutter/services.dart';
@@ -46,6 +48,22 @@ class DeviceBridge extends GetxService {
     } catch (_) {
       // Not on Android or the bridge is unavailable: leave defaults.
     }
+  }
+
+  /// Decodes mp3/m4a/ogg/wav/mp4… to 16 kHz mono floats (null if unsupported).
+  Future<Float32List?> decodeAudio(String path) async {
+    final out = await _ch.invokeMethod<String>('decodeAudio', {'path': path, 'rate': 16000});
+    if (out == null) return null;
+    final f = File(out);
+    final bytes = await f.readAsBytes();
+    await f.delete();
+    final bd = ByteData.sublistView(bytes);
+    final n = bytes.length ~/ 2;
+    final r = Float32List(n);
+    for (var i = 0; i < n; i++) {
+      r[i] = bd.getInt16(i * 2, Endian.little) / 32768.0;
+    }
+    return r;
   }
 
   /// Read-only phone facts (battery, storage, memory, network, temperature).

@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:piper_phonemize/piper_phonemize.dart' as piper;
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
+import 'device_bridge.dart';
 import 'hive_service.dart';
 import 'voice_models.dart';
 
@@ -143,6 +144,9 @@ class VoiceService extends GetxService {
   FlutterTts? _system;
   bool _stopSpeaking = false;
   bool _isClone = false;
+  bool _native = false; // kokoro/kitten: sherpa phonemizes itself
+  int sid = 0;
+  double speed = 1.0;
   Float32List? _cloneRef;
   int _cloneRate = 0;
 
@@ -213,22 +217,33 @@ class VoiceService extends GetxService {
   Future<void> loadStt(VoiceModelInfo m, {String language = ''}) async {
     _initBindings();
     final dir = await Get.find<VoiceModelStore>().dirFor(m);
-    final enc = await _firstFile(dir, (p) => p.contains('encoder') && p.endsWith('.int8.onnx'))
-        .catchError((_) => _firstFile(dir, (p) => p.contains('encoder') && p.endsWith('.onnx')));
-    final dec = await _firstFile(dir, (p) => p.contains('decoder') && p.endsWith('.int8.onnx'))
-        .catchError((_) => _firstFile(dir, (p) => p.contains('decoder') && p.endsWith('.onnx')));
     final tokens = await _firstFile(dir, (p) => p.endsWith('tokens.txt'));
-    final cfg = sherpa.OfflineRecognizerConfig(
-      model: sherpa.OfflineModelConfig(
+    sherpa.OfflineModelConfig model;
+    if (m.engine == 'sensevoice') {
+      final f = await _firstFile(dir, (p) => p.endsWith('.onnx'));
+      model = sherpa.OfflineModelConfig(
+        senseVoice: sherpa.OfflineSenseVoiceModelConfig(
+            model: f, language: language, useInverseTextNormalization: true),
+        tokens: tokens,
+        numThreads: 2,
+        debug: false,
+      );
+    } else {
+      final enc = await _firstFile(dir, (p) => p.contains('encoder') && p.endsWith('.int8.onnx'))
+          .catchError((_) => _firstFile(dir, (p) => p.contains('encoder') && p.endsWith('.onnx')));
+      final dec = await _firstFile(dir, (p) => p.contains('decoder') && p.endsWith('.int8.onnx'))
+          .catchError((_) => _firstFile(dir, (p) => p.contains('decoder') && p.endsWith('.onnx')));
+      model = sherpa.OfflineModelConfig(
         whisper: sherpa.OfflineWhisperModelConfig(
             encoder: enc, decoder: dec, language: language, task: 'transcribe'),
         tokens: tokens,
         numThreads: 2,
         debug: false,
-      ),
-    );
+      );
+    }
     _stt?.free();
-    _stt = await sherpa.OfflineRecognizer.createAsync(cfg);
+    _stt = await sherpa.OfflineRecognizer.createAsync(
+        sherpa.OfflineRecognizerConfig(model: model));
     _sttId = '${m.id}|$language';
   }
 
@@ -264,6 +279,55 @@ class VoiceService extends GetxService {
       return;
     }
     _isClone = false;
+    if (m.engine == 'kokoro' || m.engine == 'kitten') {
+      final onnx = await _firstFile(dir, (p) => p.endsWith('.onnx'));
+      final voices = await _firstFile(dir, (p) => p.endsWith('voices.bin'));
+      final tokens = await _firstFile(dir, (p) => p.endsWith('tokens.txt'));
+      final espeakDir = '$dir/espeak-ng-data';
+      final dictDir = '$dir/dict';
+      final lexicons = Directory(dir)
+          .listSync()
+          .whereType<File>()
+          .map((f) => f.path)
+          .where((p) => p.split('/').last.startsWith('lexicon') && p.endsWith('.txt'))
+          .toList()
+        ..sort();
+      final fsts = Directory(dir)
+          .listSync()
+          .whereType<File>()
+          .map((f) => f.path)
+          .where((p) => p.endsWith('.fst'))
+          .toList()
+        ..sort();
+      final mc = m.engine == 'kokoro'
+          ? sherpa.OfflineTtsModelConfig(
+              kokoro: sherpa.OfflineTtsKokoroModelConfig(
+                model: onnx,
+                voices: voices,
+                tokens: tokens,
+                dataDir: espeakDir,
+                dictDir: Directory(dictDir).existsSync() ? dictDir : '',
+                lexicon: lexicons.join(','),
+              ),
+              numThreads: 4,
+              debug: false)
+          : sherpa.OfflineTtsModelConfig(
+              kitten: sherpa.OfflineTtsKittenModelConfig(
+                model: onnx,
+                voices: voices,
+                tokens: tokens,
+                dataDir: espeakDir,
+              ),
+              numThreads: 4,
+              debug: false);
+      _tts?.free();
+      _tts = sherpa.OfflineTts(sherpa.OfflineTtsConfig(
+          model: mc, ruleFsts: fsts.join(','), maxNumSentences: 1));
+      _ttsId = m.id;
+      _native = true;
+      return;
+    }
+    _native = false;
     final model = await _firstFile(dir, (p) => p.endsWith('.onnx'));
     final tokens = await _firstFile(dir, (p) => p.endsWith('tokens.txt'));
     if (!_phonemizerReady) {
@@ -286,6 +350,72 @@ class VoiceService extends GetxService {
     _tts = sherpa.OfflineTts(cfg);
     _ttsId = m.id;
     _espeak = m.espeakVoice;
+  }
+
+  /// The installed model the user picked (or the first installed one).
+  VoiceModelInfo? pickInstalled(VoiceKind k, {String lang = ''}) {
+    final store = Get.find<VoiceModelStore>();
+    final h = Get.find<HiveService>();
+    final picked = h.getSetting<String>(k == VoiceKind.stt ? 'voice_stt_id' : 'voice_tts_id') ?? '';
+    VoiceModelInfo? first;
+    for (final m in kVoiceModels) {
+      if (m.kind != k || m.clone || !store.installed.contains(m.id)) continue;
+      final okLang = lang.isEmpty || m.lang == lang || m.lang == 'multi';
+      if (m.id == picked && okLang) return m;
+      if (okLang) first ??= m;
+    }
+    return first;
+  }
+
+  /// Transcribes an audio file (mp3, m4a, ogg, wav, mp4…) in 25-second pieces.
+  Future<String> transcribeFile(String path, {String language = ''}) async {
+    final m = pickInstalled(VoiceKind.stt);
+    if (m == null) {
+      throw Exception('No listening model installed. Download one in Toolbox → Voice models.');
+    }
+    if (!sttLoadedFor(m, language)) await loadStt(m, language: language);
+    Float32List? pcm;
+    if (path.toLowerCase().endsWith('.wav')) {
+      pcm = decodeWav(await File(path).readAsBytes())?.samples;
+    }
+    pcm ??= await Get.find<DeviceBridge>().decodeAudio(path);
+    if (pcm == null || pcm.isEmpty) throw Exception('Could not read audio from this file.');
+    const piece = 16000 * 25;
+    final out = StringBuffer();
+    for (var i = 0; i < pcm.length; i += piece) {
+      final end = math.min(i + piece, pcm.length);
+      final t = transcribe(Float32List.sublistView(pcm, i, end));
+      if (t.isNotEmpty) out..write(t)..write(' ');
+    }
+    return out.toString().trim();
+  }
+
+  /// Speaks [text] with the chosen voice into a WAV file's bytes.
+  Future<Uint8List> synthesizeToWav(String text, {String lang = ''}) async {
+    final m = pickInstalled(VoiceKind.tts, lang: lang);
+    if (m == null) {
+      throw Exception('No speaking model installed. Download one in Toolbox → Voice models.');
+    }
+    final h = Get.find<HiveService>();
+    sid = h.getSetting<int>('voice_sid') ?? 0;
+    speed = h.getSetting<double>('voice_speed') ?? 1.0;
+    if (!ttsLoadedFor(m)) await loadTts(m);
+    final parts = <Float32List>[];
+    var rate = 22050;
+    for (final c in speechChunks(text)) {
+      final r = synthesize(c);
+      if (r == null) continue;
+      parts.add(r.samples);
+      rate = r.rate;
+    }
+    if (parts.isEmpty) throw Exception('Nothing could be spoken.');
+    final all = Float32List(parts.fold<int>(0, (a, b) => a + b.length));
+    var o = 0;
+    for (final p in parts) {
+      all.setRange(o, o + p.length, p);
+      o += p.length;
+    }
+    return encodeWav(all, rate);
   }
 
   bool ttsLoadedFor(VoiceModelInfo m) => _tts != null && _ttsId == m.id;
@@ -332,6 +462,15 @@ class VoiceService extends GetxService {
           ? null
           : (samples: audio.samples, rate: audio.sampleRate);
     }
+    if (_native) {
+      final audio = tts.generateWithConfig(
+        text: chunk,
+        config: sherpa.OfflineTtsGenerationConfig(sid: sid, speed: speed),
+      );
+      return audio.samples.isEmpty
+          ? null
+          : (samples: audio.samples, rate: audio.sampleRate);
+    }
     final cps = piper.PiperPhonemize.phonemize(chunk, voice: _espeak)
         .where((s) => s.isNotEmpty)
         .toList();
@@ -339,7 +478,7 @@ class VoiceService extends GetxService {
     final audio = tts.generateWithConfig(
       text: '',
       config: sherpa.OfflineTtsGenerationConfig(
-          sid: 0, speed: 1.0, phonemeCodepoints: cps),
+          sid: 0, speed: speed, phonemeCodepoints: cps),
     );
     return audio.samples.isEmpty
         ? null

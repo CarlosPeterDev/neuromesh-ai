@@ -15,7 +15,12 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.webkit.MimeTypeMap
+import java.io.File
+import java.io.FileOutputStream
 import androidx.documentfile.provider.DocumentFile
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -49,6 +54,9 @@ class DeviceBridge(private val context: Context) {
                     pendingShare = null
                 }
                 "deviceStatus" -> background(result) { deviceStatus() }
+                "decodeAudio" -> background(result) {
+                    decodeAudio(call.argument<String>("path")!!, call.argument<Int>("rate") ?: 16000)
+                }
                 "pickFolder" -> pickFolder(result)
                 "listFolder" -> background(result) {
                     listFolder(call.argument<String>("uri")!!, call.argument<String>("path") ?: "")
@@ -85,6 +93,84 @@ class DeviceBridge(private val context: Context) {
     // ── Folder access (Storage Access Framework) ────────────────────────
     // The user picks a folder in Android's own picker; the app only ever sees
     // what is inside it. No broad storage permission is requested.
+
+    /** Decodes any audio/video file to raw 16-bit mono PCM at [rate] Hz; returns the temp file path. */
+    private fun decodeAudio(path: String, rate: Int): String {
+        val ex = MediaExtractor()
+        ex.setDataSource(path)
+        var track = -1
+        var fmt: MediaFormat? = null
+        for (i in 0 until ex.trackCount) {
+            val f = ex.getTrackFormat(i)
+            if ((f.getString(MediaFormat.KEY_MIME) ?: "").startsWith("audio/")) { track = i; fmt = f; break }
+        }
+        if (track < 0 || fmt == null) { ex.release(); throw Exception("No audio track in this file") }
+        ex.selectTrack(track)
+        val codec = MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME)!!)
+        codec.configure(fmt, null, null, 0)
+        codec.start()
+        var srcRate = fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+        var channels = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+        val out = File(context.cacheDir, "decoded_${System.nanoTime()}.pcm")
+        val fos = FileOutputStream(out)
+        val info = MediaCodec.BufferInfo()
+        var inDone = false
+        var outDone = false
+        var pos = 0.0
+        val step = srcRate.toDouble() / rate
+        var prev = 0
+        var have = false
+        val buf = java.io.ByteArrayOutputStream()
+        while (!outDone) {
+            if (!inDone) {
+                val ii = codec.dequeueInputBuffer(10000)
+                if (ii >= 0) {
+                    val b = codec.getInputBuffer(ii)!!
+                    val n = ex.readSampleData(b, 0)
+                    if (n < 0) {
+                        codec.queueInputBuffer(ii, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        inDone = true
+                    } else {
+                        codec.queueInputBuffer(ii, 0, n, ex.sampleTime, 0)
+                        ex.advance()
+                    }
+                }
+            }
+            val oi = codec.dequeueOutputBuffer(info, 10000)
+            if (oi >= 0) {
+                val ob = codec.getOutputBuffer(oi)!!
+                ob.position(info.offset); ob.limit(info.offset + info.size)
+                val sb = ob.order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                val total = sb.remaining()
+                var idx = 0
+                buf.reset()
+                while (idx + channels <= total) {
+                    var sum = 0
+                    for (c in 0 until channels) sum += sb.get(idx + c).toInt()
+                    val mono = sum / channels
+                    // linear resample to `rate`
+                    pos += 1.0
+                    while (pos >= step) {
+                        val frac = if (have) (1.0 - (pos - step)).coerceIn(0.0, 1.0) else 1.0
+                        val v = if (have) (prev + (mono - prev) * frac).toInt() else mono
+                        buf.write(v and 0xFF); buf.write((v shr 8) and 0xFF)
+                        pos -= step
+                    }
+                    prev = mono; have = true
+                    idx += channels
+                }
+                fos.write(buf.toByteArray())
+                codec.releaseOutputBuffer(oi, false)
+                if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outDone = true
+            } else if (oi == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                val nf = codec.outputFormat
+                srcRate = nf.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                channels = nf.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            }
+        }
+        fos.close(); codec.stop(); codec.release(); ex.release()
+        return out.absolutePath
+    }
 
     private fun background(result: MethodChannel.Result, work: () -> Any?) {
         Thread {
