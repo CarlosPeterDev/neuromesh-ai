@@ -26,6 +26,7 @@ import '../services/app_log_service.dart';
 import '../services/image_generation_notification_service.dart';
 import '../services/document_extractor_service.dart';
 import '../services/rag_service.dart';
+import '../services/web_search_service.dart';
 import '../utils/thought_parser.dart';
 
 const int _visionImageMaxSide = 768;
@@ -776,6 +777,22 @@ class ChatController extends GetxController {
     _followStreaming = true;
     _scrollToBottom(force: true);
 
+    // Optional web search (off by default; auto/always in Toolbox).
+    var finalPrompt = genPrompt;
+    WebContext? webCtx;
+    if (Get.isRegistered<WebSearchService>() &&
+        Get.find<WebSearchService>().shouldSearch(visibleText)) {
+      streamingResponse.value = '🔍 Searching the web…';
+      try {
+        webCtx = await Get.find<WebSearchService>().buildContext(visibleText);
+      } catch (_) {}
+      if (generationId != _generationSerial) return;
+      streamingResponse.value = '';
+      if (webCtx != null) {
+        finalPrompt = '${webCtx.block}\n\n$genPrompt';
+      }
+    }
+
     try {
       DateTime? thoughtStartedAt;
       int? thoughtDurationSeconds;
@@ -911,7 +928,7 @@ class ChatController extends GetxController {
           // returns a clear unsupported message from the inference layer.
 
           rawResponse = await inference.generate(
-            prompt: genPrompt,
+            prompt: finalPrompt,
             systemPrompt: _effectiveSystemPrompt,
             conversationHistory: history,
             source: 'chat',
@@ -930,6 +947,9 @@ class ChatController extends GetxController {
         }
       } else {
         final cloud = Get.find<CloudService>();
+        if (webCtx != null && history.isNotEmpty) {
+          history.last['content'] = '${webCtx.block}\n\n${history.last['content']}';
+        }
         final apiMessages = [
           {'role': 'system', 'content': _effectiveSystemPrompt},
           ...history,
@@ -952,6 +972,12 @@ class ChatController extends GetxController {
       }
 
       if (generationId != _generationSerial) return;
+
+      if (webCtx != null &&
+          !rawResponse.startsWith('ERROR') &&
+          !rawResponse.startsWith('[IMAGE_BASE64]')) {
+        rawResponse += webCtx.sourcesMarkdown();
+      }
 
       // Stop streaming UI
       final tps = inferenceMode == 'local'

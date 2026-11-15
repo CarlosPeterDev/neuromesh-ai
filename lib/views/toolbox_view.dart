@@ -10,6 +10,7 @@ import '../services/voice_service.dart';
 import 'storage_view.dart';
 import 'perf_views.dart';
 import '../services/rag_service.dart';
+import '../services/web_search_service.dart';
 import '../services/hive_service.dart';
 import '../services/download_queue.dart';
 import 'voice_views.dart';
@@ -103,6 +104,44 @@ class ToolboxView extends StatelessWidget {
             },
           ),
         ]),
+        const SectionHeader('Web search'),
+        Obx(() {
+          final w = Get.find<WebSearchService>();
+          String label(WebSearchMode m) => switch (m) {
+                WebSearchMode.off => 'Off',
+                WebSearchMode.auto => 'Auto',
+                WebSearchMode.always => 'Always',
+              };
+          return AppGroup(dividerIndent: 60, children: [
+            AppRow(
+              icon: Icons.travel_explore_rounded,
+              title: 'Search the web for answers',
+              subtitle: switch (w.mode.value) {
+                WebSearchMode.off => 'Off. Nothing leaves your phone.',
+                WebSearchMode.auto =>
+                  'Searches when a question needs fresh info (news, prices, weather, "latest").',
+                WebSearchMode.always => 'Searches for every message.',
+              },
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: SegmentedButton<WebSearchMode>(
+                segments: [
+                  for (final m in WebSearchMode.values)
+                    ButtonSegment(value: m, label: Text(label(m)))
+                ],
+                selected: {w.mode.value},
+                onSelectionChanged: (s) => w.setMode(s.first),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Text(
+                  'Your question is sent to DuckDuckGo (or Wikipedia as a backup), and the top pages are read. Free, no account. Answers list their sources.',
+                  style: TextStyle(fontSize: 12)),
+            ),
+          ]);
+        }),
         const SectionHeader('Chat with documents'),
         Obx(() {
           final rag = Get.find<RagService>();

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'web_search_service.dart';
 
 import 'agent_tools.dart';
 import 'hive_service.dart';
@@ -147,6 +148,18 @@ class AgentService extends GetxService {
         await f.writeAsString((args['content'] ?? '').toString());
         return 'Wrote ${f.path.split('/').last}.';
       },
+    ),
+    _BuiltIn(
+      'web_search',
+      'Search the web and return the top results (title, url, snippet).',
+      '{"query":"string"}',
+      (args) async {
+        final r = await Get.find<WebSearchService>()
+            .search((args['query'] ?? '').toString());
+        if (r.isEmpty) return 'No results.';
+        return r.map((e) => '${e.title}\n${e.url}\n${e.snippet}').join('\n\n');
+      },
+      needsConfirm: true,
     ),
     _BuiltIn(
       'fetch_url',

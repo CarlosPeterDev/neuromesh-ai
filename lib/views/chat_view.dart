@@ -23,6 +23,7 @@ import '../core/ui.dart';
 import '../widgets/thought_disclosure.dart';
 import '../core/haptics.dart';
 import 'voice_views.dart';
+import '../services/web_search_service.dart';
 
 // ── Apple-style color helpers ──
 Color _appleBlue(BuildContext c) => Theme.of(c).brightness == Brightness.dark
@@ -203,6 +204,15 @@ class ChatView extends GetView<ChatController> {
               ),
             ),
           );
+        }),
+        Obx(() {
+          final w = Get.find<WebSearchService>();
+          final on = w.mode.value != WebSearchMode.off;
+          return IconButton(
+              tooltip: on ? 'Web search: ${w.mode.value.name} (tap to turn off)' : 'Turn on web search (auto)',
+              icon: Icon(Icons.travel_explore_rounded,
+                  size: 20, color: on ? Colors.blue : null),
+              onPressed: () => w.setMode(on ? WebSearchMode.off : WebSearchMode.auto));
         }),
         IconButton(
             tooltip: 'Voice call',
