@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../controllers/chat_controller.dart';
 import '../controllers/home_controller.dart';
 import '../models/chat_session.dart';
+import '../services/hive_service.dart';
 import 'tonal_button.dart';
 import '../core/haptics.dart';
 
@@ -44,6 +45,19 @@ class ChatDrawer extends StatefulWidget {
 class _ChatDrawerState extends State<ChatDrawer> {
   final _search = TextEditingController();
   String _query = '';
+  Set<String> _matchIds = {};
+
+  /// Chats that contain [q] anywhere in their messages.
+  Set<String> _searchMessages(String q) {
+    if (q.length < 2) return {};
+    final ids = <String>{};
+    for (final v in Get.find<HiveService>().messagesBox.values) {
+      if (v is Map && '${v['content']}'.toLowerCase().contains(q)) {
+        ids.add('${v['chatId']}');
+      }
+    }
+    return ids;
+  }
 
   @override
   void dispose() {
@@ -252,7 +266,10 @@ class _ChatDrawerState extends State<ChatDrawer> {
               child: TextField(
                 controller: _search,
                 onChanged: (v) =>
-                    setState(() => _query = v.trim().toLowerCase()),
+                    setState(() {
+                      _query = v.trim().toLowerCase();
+                      _matchIds = _searchMessages(_query);
+                    }),
                 style: GoogleFonts.inter(fontSize: 15, color: text),
                 cursorColor: accent,
                 textInputAction: TextInputAction.search,
@@ -268,7 +285,10 @@ class _ChatDrawerState extends State<ChatDrawer> {
                       : GestureDetector(
                           onTap: () {
                             _search.clear();
-                            setState(() => _query = '');
+                            setState(() {
+                        _query = '';
+                        _matchIds = {};
+                      });
                           },
                           child: Icon(Icons.cancel_rounded,
                               size: 17, color: muted),
@@ -293,6 +313,7 @@ class _ChatDrawerState extends State<ChatDrawer> {
                 .where((s) =>
                     _query.isEmpty ||
                     s.title.toLowerCase().contains(_query) ||
+                    _matchIds.contains(s.id) ||
                     (s.lastMessage ?? '').toLowerCase().contains(_query))
                 .toList();
 

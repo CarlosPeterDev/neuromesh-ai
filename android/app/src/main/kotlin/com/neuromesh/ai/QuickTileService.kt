@@ -9,7 +9,7 @@ import android.service.quicksettings.TileService
 class QuickTileService : TileService() {
     override fun onClick() {
         super.onClick()
-        val intent = Intent(this, MainActivity::class.java)
+        val intent = Intent(this, MainActivity::class.java).putExtra("new_chat", true)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         if (Build.VERSION.SDK_INT >= 34) {
             val pi = PendingIntent.getActivity(

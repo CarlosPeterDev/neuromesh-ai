@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../views/onboarding.dart';
+import '../services/hive_service.dart';
+import '../services/inference_service.dart';
+import 'model_controller.dart';
 
 class HomeController extends GetxController {
   final currentTab = 0.obs;
@@ -13,6 +16,20 @@ class HomeController extends GetxController {
   @override
   void onReady() {
     super.onReady();
+    // Optional: load the last used chat model when the app starts.
+    Future.delayed(const Duration(seconds: 1), () async {
+      try {
+        final hive = Get.find<HiveService>();
+        final mc = Get.find<ModelController>();
+        final inf = Get.find<InferenceService>();
+        if (hive.getSetting<bool>('auto_load_last', defaultValue: false) == true &&
+            mc.canLoadLastModel &&
+            !inf.isModelLoaded.value &&
+            !inf.isLoadingModel.value) {
+          await mc.loadModel(mc.lastLoadedModelName);
+        }
+      } catch (_) {}
+    });
     Future.delayed(const Duration(seconds: 3), () {
       final ctx = Get.context;
       if (ctx == null) return;

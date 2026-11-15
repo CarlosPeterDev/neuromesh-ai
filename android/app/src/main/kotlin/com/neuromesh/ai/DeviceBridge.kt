@@ -13,6 +13,7 @@ import io.flutter.plugin.common.MethodChannel
 class DeviceBridge(private val context: Context) {
     private var channel: MethodChannel? = null
     private var pendingShare: String? = null
+    private var pendingNewChat = false
 
     fun register(engine: FlutterEngine) {
         val ch = MethodChannel(engine.dartExecutor.binaryMessenger, "com.neuromesh.ai/device")
@@ -21,6 +22,10 @@ class DeviceBridge(private val context: Context) {
             when (call.method) {
                 "thermalStatus" -> result.success(thermalStatus())
                 "batteryInfo" -> result.success(batteryInfo())
+                "takeNewChat" -> {
+                    result.success(pendingNewChat)
+                    pendingNewChat = false
+                }
                 "takeSharedText" -> {
                     result.success(pendingShare)
                     pendingShare = null
@@ -53,6 +58,11 @@ class DeviceBridge(private val context: Context) {
 
     /** Call from onCreate and onNewIntent. */
     fun handleIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra("new_chat", false) == true) {
+            intent.removeExtra("new_chat")
+            pendingNewChat = true
+            channel?.invokeMethod("sharedTextReady", null)
+        }
         if (intent?.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true) {
             val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
             pendingShare = text

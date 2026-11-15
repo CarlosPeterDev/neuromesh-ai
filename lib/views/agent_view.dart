@@ -26,6 +26,16 @@ class _AgentViewState extends State<AgentView> {
     super.dispose();
   }
 
+  Future<void> _addPreset(String name, String url) async {
+    if (_agent.servers.any((x) => x.url == url)) {
+      Get.snackbar('Already added', name, snackPosition: SnackPosition.BOTTOM);
+      return;
+    }
+    await _agent.addServer(name, url, '');
+    Get.snackbar('Added $name', 'Check its status under MCP servers.',
+        snackPosition: SnackPosition.BOTTOM);
+  }
+
   Future<bool> _confirm(
       String tool, String server, Map<String, dynamic> args) async {
     if (!mounted) return false;
@@ -230,6 +240,21 @@ class _AgentViewState extends State<AgentView> {
                           snackPosition: SnackPosition.BOTTOM);
                     }),
               ])),
+          const SectionHeader('MCP presets (free, no key)'),
+          AppGroup(children: [
+            AppRow(
+              icon: Icons.menu_book_rounded,
+              title: 'DeepWiki',
+              subtitle: 'Ask about public GitHub repos',
+              onTap: () => _addPreset('DeepWiki', 'https://mcp.deepwiki.com/mcp'),
+            ),
+            AppRow(
+              icon: Icons.library_books_outlined,
+              title: 'Context7',
+              subtitle: 'Up-to-date library documentation',
+              onTap: () => _addPreset('Context7', 'https://mcp.context7.com/mcp'),
+            ),
+          ]),
           const SectionHeader('MCP servers'),
           Obx(() => AppGroup(children: [
                 for (final s in _agent.servers)

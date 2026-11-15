@@ -50,6 +50,10 @@ class DeviceBridge extends GetxService {
 
   Future<void> _takeShared() async {
     try {
+      final fresh = await _ch.invokeMethod<bool>('takeNewChat');
+      if (fresh == true && Get.isRegistered<ChatController>()) {
+        Get.find<ChatController>().createNewChat();
+      }
       final text = await _ch.invokeMethod<String>('takeSharedText');
       if (text == null || text.isEmpty || !Get.isRegistered<ChatController>()) {
         return;

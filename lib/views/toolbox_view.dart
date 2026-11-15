@@ -166,6 +166,12 @@ class ToolboxView extends StatelessWidget {
               keyName: 'auto_context',
               defaultValue: true),
           _SwitchRow(
+              icon: Icons.play_circle_outline_rounded,
+              title: 'Load last model on start',
+              subtitle: 'Opens ready to chat. Uses RAM right away.',
+              keyName: 'auto_load_last',
+              defaultValue: false),
+          _SwitchRow(
               icon: Icons.title_rounded,
               title: 'Auto-title chats',
               subtitle: 'Uses the loaded model to name new chats',
