@@ -1,14 +1,18 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:get/get.dart';
+import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:piper_phonemize/piper_phonemize.dart' as piper;
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
+import 'hive_service.dart';
 import 'voice_models.dart';
 
 /// Pure helper: float samples in [-1,1] to a 16-bit mono WAV file body.
@@ -38,6 +42,45 @@ Uint8List encodeWav(Float32List samples, int sampleRate) {
     data.setInt16(44 + i * 2, v, Endian.little);
   }
   return data.buffer.asUint8List();
+}
+
+/// Reads a PCM WAV (8/16-bit, any channel count; first channel is used).
+/// Returns null if the bytes aren't a supported WAV.
+({Float32List samples, int rate})? decodeWav(Uint8List b) {
+  if (b.length < 44) return null;
+  final bd = ByteData.sublistView(b);
+  String tag(int o) => String.fromCharCodes(b.sublist(o, o + 4));
+  if (tag(0) != 'RIFF' || tag(8) != 'WAVE') return null;
+  var pos = 12;
+  int rate = 0, channels = 1, bits = 16, fmt = 1;
+  while (pos + 8 <= b.length) {
+    final id = tag(pos);
+    final size = bd.getUint32(pos + 4, Endian.little);
+    final body = pos + 8;
+    if (id == 'fmt ') {
+      fmt = bd.getUint16(body, Endian.little);
+      channels = bd.getUint16(body + 2, Endian.little);
+      rate = bd.getUint32(body + 4, Endian.little);
+      bits = bd.getUint16(body + 14, Endian.little);
+    } else if (id == 'data') {
+      if (fmt != 1 || channels < 1 || rate <= 0 || (bits != 16 && bits != 8)) {
+        return null;
+      }
+      final avail = math.min(size, b.length - body);
+      final bytes = bits ~/ 8;
+      final frames = avail ~/ (bytes * channels);
+      final out = Float32List(frames);
+      for (var i = 0; i < frames; i++) {
+        final o = body + i * bytes * channels;
+        out[i] = bits == 16
+            ? bd.getInt16(o, Endian.little) / 32768.0
+            : (b[o] - 128) / 128.0;
+      }
+      return (samples: out, rate: rate);
+    }
+    pos = body + size + (size.isOdd ? 1 : 0);
+  }
+  return null;
 }
 
 /// Splits text into short speakable chunks and removes markdown noise.
@@ -99,6 +142,27 @@ class VoiceService extends GetxService {
   final AudioPlayer _player = AudioPlayer();
   FlutterTts? _system;
   bool _stopSpeaking = false;
+  bool _isClone = false;
+  Float32List? _cloneRef;
+  int _cloneRate = 0;
+
+  /// A stronger phone on the Wi-Fi that does the speaking for this one.
+  String workerUrl = '';
+  String workerToken = '';
+
+  bool get cloneLoaded => _isClone && _tts != null;
+  bool get hasCloneVoice => _cloneRef != null;
+
+  void setCloneVoice(Float32List samples, int rate) {
+    _cloneRef = samples;
+    _cloneRate = rate;
+  }
+
+  void loadWorkerSettings() {
+    final h = Get.find<HiveService>();
+    workerUrl = h.getSetting<String>('voice_worker_url') ?? '';
+    workerToken = h.getSetting<String>('voice_worker_token') ?? '';
+  }
 
   /// Creates a Silero voice-activity detector, or null if it isn't installed.
   Future<sherpa.VoiceActivityDetector?> createVad() async {
@@ -174,6 +238,32 @@ class VoiceService extends GetxService {
   Future<void> loadTts(VoiceModelInfo m) async {
     _initBindings();
     final dir = await Get.find<VoiceModelStore>().dirFor(m);
+    if (m.clone) {
+      Future<String> f(String part, String ext) =>
+          _firstFile(dir, (p) => p.split('/').last.contains(part) && p.endsWith(ext));
+      final cfg = sherpa.OfflineTtsConfig(
+        model: sherpa.OfflineTtsModelConfig(
+          pocket: sherpa.OfflineTtsPocketModelConfig(
+            lmFlow: await f('lm_flow', '.onnx'),
+            lmMain: await f('lm_main', '.onnx'),
+            encoder: await f('encoder', '.onnx'),
+            decoder: await f('decoder', '.onnx'),
+            textConditioner: await f('text_conditioner', '.onnx'),
+            vocabJson: await f('vocab', '.json'),
+            tokenScoresJson: await f('token_scores', '.json'),
+          ),
+          numThreads: 4,
+          debug: false,
+        ),
+        maxNumSentences: 1,
+      );
+      _tts?.free();
+      _tts = sherpa.OfflineTts(cfg);
+      _ttsId = m.id;
+      _isClone = true;
+      return;
+    }
+    _isClone = false;
     final model = await _firstFile(dir, (p) => p.endsWith('.onnx'));
     final tokens = await _firstFile(dir, (p) => p.endsWith('tokens.txt'));
     if (!_phonemizerReady) {
@@ -222,13 +312,104 @@ class VoiceService extends GetxService {
     await _system?.stop();
   }
 
-  /// Speaks with the on-device voice model, or the phone's own voice when
-  /// [systemLang] is given instead (e.g. 'ar', 'en-US').
+  /// Synthesizes one chunk with the loaded on-device model.
+  ({Float32List samples, int rate})? synthesize(String chunk) {
+    final tts = _tts;
+    if (tts == null) return null;
+    if (_isClone) {
+      final ref = _cloneRef;
+      if (ref == null) return null;
+      final audio = tts.generateWithConfig(
+        text: chunk,
+        config: sherpa.OfflineTtsGenerationConfig(
+            sid: 0,
+            speed: 1.0,
+            referenceAudio: ref,
+            referenceSampleRate: _cloneRate,
+            numSteps: 5),
+      );
+      return audio.samples.isEmpty
+          ? null
+          : (samples: audio.samples, rate: audio.sampleRate);
+    }
+    final cps = piper.PiperPhonemize.phonemize(chunk, voice: _espeak)
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (cps.isEmpty) return null;
+    final audio = tts.generateWithConfig(
+      text: '',
+      config: sherpa.OfflineTtsGenerationConfig(
+          sid: 0, speed: 1.0, phonemeCodepoints: cps),
+    );
+    return audio.samples.isEmpty
+        ? null
+        : (samples: audio.samples, rate: audio.sampleRate);
+  }
+
+  /// Asks the worker phone to speak [chunk]; returns WAV bytes or null.
+  Future<Uint8List?> _remoteWav(String chunk) async {
+    if (workerUrl.isEmpty) return null;
+    try {
+      final res = await http
+          .post(Uri.parse('$workerUrl/tts'),
+              headers: {
+                'Authorization': 'Bearer $workerToken',
+                'Content-Type': 'application/json'
+              },
+              body: jsonEncode({'text': chunk}))
+          .timeout(const Duration(seconds: 40));
+      if (res.statusCode == 200) return res.bodyBytes;
+    } catch (_) {}
+    return null;
+  }
+
+  /// Sends the active reference voice to the worker.
+  Future<bool> uploadVoiceToWorker() async {
+    final ref = _cloneRef;
+    if (workerUrl.isEmpty || ref == null) return false;
+    try {
+      final res = await http
+          .put(Uri.parse('$workerUrl/voice'),
+              headers: {'Authorization': 'Bearer $workerToken'},
+              body: encodeWav(ref, _cloneRate))
+          .timeout(const Duration(seconds: 30));
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> pingWorker() async {
+    if (workerUrl.isEmpty) return false;
+    try {
+      final res = await http
+          .get(Uri.parse('$workerUrl/ping'),
+              headers: {'Authorization': 'Bearer $workerToken'})
+          .timeout(const Duration(seconds: 6));
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _playWav(Uint8List wav, int slot) async {
+    final dir = await getTemporaryDirectory();
+    final f = File('${dir.path}/nm_tts_${slot % 2}.wav');
+    await f.writeAsBytes(wav);
+    final done = _player.onPlayerComplete.first;
+    _stopSignal = Completer<void>();
+    await _player.play(DeviceFileSource(f.path));
+    await Future.any([done, _stopSignal!.future]);
+  }
+
+  /// Speaks with the worker phone, the on-device voice model, or the
+  /// phone's own voice when [systemLang] is given (e.g. 'ar', 'en-US').
   Future<void> speak(String text, {String? systemLang}) async {
     _stopSpeaking = false;
     final chunks = speechChunks(text);
     if (chunks.isEmpty) return;
-    if (systemLang != null || _tts == null) {
+    final useWorker = systemLang == null && workerUrl.isNotEmpty;
+    if (systemLang != null || (_tts == null && !useWorker)) {
       _system ??= FlutterTts();
       await _system!.awaitSpeakCompletion(true);
       await _system!.setLanguage(systemLang ?? 'en-US');
@@ -238,25 +419,21 @@ class VoiceService extends GetxService {
       }
       return;
     }
-    final dir = await getTemporaryDirectory();
+    var workerOk = useWorker;
     for (var i = 0; i < chunks.length; i++) {
       if (_stopSpeaking) return;
-      final cps = piper.PiperPhonemize.phonemize(chunks[i], voice: _espeak)
-          .where((s) => s.isNotEmpty)
-          .toList();
-      if (cps.isEmpty) continue;
-      final audio = _tts!.generateWithConfig(
-        text: '',
-        config: sherpa.OfflineTtsGenerationConfig(
-            sid: 0, speed: 1.0, phonemeCodepoints: cps),
-      );
-      if (audio.samples.isEmpty) continue;
-      final f = File('${dir.path}/nm_tts_${i % 2}.wav');
-      await f.writeAsBytes(encodeWav(audio.samples, audio.sampleRate));
-      final done = _player.onPlayerComplete.first;
-      _stopSignal = Completer<void>();
-      await _player.play(DeviceFileSource(f.path));
-      await Future.any([done, _stopSignal!.future]);
+      if (workerOk) {
+        final wav = await _remoteWav(chunks[i]);
+        if (wav != null) {
+          await _playWav(wav, i);
+          if (_stopSpeaking) return;
+          continue;
+        }
+        workerOk = false; // fall back to this phone for the rest
+      }
+      final r = synthesize(chunks[i]);
+      if (r == null) continue;
+      await _playWav(encodeWav(r.samples, r.rate), i);
       if (_stopSpeaking) return;
     }
   }

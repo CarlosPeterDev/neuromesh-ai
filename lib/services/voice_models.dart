@@ -21,6 +21,8 @@ class VoiceModelInfo {
   final String espeakVoice;
   /// True when [archiveUrl] is a single file (saved as silero_vad.onnx).
   final bool directFile;
+  /// Zero-shot voice cloning: speaks in a voice learned from a short recording.
+  final bool clone;
   const VoiceModelInfo({
     required this.id,
     required this.kind,
@@ -31,6 +33,7 @@ class VoiceModelInfo {
     required this.sizeLabel,
     this.espeakVoice = '',
     this.directFile = false,
+    this.clone = false,
   });
 }
 
@@ -72,6 +75,15 @@ final kVoiceModels = <VoiceModelInfo>[
       dirName: 'vits-piper-ar_JO-kareem-medium',
       sizeLabel: '67 MB',
       espeakVoice: 'ar'),
+  VoiceModelInfo(
+      id: 'pocket-tts-clone',
+      kind: VoiceKind.tts,
+      title: 'Voice cloning (English, Pocket TTS)',
+      lang: 'en',
+      archiveUrl: '$_tts/sherpa-onnx-pocket-tts-int8-2026-01-26.tar.bz2',
+      dirName: 'sherpa-onnx-pocket-tts-int8-2026-01-26',
+      sizeLabel: '98 MB',
+      clone: true),
   VoiceModelInfo(
       id: 'silero-vad',
       kind: VoiceKind.vad,

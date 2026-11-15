@@ -21,6 +21,8 @@ import 'services/device_bridge.dart';
 import 'services/download_queue.dart';
 import 'services/voice_models.dart';
 import 'services/voice_service.dart';
+import 'services/voice_clone_store.dart';
+import 'services/voice_worker.dart';
 import 'services/hive_service.dart';
 import 'services/inference_service.dart';
 import 'services/cluster_service.dart';
@@ -101,6 +103,8 @@ void main() {
     Get.put(DeviceBridge(), permanent: true);
     Get.put(VoiceModelStore(), permanent: true);
     Get.put(VoiceService(), permanent: true);
+    Get.put(VoiceCloneStore(), permanent: true);
+    Get.put(VoiceWorkerServer(), permanent: true);
     Get.put(CloudService());
     Get.put(DownloadService());
     if (UpdateService.isSupported) Get.put(UpdateService(), permanent: true);

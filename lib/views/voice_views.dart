@@ -12,6 +12,7 @@ import '../controllers/settings_controller.dart';
 import '../core/ui.dart';
 import '../services/hive_service.dart';
 import '../services/inference_service.dart';
+import '../services/voice_clone_store.dart';
 import '../services/voice_models.dart';
 import '../services/voice_service.dart';
 
@@ -158,9 +159,20 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   VoiceModelInfo? _installed(VoiceKind k, {String? lang}) {
     for (final m in kVoiceModels) {
       if (m.kind != k || !_store.installed.contains(m.id)) continue;
+      if (m.clone) continue; // chosen separately by _ttsChoice
       if (lang == null || m.lang == lang || m.lang == 'multi') return m;
     }
     return null;
+  }
+
+  /// The cloning voice when you picked one (English only), else a normal voice.
+  VoiceModelInfo? _ttsChoice(String lang) {
+    final clones = Get.find<VoiceCloneStore>();
+    if (lang == 'en' && clones.active.value.isNotEmpty) {
+      final m = voiceModelById('pocket-tts-clone');
+      if (m != null && _store.installed.contains(m.id)) return m;
+    }
+    return _installed(VoiceKind.tts, lang: lang);
   }
 
   Future<void> _start() async {
@@ -180,10 +192,14 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     try {
       _set(_CallState.starting, 'Loading voice…');
       if (!_voice.sttLoadedFor(stt, _lang)) await _voice.loadStt(stt, language: _lang);
-      final tts = _installed(VoiceKind.tts, lang: _lang);
+      final tts = _ttsChoice(_lang);
       if (tts != null && !_hive.getSetting<bool>(_kSystemTts, defaultValue: false)!) {
         if (!_voice.ttsLoadedFor(tts)) await _voice.loadTts(tts);
+        if (tts.clone && !_voice.hasCloneVoice) {
+          await Get.find<VoiceCloneStore>().restoreActive();
+        }
       }
+      _voice.loadWorkerSettings();
       _vad = await _voice.createVad();
       final stream = await _rec.startStream(const RecordConfig(
           encoder: AudioEncoder.pcm16bits,
@@ -336,7 +352,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       if (mounted) setState(() => _lines.add((me: true, text: heard)));
 
       final settings = Get.find<SettingsController>();
-      final sys = (_installed(VoiceKind.tts, lang: _lang) == null ||
+      final workerForEnglish = _voice.workerUrl.isNotEmpty && _lang == 'en';
+      final sys = ((_ttsChoice(_lang) == null && !workerForEnglish) ||
               _hive.getSetting<bool>(_kSystemTts, defaultValue: false)!)
           ? (_lang == 'ar' ? 'ar' : 'en-US')
           : null;
@@ -415,7 +432,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       _set(_CallState.starting, 'Switching language…');
       try {
         await _voice.loadStt(stt, language: next);
-        final tts = _installed(VoiceKind.tts, lang: next);
+        final tts = _ttsChoice(next);
         if (tts != null && !_voice.ttsLoadedFor(tts)) await _voice.loadTts(tts);
       } catch (_) {}
       _busy = false;

@@ -13,6 +13,7 @@ import '../services/rag_service.dart';
 import '../services/hive_service.dart';
 import '../services/download_queue.dart';
 import 'voice_views.dart';
+import 'voice_clone_view.dart';
 
 class ToolboxView extends StatelessWidget {
   const ToolboxView({super.key});
@@ -77,6 +78,13 @@ class ToolboxView extends StatelessWidget {
             subtitle: 'Download listening and speaking models',
             chevron: true,
             onTap: () => Get.to(() => const VoiceModelsView()),
+          ),
+          AppRow(
+            icon: Icons.mic_external_on_rounded,
+            title: 'Voice cloning',
+            subtitle: 'Speak in your own voice; optional worker phone',
+            chevron: true,
+            onTap: () => Get.to(() => const VoiceCloneView()),
           ),
           AppRow(
             icon: Icons.volume_up_rounded,
