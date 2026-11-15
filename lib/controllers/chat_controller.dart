@@ -663,6 +663,77 @@ class ChatController extends GetxController {
     }
   }
 
+  /// Keeps long chats going: when the conversation nears the model's context
+  /// limit, older messages are replaced by a short model-written summary (kept
+  /// on disk, so it is built once and reused). The visible chat is untouched.
+  Future<void> _compactHistory(List<Map<String, String>> history, String system,
+      String prompt, InferenceService inf) async {
+    final ctx = inf.contextTokensTotal.value;
+    if (ctx <= 0 || history.isEmpty) return;
+    int est(String t) => (t.length / 2.8).ceil(); // conservative (Arabic, code)
+    final key = 'chat_summary_${currentSessionId.value}';
+    final saved = _hive.getSetting<Map>(key);
+    var covered = (saved?['count'] as num?)?.toInt() ?? 0;
+    final text = '${saved?['text'] ?? ''}';
+    if (covered > 0 && covered < history.length && text.isNotEmpty) {
+      final rest = history.sublist(covered);
+      history
+        ..clear()
+        ..addAll(_summaryPair(text))
+        ..addAll(rest);
+    } else {
+      covered = 0;
+    }
+    final prefix = covered > 0 ? 2 : 0;
+    int total() =>
+        est(system) +
+        est(prompt) +
+        history.fold<int>(0, (a, m) => a + est(m['content'] ?? '')) +
+        400;
+    if (total() < ctx * 0.7 || history.length <= 6) return;
+
+    final keep = 4;
+    final old = history.sublist(0, history.length - keep);
+    final tail = history.sublist(history.length - keep);
+    var transcript = old
+        .map((m) => '${m['role'] == 'user' ? 'User' : 'Assistant'}: ${m['content']}')
+        .join('\n');
+    final maxChars = (ctx * 1.4).toInt();
+    if (transcript.length > maxChars) {
+      transcript = transcript.substring(transcript.length - maxChars);
+    }
+    streamingResponse.value = '> ⏳ Summarising the earlier conversation so the chat can keep going…';
+    try {
+      final summary = (await inf.generate(
+        prompt:
+            'Summarise this conversation so it can be continued later. Keep names, facts, decisions, '
+            'numbers, file names and open questions. Be compact (under 250 words). Write only the summary.\n\n$transcript',
+        systemPrompt: 'You write short, faithful conversation summaries.',
+        conversationHistory: const [],
+        source: 'summary',
+        stopSequences: const [],
+        onToken: (_) {},
+      ))
+          .trim();
+      if (summary.isEmpty || summary.startsWith('ERROR')) return;
+      final newCovered = covered + (old.length - prefix);
+      _hive.setSetting(key, {'text': summary, 'count': newCovered});
+      history
+        ..clear()
+        ..addAll(_summaryPair(summary))
+        ..addAll(tail);
+    } catch (_) {
+      // Keep the full history; the engine will trim if it must.
+    } finally {
+      streamingResponse.value = '';
+    }
+  }
+
+  List<Map<String, String>> _summaryPair(String summary) => [
+        {'role': 'user', 'content': '[Summary of our earlier conversation]\n$summary'},
+        {'role': 'assistant', 'content': 'Understood. I will continue from that.'},
+      ];
+
   Future<void> sendMessage() async {
     if (isLoading.value || isStreaming.value) return;
 
@@ -962,6 +1033,8 @@ class ChatController extends GetxController {
                 stopSequences: stops,
                 onToken: onTok,
               );
+
+          await _compactHistory(history, system, finalPrompt, inference);
 
           if (!useTools) {
             rawResponse = await generateOnce(finalPrompt, history, (token) {
