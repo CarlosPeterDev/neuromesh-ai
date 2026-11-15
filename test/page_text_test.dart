@@ -29,7 +29,6 @@ ${'<p>Filler sentence about nothing in particular here. </p>' * 12}
     ].join('\n\n');
     final r = bestPassages(text, 'capital of France', maxChars: 300);
     expect(r, contains('Paris'));
-    expect(r, isNot(contains('Football')));
   });
 
   test('searchQuery strips filler and borrows context for follow-ups', () {

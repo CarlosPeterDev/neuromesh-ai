@@ -7,6 +7,7 @@ import '../controllers/model_controller.dart';
 import '../core/ui.dart';
 import '../models/ai_model.dart';
 import '../services/download_service.dart';
+import '../services/device_info_service.dart';
 import '../services/hf_service.dart';
 import '../services/download_queue.dart';
 
@@ -39,6 +40,34 @@ class _HfBrowserState extends State<HfBrowser> {
   int _seq = 0;
   int _rawCount = 0;
   bool _showUnsupported = false;
+  bool _vision = false;
+  bool _fitsOnly = false;
+  String _sort = 'downloads';
+  String _size = 'any'; // any | s | m | l | xl
+
+  static const _sizes = {
+    'any': 'Any size',
+    's': 'Under 1B',
+    'm': '1–3B',
+    'l': '3–8B',
+    'xl': '8B+',
+  };
+
+  bool _sizeOk(HfRepo r) {
+    if (_size == 'any') return true;
+    final b = r.paramsB;
+    if (b == null) return false;
+    return switch (_size) {
+      's' => b < 1,
+      'm' => b >= 1 && b < 3,
+      'l' => b >= 3 && b < 8,
+      _ => b >= 8,
+    };
+  }
+
+  double get _ram => Get.isRegistered<DeviceInfoService>()
+      ? Get.find<DeviceInfoService>().totalRamGB.value
+      : 0;
 
   @override
   void initState() {
@@ -70,7 +99,11 @@ class _HfBrowserState extends State<HfBrowser> {
       _error = null;
     });
     try {
-      final repos = await _hf.searchModels(_query, limit: _limit, images: widget.images);
+      final repos = await _hf.searchModels(_query,
+          limit: (_size != 'any' || _fitsOnly) ? _limit * 2 : _limit,
+          images: widget.images,
+          vision: _vision,
+          sort: _sort);
       if (!mounted || seq != _seq) return;
       setState(() {
         _repos = repos;
@@ -86,12 +119,71 @@ class _HfBrowserState extends State<HfBrowser> {
     }
   }
 
-  Iterable<HfRepo> get _visible => widget.images || _showUnsupported
-      ? _repos
-      : _repos.where((r) => r.supported);
+  Iterable<HfRepo> get _visible {
+    Iterable<HfRepo> out = _repos;
+    if (!widget.images) {
+      if (!_showUnsupported) out = out.where((r) => r.supported);
+      out = out.where(_sizeOk);
+      if (_fitsOnly) out = out.where((r) => r.fitsPhone(_ram) != false && r.paramsB != null);
+    }
+    return out;
+  }
 
   int get _hiddenCount =>
       widget.images ? 0 : _repos.where((r) => !r.supported).length;
+
+  Widget _chip(
+          {required IconData icon,
+          required String label,
+          required bool selected,
+          required VoidCallback onTap}) =>
+      Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: FilterChip(
+          avatar: Icon(icon, size: 16),
+          label: Text(label),
+          selected: selected,
+          onSelected: (_) => onTap(),
+          visualDensity: VisualDensity.compact,
+        ),
+      );
+
+  Future<void> _pickSort() async {
+    final v = await showAppSheet<String>(context, title: 'Sort by', builder: (ctx) {
+      return AppGroup(children: [
+        for (final e in const {
+          'downloads': 'Most downloaded',
+          'likes': 'Most liked',
+          'trendingScore': 'Trending',
+          'lastModified': 'Newest',
+        }.entries)
+          AppRow(
+              title: e.value,
+              selected: _sort == e.key,
+              onTap: () => Navigator.pop(ctx, e.key)),
+      ]);
+    });
+    if (v != null && v != _sort) {
+      setState(() => _sort = v);
+      _run();
+    }
+  }
+
+  Future<void> _pickSize() async {
+    final v = await showAppSheet<String>(context, title: 'Model size', builder: (ctx) {
+      return AppGroup(children: [
+        for (final e in _sizes.entries)
+          AppRow(
+              title: e.value,
+              selected: _size == e.key,
+              onTap: () => Navigator.pop(ctx, e.key)),
+      ]);
+    });
+    if (v != null && v != _size) {
+      setState(() => _size = v);
+      _run();
+    }
+  }
 
   void _openRepo(HfRepo repo) {
     showAppSheet<void>(
@@ -126,6 +218,45 @@ class _HfBrowserState extends State<HfBrowser> {
             prefix: const Icon(Icons.search_rounded),
           ),
         ),
+        if (!widget.images) ...[
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 38,
+            child: ListView(scrollDirection: Axis.horizontal, children: [
+              _chip(
+                  icon: Icons.sort_rounded,
+                  label: switch (_sort) {
+                    'likes' => 'Most liked',
+                    'lastModified' => 'Newest',
+                    'trendingScore' => 'Trending',
+                    _ => 'Most downloaded',
+                  },
+                  selected: false,
+                  onTap: _pickSort),
+              _chip(
+                  icon: Icons.photo_size_select_large_rounded,
+                  label: _sizes[_size]!,
+                  selected: _size != 'any',
+                  onTap: _pickSize),
+              _chip(
+                  icon: Icons.visibility_outlined,
+                  label: 'Vision',
+                  selected: _vision,
+                  onTap: () {
+                    setState(() => _vision = !_vision);
+                    _run();
+                  }),
+              _chip(
+                  icon: Icons.smartphone_rounded,
+                  label: 'Fits my phone',
+                  selected: _fitsOnly,
+                  onTap: () {
+                    setState(() => _fitsOnly = !_fitsOnly);
+                    _run();
+                  }),
+            ]),
+          ),
+        ],
         const SizedBox(height: 10),
         Text(
           _query.isEmpty
@@ -182,7 +313,7 @@ class _HfBrowserState extends State<HfBrowser> {
                         : Icons.memory_rounded,
                 title: r.name,
                 subtitle:
-                    '${r.author} · ${_compact(r.downloads)} downloads · ${_compact(r.likes)} likes${r.gated ? ' · login required' : ''}${!r.supported ? ' · unsupported (${r.architecture})' : ''}',
+                    '${r.author}${r.paramsB != null ? ' · ${r.paramsB! < 1 ? '${(r.paramsB! * 1000).round()}M' : '${r.paramsB!.toStringAsFixed(r.paramsB! < 10 ? 1 : 0)}B'}' : ''} · ${_compact(r.downloads)} downloads${r.isVision ? ' · vision' : ''}${r.fitsPhone(_ram) == true ? ' · fits your phone' : (r.fitsPhone(_ram) == false ? ' · may be too big' : '')}${r.gated ? ' · login required' : ''}${!r.supported ? ' · unsupported (${r.architecture})' : ''}',
                 chevron: true,
                 onTap: () => _openRepo(r),
               ),
@@ -204,6 +335,17 @@ class _HfBrowserState extends State<HfBrowser> {
       ],
     );
   }
+}
+
+/// "Fits" label for a model file of [bytes] on this phone's RAM.
+String _fit(int bytes) {
+  if (!Get.isRegistered<DeviceInfoService>()) return '';
+  final ram = Get.find<DeviceInfoService>().totalRamGB.value;
+  if (ram <= 0 || bytes <= 0) return '';
+  final needGB = bytes / 1073741824 * 1.15 + 0.5;
+  if (needGB <= ram * 0.45) return 'runs well · ';
+  if (needGB <= ram * 0.6) return 'fits · ';
+  return 'too big for this phone · ';
 }
 
 class _RepoFiles extends StatefulWidget {
@@ -338,7 +480,7 @@ class _RepoFilesState extends State<_RepoFiles> {
                   icon: Icons.insert_drive_file_outlined,
                   title: f.quant.isEmpty ? f.filename : f.quant,
                   subtitle:
-                      '${DownloadService.formatBytes(f.size)} · ${f.filename}',
+                      '${DownloadService.formatBytes(f.size)} · ${_fit(f.size)}${f.filename}',
                   trailing: controller.downloadedFiles.contains(f.filename)
                       ? Text('On phone', style: t.small)
                       : controller.isDownloadingModel(f.filename)

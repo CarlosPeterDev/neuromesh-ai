@@ -24,13 +24,51 @@ class HfRepo {
   /// `general.architecture` from the GGUF header, when Hugging Face has it.
   final String? architecture;
 
+  /// Parameter count from the GGUF header, when known.
+  final int? totalParams;
+  final String? pipelineTag;
+  final List<String> tags;
+
   const HfRepo({
     required this.id,
     this.downloads = 0,
     this.likes = 0,
     this.gated = false,
     this.architecture,
+    this.totalParams,
+    this.pipelineTag,
+    this.tags = const [],
   });
+
+  /// Model size in billions of parameters: from the GGUF header, else read
+  /// from the name ("Qwen2.5-7B", "gemma-270m"). Null when unknown.
+  double? get paramsB {
+    if (totalParams != null && totalParams! > 0) return totalParams! / 1e9;
+    final m = RegExp(r'(?<![a-z0-9])(\d+(?:\.\d+)?)\s?([bm])(?![a-z])', caseSensitive: false)
+        .firstMatch(name);
+    if (m == null) return null;
+    final v = double.tryParse(m.group(1)!);
+    if (v == null) return null;
+    return m.group(2)!.toLowerCase() == 'm' ? v / 1000 : v;
+  }
+
+  /// True for models that can look at images.
+  bool get isVision =>
+      pipelineTag == 'image-text-to-text' ||
+      tags.contains('image-text-to-text') ||
+      tags.contains('vision') ||
+      tags.contains('multimodal');
+
+  /// Rough RAM needed for a Q4 file plus working memory, in GB.
+  double? get estimatedRamGB => paramsB == null ? null : paramsB! * 0.62 + 0.6;
+
+  /// Whether a typical 4-bit version should run on a phone with [ramGB].
+  /// Null when the size is unknown.
+  bool? fitsPhone(double ramGB) {
+    final need = estimatedRamGB;
+    if (need == null || ramGB <= 0) return null;
+    return need <= ramGB * 0.6;
+  }
 
   /// False when the bundled llama.cpp can't run this architecture.
   bool get supported => isSupportedLlamaArch(architecture);
@@ -43,6 +81,11 @@ class HfRepo {
     final gguf = json['gguf'];
     return HfRepo(
       architecture: gguf is Map ? gguf['architecture']?.toString() : null,
+      totalParams: gguf is Map && gguf['total'] is num ? (gguf['total'] as num).toInt() : null,
+      pipelineTag: json['pipeline_tag']?.toString(),
+      tags: json['tags'] is List
+          ? (json['tags'] as List).map((e) => e.toString()).toList()
+          : const [],
       id: (json['id'] ?? json['modelId'] ?? '').toString(),
       downloads: (json['downloads'] as num?)?.toInt() ?? 0,
       likes: (json['likes'] as num?)?.toInt() ?? 0,
@@ -102,10 +145,14 @@ class HfService {
   /// GGUF repos matching [query], most downloaded first. An empty query
   /// returns the most downloaded GGUF repos overall.
   Future<List<HfRepo>> searchModels(String query,
-      {int limit = 30, bool images = false}) async {
+      {int limit = 30,
+      bool images = false,
+      bool vision = false,
+      String sort = 'downloads'}) async {
     final params = <String, String>{
       'filter': images ? 'text-to-image' : 'gguf',
-      'sort': 'downloads',
+      'sort': sort,
+      if (vision && !images) 'pipeline_tag': 'image-text-to-text',
       'direction': '-1',
       'limit': '$limit',
       if (query.trim().isNotEmpty) 'search': query.trim(),
@@ -121,6 +168,8 @@ class HfService {
           'expand[]=downloads',
           'expand[]=likes',
           'expand[]=gated',
+          'expand[]=pipeline_tag',
+          'expand[]=tags',
         ],
       ].join('&'),
     );

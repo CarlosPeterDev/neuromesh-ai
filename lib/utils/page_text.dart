@@ -46,10 +46,17 @@ String readableText(String html) {
 String bestPassages(String text, String query, {int maxChars = 1000}) {
   if (text.trim().isEmpty) return '';
   final chunks = chunkText(text, size: 450, overlap: 40);
-  final top = bm25Top(chunks, query, k: 3)..sort();
+  final ranked = bm25Top(chunks, query, k: 3); // best match first
+  final picked = <int>[];
+  var used = 0;
+  for (final i in ranked) {
+    if (picked.isNotEmpty && used + chunks[i].length > maxChars) continue;
+    picked.add(i);
+    used += chunks[i].length;
+  }
+  picked.sort(); // read in page order
   final b = StringBuffer();
-  for (final i in top) {
-    if (b.length + chunks[i].length > maxChars && b.isNotEmpty) break;
+  for (final i in picked) {
     if (b.isNotEmpty) b.write(' … ');
     b.write(chunks[i].replaceAll('\n\n', ' '));
   }
