@@ -431,6 +431,14 @@ class VoiceService extends GetxService {
         }
         workerOk = false; // fall back to this phone for the rest
       }
+      if (_tts == null) {
+        // Worker unreachable and no local voice: use the phone's own voice.
+        _system ??= FlutterTts();
+        await _system!.awaitSpeakCompletion(true);
+        await _system!.setLanguage('en-US');
+        await _system!.speak(chunks[i]);
+        continue;
+      }
       final r = synthesize(chunks[i]);
       if (r == null) continue;
       await _playWav(encodeWav(r.samples, r.rate), i);

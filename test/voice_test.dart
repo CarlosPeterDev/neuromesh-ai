@@ -12,6 +12,15 @@ void main() {
     expect(wav.length, 44 + 8);
   });
 
+  test('wav round trip keeps samples and rate', () {
+    final src = Float32List.fromList([0, 0.25, -0.25, 0.5, -0.5]);
+    final back = decodeWav(encodeWav(src, 22050))!;
+    expect(back.rate, 22050);
+    expect(back.samples.length, 5);
+    expect(back.samples[3], closeTo(0.5, 0.001));
+    expect(decodeWav(Uint8List(10)), isNull);
+  });
+
   test('speech chunks drop markdown, code and thinking', () {
     final c = speechChunks('<think>hmm</think>**Hello** there. How are you? ```x=1```');
     expect(c, ['Hello there.', 'How are you?']);
@@ -38,6 +47,7 @@ void main() {
     final ids = kVoiceModels.map((m) => m.id).toSet();
     expect(ids.length, kVoiceModels.length);
     expect(voiceModelById('piper-ar-kareem')?.espeakVoice, 'ar');
+    expect(voiceModelById('pocket-tts-clone')?.clone, true);
     expect(voiceModelById('nope'), isNull);
   });
 }
