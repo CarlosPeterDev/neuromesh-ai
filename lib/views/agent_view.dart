@@ -7,7 +7,6 @@ import 'package:get/get.dart';
 import '../core/ui.dart';
 import '../services/agent_service.dart';
 import '../services/mcp_client.dart';
-import '../widgets/tonal_button.dart';
 
 class AgentView extends StatefulWidget {
   const AgentView({super.key});

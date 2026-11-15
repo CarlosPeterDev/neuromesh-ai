@@ -194,9 +194,10 @@ class AgentService extends GetxService {
     memory.value = (_hive.getSetting<List>(_memoryKey) ?? const [])
         .map((e) => e.toString())
         .toList();
-    alwaysAllow.value = (_hive.getSetting<List>(_allowKey) ?? const [])
-        .map((e) => e.toString())
-        .toSet();
+    alwaysAllow
+      ..clear()
+      ..addAll((_hive.getSetting<List>(_allowKey) ?? const [])
+          .map((e) => e.toString()));
   }
 
   Future<void> _saveServers() =>

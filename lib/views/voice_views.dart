@@ -16,7 +16,6 @@ import '../services/voice_clone_store.dart';
 import '../services/voice_models.dart';
 import '../services/voice_service.dart';
 
-const _kSttId = 'voice_stt_id';
 const _kLang = 'voice_lang';
 const _kSystemTts = 'voice_system_tts';
 const _kBargeIn = 'voice_barge_in';

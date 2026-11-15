@@ -27,7 +27,7 @@ Future<String> runBenchmark() async {
   final genMs = (sw.elapsedMilliseconds - first).clamp(1, 1 << 30);
   final tps = tokens > 1 ? (tokens - 1) * 1000 / genMs : 0.0;
   return '${inf.loadedModelName.value}\n'
-      'First token: ${first} ms\n'
+      'First token: $first ms\n'
       'Speed: ${tps.toStringAsFixed(1)} tokens/s ($tokens tokens)';
 }
 

@@ -9,7 +9,6 @@ import '../models/ai_model.dart';
 import '../services/download_service.dart';
 import '../services/hf_service.dart';
 import '../services/download_queue.dart';
-import '../widgets/tonal_button.dart';
 
 String _compact(int n) {
   if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
