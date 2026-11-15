@@ -37,6 +37,8 @@ class _HfBrowserState extends State<HfBrowser> {
   String _query = '';
   int _limit = 30;
   int _seq = 0;
+  int _rawCount = 0;
+  bool _showUnsupported = false;
 
   @override
   void initState() {
@@ -72,6 +74,7 @@ class _HfBrowserState extends State<HfBrowser> {
       if (!mounted || seq != _seq) return;
       setState(() {
         _repos = repos;
+        _rawCount = repos.length;
         _loading = false;
       });
     } catch (e) {
@@ -82,6 +85,13 @@ class _HfBrowserState extends State<HfBrowser> {
       });
     }
   }
+
+  Iterable<HfRepo> get _visible => widget.images || _showUnsupported
+      ? _repos
+      : _repos.where((r) => r.supported);
+
+  int get _hiddenCount =>
+      widget.images ? 0 : _repos.where((r) => !r.supported).length;
 
   void _openRepo(HfRepo repo) {
     showAppSheet<void>(
@@ -143,18 +153,41 @@ class _HfBrowserState extends State<HfBrowser> {
             message: 'Try a different search.',
           )
         else ...[
+          if (!widget.images && _hiddenCount > 0)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(children: [
+                Expanded(
+                  child: Text(
+                    _showUnsupported
+                        ? 'Showing $_hiddenCount model${_hiddenCount == 1 ? '' : 's'} this app can\'t run (marked)'
+                        : '$_hiddenCount model${_hiddenCount == 1 ? '' : 's'} hidden: unsupported architecture',
+                    style: t.small,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () =>
+                      setState(() => _showUnsupported = !_showUnsupported),
+                  child: Text(_showUnsupported ? 'Hide' : 'Show anyway'),
+                ),
+              ]),
+            ),
           AppGroup(children: [
-            for (final r in _repos)
+            for (final r in _visible)
               AppRow(
-                icon: r.gated ? Icons.lock_outline_rounded : Icons.memory_rounded,
+                icon: !r.supported
+                    ? Icons.block_rounded
+                    : r.gated
+                        ? Icons.lock_outline_rounded
+                        : Icons.memory_rounded,
                 title: r.name,
                 subtitle:
-                    '${r.author} · ${_compact(r.downloads)} downloads · ${_compact(r.likes)} likes${r.gated ? ' · login required' : ''}',
+                    '${r.author} · ${_compact(r.downloads)} downloads · ${_compact(r.likes)} likes${r.gated ? ' · login required' : ''}${!r.supported ? ' · unsupported (${r.architecture})' : ''}',
                 chevron: true,
                 onTap: () => _openRepo(r),
               ),
           ]),
-          if (_repos.length >= _limit)
+          if (_rawCount >= _limit)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: TextButton(

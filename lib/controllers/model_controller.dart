@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import '../services/download_service.dart';
+import '../utils/llama_archs.dart';
 import '../services/gguf_metadata.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
@@ -914,7 +915,11 @@ class ModelController extends GetxController {
         availableBytes > 0 && fileBytes > 0 && availableBytes < fileBytes * 2;
     final isLowRam = availableBytes > 0 && _isLowMemoryBytes(availableBytes);
     final String warning;
-    if (gguf != null && !fits) {
+    if (gguf != null && !isSupportedLlamaArch(gguf.architecture)) {
+      warning = 'This model uses the "${gguf.architecture}" architecture, '
+          'which this app\'s llama.cpp can\'t run, so loading will fail. '
+          'Pick a different model.';
+    } else if (gguf != null && !fits) {
       warning = fittingContext != null
           ? 'This probably won\'t fit in free memory at a context of '
               '$contextTokens tokens. A context of $fittingContext tokens '

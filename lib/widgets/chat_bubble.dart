@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:get/get.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../controllers/chat_controller.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/chat_message.dart';
@@ -36,6 +37,35 @@ class ChatBubble extends StatelessWidget {
     final thoughtParts = splitThoughtTags(_cleanAssistantText(visibleContent));
     final answerContent = thoughtParts.answer.trim();
     return _buildAssistant(context, isDark, thoughtParts, answerContent);
+  }
+
+  /// Splits the trailing "Sources:" list the web search appends into
+  /// (answer text, [(title, url)]) so the links can be shown as tappable chips.
+  static (String, List<(String, String)>) splitSources(String content) {
+    final i = content.lastIndexOf('\n\nSources:\n');
+    if (i < 0) return (content, const []);
+    final links = <(String, String)>[];
+    for (final m in RegExp(r'^\d+\. \[(.*)\]\((https?://[^)\s]+)\)\s*$',
+            multiLine: true)
+        .allMatches(content.substring(i))) {
+      links.add((m.group(1)!, m.group(2)!));
+    }
+    if (links.isEmpty) return (content, const []);
+    return (content.substring(0, i).trimRight(), links);
+  }
+
+  static Future<void> openLink(BuildContext context, String url) async {
+    final uri = Uri.tryParse(url);
+    var ok = false;
+    if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
+      try {
+        ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } catch (_) {}
+    }
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('Could not open $url')));
+    }
   }
 
   bool _isLastMessage() {
@@ -155,8 +185,9 @@ class ChatBubble extends StatelessWidget {
 
   // ── Assistant: full-width text, no bubble, quiet actions underneath ──
   Widget _buildAssistant(BuildContext context, bool isDark,
-      ThoughtParts thoughtParts, String answerContent) {
+      ThoughtParts thoughtParts, String fullAnswer) {
     final muted = Theme.of(context).hintColor;
+    final (answerContent, sources) = splitSources(fullAnswer);
     final meta = <String>[
       if (message.tokensPerSec != null && message.tokensPerSec! > 0)
         '${message.tokensPerSec!.toStringAsFixed(1)} tok/s',
@@ -181,9 +212,36 @@ class ChatBubble extends StatelessWidget {
                 data: answerContent,
                 selectable: true,
                 styleSheet: answerStyle(context),
+                onTapLink: (text, href, title) {
+                  if (href != null) openLink(context, href);
+                },
               ),
             ),
           ),
+        if (sources.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Text('Sources',
+              style: GoogleFonts.inter(
+                  fontSize: 12, fontWeight: FontWeight.w600, color: muted)),
+          const SizedBox(height: 6),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (var i = 0; i < sources.length; i++)
+              ActionChip(
+                visualDensity: VisualDensity.compact,
+                avatar: CircleAvatar(
+                    radius: 9,
+                    backgroundColor: muted.withValues(alpha: 0.18),
+                    child: Text('${i + 1}',
+                        style: GoogleFonts.inter(fontSize: 10, color: muted))),
+                label: Text(
+                    Uri.tryParse(sources[i].$2)?.host.replaceFirst('www.', '') ??
+                        sources[i].$1,
+                    style: GoogleFonts.inter(fontSize: 12)),
+                tooltip: sources[i].$1,
+                onPressed: () => openLink(context, sources[i].$2),
+              ),
+          ]),
+        ],
         if (message.fileName != null) ...[
           const SizedBox(height: 10),
           AttachmentPreview(

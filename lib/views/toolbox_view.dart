@@ -225,13 +225,39 @@ class ToolboxView extends StatelessWidget {
           Obx(() {
             final q = Get.find<DownloadQueue>();
             final cur = q.current.value;
-            return AppRow(
-              icon: Icons.queue_rounded,
-              title: 'Download queue',
-              subtitle: cur == null && q.queue.isEmpty
-                  ? 'Empty. Add models from Hugging Face.'
-                  : '${cur == null ? '' : 'Now: ${cur.name}. '}${q.queue.length} waiting',
-            );
+            return Column(children: [
+              AppRow(
+                icon: Icons.queue_rounded,
+                title: 'Download queue',
+                subtitle: cur == null && q.queue.isEmpty
+                    ? 'Empty. Add models from Hugging Face.'
+                    : '${q.queue.length} waiting',
+                trailing: cur == null && q.queue.isEmpty
+                    ? null
+                    : TextButton(
+                        onPressed: q.cancelAll, child: const Text('Cancel all')),
+              ),
+              if (cur != null)
+                AppRow(
+                  icon: Icons.downloading_rounded,
+                  title: cur.name,
+                  subtitle: 'Downloading now',
+                  trailing: IconButton(
+                      tooltip: 'Cancel this download',
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: q.cancelCurrent),
+                ),
+              for (final m in q.queue)
+                AppRow(
+                  icon: Icons.schedule_rounded,
+                  title: m.name,
+                  subtitle: 'Waiting',
+                  trailing: IconButton(
+                      tooltip: 'Remove from queue',
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () => q.remove(m)),
+                ),
+            ]);
           }),
         ]),
         const SectionHeader('Roles'),

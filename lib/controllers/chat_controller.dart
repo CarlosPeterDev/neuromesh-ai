@@ -784,7 +784,15 @@ class ChatController extends GetxController {
         Get.find<WebSearchService>().shouldSearch(visibleText)) {
       streamingResponse.value = '🔍 Searching the web…';
       try {
-        webCtx = await Get.find<WebSearchService>().buildContext(visibleText);
+        final prevUser = messages
+            .where((m) => m.role == 'user')
+            .toList()
+            .reversed
+            .skip(1)
+            .map((m) => m.content.split('\n\nAttached file:').first)
+            .firstOrNull;
+        webCtx = await Get.find<WebSearchService>()
+            .buildContext(visibleText, previous: prevUser);
       } catch (_) {}
       if (generationId != _generationSerial) return;
       streamingResponse.value = '';

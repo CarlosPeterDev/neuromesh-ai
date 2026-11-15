@@ -23,6 +23,22 @@ class DownloadQueue extends GetxService {
 
   void remove(AiModel m) => queue.removeWhere((q) => q.filename == m.filename);
 
+  bool _abortCurrent = false;
+
+  /// Stops the download that is running now; the next queued one then starts.
+  void cancelCurrent() {
+    final cur = current.value;
+    if (cur == null) return;
+    _abortCurrent = true;
+    Get.find<ModelController>().pauseDownload(cur.filename);
+  }
+
+  /// Cancels the running download and empties the queue.
+  void cancelAll() {
+    queue.clear();
+    cancelCurrent();
+  }
+
   Future<void> _pump() async {
     if (_pumping) return;
     _pumping = true;
@@ -36,14 +52,16 @@ class DownloadQueue extends GetxService {
           await mc.downloadModel(next);
           // Native downloads return as soon as they start; wait for the end.
           final started = DateTime.now();
-          while (mc.isDownloadingModel(next.filename)) {
+          while (mc.isDownloadingModel(next.filename) && !_abortCurrent) {
             await Future<void>.delayed(const Duration(seconds: 2));
             if (DateTime.now().difference(started).inHours >= 6) break;
           }
           await mc.refreshDownloaded();
         }
+        _abortCurrent = false;
       }
     } finally {
+      _abortCurrent = false;
       current.value = null;
       _pumping = false;
     }

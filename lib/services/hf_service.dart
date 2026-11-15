@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../utils/llama_archs.dart';
+
 class HfException implements Exception {
   final String message;
   HfException(this.message);
@@ -19,19 +21,28 @@ class HfRepo {
   /// Gated repos need a Hugging Face login / licence acceptance first.
   final bool gated;
 
+  /// `general.architecture` from the GGUF header, when Hugging Face has it.
+  final String? architecture;
+
   const HfRepo({
     required this.id,
     this.downloads = 0,
     this.likes = 0,
     this.gated = false,
+    this.architecture,
   });
+
+  /// False when the bundled llama.cpp can't run this architecture.
+  bool get supported => isSupportedLlamaArch(architecture);
 
   String get author => id.contains('/') ? id.split('/').first : '';
   String get name => id.contains('/') ? id.substring(id.indexOf('/') + 1) : id;
 
   factory HfRepo.fromJson(Map<String, dynamic> json) {
     final gated = json['gated'];
+    final gguf = json['gguf'];
     return HfRepo(
+      architecture: gguf is Map ? gguf['architecture']?.toString() : null,
       id: (json['id'] ?? json['modelId'] ?? '').toString(),
       downloads: (json['downloads'] as num?)?.toInt() ?? 0,
       likes: (json['likes'] as num?)?.toInt() ?? 0,
@@ -99,7 +110,21 @@ class HfService {
       'limit': '$limit',
       if (query.trim().isNotEmpty) 'search': query.trim(),
     };
-    final data = await _getJson(Uri.https(_host, '/api/models', params));
+    // `expand` replaces the default field set, so name everything we read.
+    // `gguf` carries the architecture used to hide models we can't run.
+    final uri = Uri.https(_host, '/api/models', params).replace(
+      query: [
+        for (final e in params.entries)
+          '${e.key}=${Uri.encodeQueryComponent(e.value)}',
+        if (!images) ...[
+          'expand[]=gguf',
+          'expand[]=downloads',
+          'expand[]=likes',
+          'expand[]=gated',
+        ],
+      ].join('&'),
+    );
+    final data = await _getJson(uri);
     if (data is! List) throw HfException('Unexpected reply from Hugging Face.');
     return data
         .whereType<Map<String, dynamic>>()

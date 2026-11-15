@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 
+import '../utils/page_text.dart';
 import '../utils/web_search_parse.dart';
 import 'hive_service.dart';
 
@@ -94,34 +95,39 @@ class WebSearchService extends GetxService {
     return [];
   }
 
-  Future<String> _pageText(String url) async {
+  Future<String> _pageText(String url, String query) async {
     try {
       final res = await http
           .get(Uri.parse(url), headers: {'User-Agent': _ua})
-          .timeout(const Duration(seconds: 6));
+          .timeout(const Duration(seconds: 7));
       if (res.statusCode != 200) return '';
       final ct = res.headers['content-type'] ?? '';
       if (!ct.contains('text/html') && !ct.contains('text/plain')) return '';
-      final t = res.body
-          .replaceAll(RegExp(r'<script[\s\S]*?</script>|<style[\s\S]*?</style>|<nav[\s\S]*?</nav>|<header[\s\S]*?</header>|<footer[\s\S]*?</footer>', caseSensitive: false), ' ')
-          .replaceAll(RegExp(r'<[^>]+>'), ' ')
-          .replaceAll(RegExp(r'&[a-z#0-9]+;'), ' ')
-          .replaceAll(RegExp(r'\s+'), ' ')
-          .trim();
-      return t.length > 1400 ? t.substring(0, 1400) : t;
+      final body = res.body.length > 600000 ? res.body.substring(0, 600000) : res.body;
+      return bestPassages(readableText(body), query, maxChars: 1100);
     } catch (_) {
       return '';
     }
   }
 
+  final _cache = <String, (DateTime, WebContext?)>{};
+
   /// Runs the search and builds the text block added to the prompt.
-  Future<WebContext?> buildContext(String question) async {
-    final results = await search(question);
+  /// [previous] is the user's earlier question, used for short follow-ups.
+  Future<WebContext?> buildContext(String question, {String? previous}) async {
+    final query = searchQuery(question, previous: previous);
+    final hit = _cache[query];
+    if (hit != null && DateTime.now().difference(hit.$1).inMinutes < 10) {
+      return hit.$2;
+    }
+    final raw = await search(query, max: 8);
+    final results = dedupeByHost(raw, (r) => r.url).take(5).toList();
     if (results.isEmpty) return null;
-    // Read the top two pages for more than a snippet.
-    final pages = await Future.wait(results.take(2).map((r) => _pageText(r.url)));
+    // Read the top three pages and keep only the passages that match.
+    final pages =
+        await Future.wait(results.take(3).map((r) => _pageText(r.url, query)));
     final b = StringBuffer(
-        'Web search results (retrieved ${DateTime.now().toIso8601String().substring(0, 10)}). '
+        'Web search results for "$query" (retrieved ${DateTime.now().toIso8601String().substring(0, 10)}). '
         'Use them if they help, cite sources like [1], and say so if they do not answer the question.\n');
     for (var i = 0; i < results.length; i++) {
       final r = results[i];
@@ -130,6 +136,8 @@ class WebSearchService extends GetxService {
           : r.snippet;
       b.writeln('\n[${i + 1}] ${r.title} (${r.url})\n$body');
     }
-    return WebContext(b.toString(), results);
+    final ctx = WebContext(b.toString(), results);
+    _cache[query] = (DateTime.now(), ctx);
+    return ctx;
   }
 }

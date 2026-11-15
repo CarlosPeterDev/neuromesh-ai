@@ -108,6 +108,15 @@ class VoiceModelStore extends GetxService {
   final installed = <String>{}.obs;
   final progress = <String, double>{}.obs; // 0..1, -1 = extracting
   final errors = <String, String>{}.obs;
+  final _cancelled = <String>{};
+  final _clients = <String, http.Client>{};
+
+  /// Stops a download in progress and removes the partial file.
+  void cancel(String id) {
+    if (!progress.containsKey(id)) return;
+    _cancelled.add(id);
+    _clients[id]?.close();
+  }
 
   Future<Directory> _root() async {
     final base = await getApplicationDocumentsDirectory();
@@ -143,6 +152,8 @@ class VoiceModelStore extends GetxService {
     final root = await _root();
     final tmp = File('${root.path}/${m.id}.tar.bz2');
     final client = http.Client();
+    _clients[m.id] = client;
+    _cancelled.remove(m.id);
     try {
       final req = http.Request('GET', Uri.parse(m.archiveUrl));
       final res = await client.send(req).timeout(const Duration(seconds: 30));
@@ -153,6 +164,7 @@ class VoiceModelStore extends GetxService {
       var got = 0;
       final sink = tmp.openWrite();
       await for (final chunk in res.stream) {
+        if (_cancelled.contains(m.id)) throw Exception('cancelled');
         sink.add(chunk);
         got += chunk.length;
         if (total > 0) progress[m.id] = got / total;
@@ -166,6 +178,7 @@ class VoiceModelStore extends GetxService {
         installed.add(m.id);
         return;
       }
+      if (_cancelled.contains(m.id)) throw Exception('cancelled');
       progress[m.id] = -1;
       final src = tmp.path;
       final dst = root.path;
@@ -173,8 +186,10 @@ class VoiceModelStore extends GetxService {
       await File('${root.path}/${m.dirName}/.complete').writeAsString('ok');
       installed.add(m.id);
     } catch (e) {
-      errors[m.id] = 'Download failed: $e';
+      if (!_cancelled.contains(m.id)) errors[m.id] = 'Download failed: $e';
     } finally {
+      _clients.remove(m.id);
+      _cancelled.remove(m.id);
       client.close();
       progress.remove(m.id);
       if (await tmp.exists()) await tmp.delete();

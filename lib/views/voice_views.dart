@@ -69,8 +69,18 @@ class VoiceModelsView extends StatelessWidget {
                   ? 'Unpacking…'
                   : 'Downloading ${(p * 100).round()}%'),
       trailing: p != null
-          ? const SizedBox(
-              width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+          ? Row(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, value: p > 0 ? p : null)),
+              if (p >= 0)
+                IconButton(
+                    tooltip: 'Cancel download',
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => store.cancel(m.id)),
+            ])
           : has
               ? IconButton(
                   icon: const Icon(Icons.delete_outline),
