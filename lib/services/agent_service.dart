@@ -1,6 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:get/get.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
 import 'agent_tools.dart';
 import 'hive_service.dart';
@@ -22,14 +26,19 @@ class _BuiltIn {
   final String name;
   final String description;
   final String params;
-  final String Function(Map<String, dynamic> args) run;
-  const _BuiltIn(this.name, this.description, this.params, this.run);
+  final FutureOr<String> Function(Map<String, dynamic> args) run;
+  /// Reaches outside the app's own data (network), so ask first.
+  final bool needsConfirm;
+  const _BuiltIn(this.name, this.description, this.params, this.run,
+      {this.needsConfirm = false});
 }
 
 /// Runs a multi-step task: the local model may call built-in tools or tools
 /// from linked MCP servers. MCP tools always need the user's confirmation.
 class AgentService extends GetxService {
   static const _serversKey = 'mcp_servers';
+  static const _memoryKey = 'agent_memory';
+  static const _allowKey = 'agent_always_allow';
   static const maxSteps = 6;
 
   final HiveService _hive = Get.find<HiveService>();
@@ -39,7 +48,46 @@ class AgentService extends GetxService {
   final _tools = <String, List<McpTool>>{};
   final events = <AgentEvent>[].obs;
   final isRunning = false.obs;
+  final memory = <String>[].obs;
+  final alwaysAllow = <String>{}.obs;
   bool _cancel = false;
+
+  Future<Directory> filesDir() async {
+    final base = await getApplicationDocumentsDirectory();
+    final d = Directory('${base.path}/agent_files');
+    if (!await d.exists()) await d.create(recursive: true);
+    return d;
+  }
+
+  /// Only plain file names inside the agent folder are allowed.
+  Future<File> _safeFile(String name) async {
+    final n = name.split('/').last.split('\\').last;
+    if (n.isEmpty || n.startsWith('.')) throw Exception('Invalid file name');
+    return File('${(await filesDir()).path}/$n');
+  }
+
+  Future<void> addNote(String note) async {
+    final n = note.trim();
+    if (n.isEmpty) return;
+    memory.add(n);
+    if (memory.length > 30) memory.removeAt(0);
+    await _hive.setSetting(_memoryKey, memory.toList());
+  }
+
+  Future<void> clearMemory() async {
+    memory.clear();
+    await _hive.setSetting(_memoryKey, <String>[]);
+  }
+
+  Future<void> allowAlwaysFor(String server, String tool) async {
+    alwaysAllow.add('$server::$tool');
+    await _hive.setSetting(_allowKey, alwaysAllow.toList());
+  }
+
+  Future<void> revokeAlways() async {
+    alwaysAllow.clear();
+    await _hive.setSetting(_allowKey, <String>[]);
+  }
 
   late final List<_BuiltIn> _builtIns = [
     _BuiltIn(
@@ -57,6 +105,69 @@ class AgentService extends GetxService {
       '{}',
       (args) => DateTime.now().toString(),
     ),
+    _BuiltIn(
+      'remember',
+      'Save a short note that you can recall in later tasks.',
+      '{"note":"string"}',
+      (args) async {
+        await addNote((args['note'] ?? '').toString());
+        return 'Saved.';
+      },
+    ),
+    _BuiltIn(
+      'list_files',
+      'List files in the agent\'s private folder.',
+      '{}',
+      (args) async {
+        final names = (await filesDir())
+            .listSync()
+            .whereType<File>()
+            .map((f) => f.path.split('/').last)
+            .toList();
+        return names.isEmpty ? '(no files)' : names.join('\n');
+      },
+    ),
+    _BuiltIn(
+      'read_file',
+      'Read a text file from the agent\'s private folder.',
+      '{"name":"string"}',
+      (args) async {
+        final f = await _safeFile((args['name'] ?? '').toString());
+        if (!await f.exists()) return 'Error: file not found.';
+        final t = await f.readAsString();
+        return t.length > 4000 ? '${t.substring(0, 4000)}\n…(truncated)' : t;
+      },
+    ),
+    _BuiltIn(
+      'write_file',
+      'Write a text file into the agent\'s private folder.',
+      '{"name":"string","content":"string"}',
+      (args) async {
+        final f = await _safeFile((args['name'] ?? '').toString());
+        await f.writeAsString((args['content'] ?? '').toString());
+        return 'Wrote ${f.path.split('/').last}.';
+      },
+    ),
+    _BuiltIn(
+      'fetch_url',
+      'Download a web page and return its text (first 4000 characters).',
+      '{"url":"https://..."}',
+      (args) async {
+        final uri = Uri.tryParse((args['url'] ?? '').toString());
+        if (uri == null || !(uri.scheme == 'https' || uri.scheme == 'http')) {
+          return 'Error: give a full http(s) URL.';
+        }
+        final res = await http.get(uri).timeout(const Duration(seconds: 20));
+        if (res.statusCode != 200) return 'Error: server answered ${res.statusCode}.';
+        final text = res.body
+            .replaceAll(RegExp(r'<script[\s\S]*?</script>|<style[\s\S]*?</style>'), ' ')
+            .replaceAll(RegExp(r'<[^>]+>'), ' ')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+        return text.length > 4000 ? '${text.substring(0, 4000)}…' : text;
+      },
+      needsConfirm: true,
+    ),
   ];
 
   @override
@@ -67,6 +178,12 @@ class AgentService extends GetxService {
         .whereType<Map>()
         .map((m) => McpServerConfig.fromMap(Map<String, dynamic>.from(m)))
         .toList();
+    memory.value = (_hive.getSetting<List>(_memoryKey) ?? const [])
+        .map((e) => e.toString())
+        .toList();
+    alwaysAllow.value = (_hive.getSetting<List>(_allowKey) ?? const [])
+        .map((e) => e.toString())
+        .toSet();
   }
 
   Future<void> _saveServers() =>
@@ -134,6 +251,14 @@ class AgentService extends GetxService {
       final schema = jsonEncode(t.inputSchema['properties'] ?? {});
       final shortSchema = schema.length > 600 ? '${schema.substring(0, 600)}…' : schema;
       b.writeln('- ${t.qualifiedName}: ${t.description.replaceAll('\n', ' ')} arguments: $shortSchema');
+    }
+    if (memory.isNotEmpty) {
+      b
+        ..writeln()
+        ..writeln('Notes you saved earlier:');
+      for (final n in memory) {
+        b.writeln('- $n');
+      }
     }
     return b.toString();
   }
@@ -206,7 +331,12 @@ class AgentService extends GetxService {
     for (final t in _builtIns) {
       if (t.name == call.name) {
         try {
-          return t.run(call.arguments);
+          if (t.needsConfirm &&
+              !alwaysAllow.contains('built-in::${t.name}') &&
+              !await confirm(t.name, 'built-in', call.arguments)) {
+            return 'The user denied this tool call.';
+          }
+          return await t.run(call.arguments);
         } catch (e) {
           return 'Error: $e';
         }
@@ -220,7 +350,8 @@ class AgentService extends GetxService {
       return 'Error: unknown tool "${call.name}". Use only the listed tools.';
     }
     final cfg = servers.firstWhere((s) => s.id == tool!.serverId);
-    final allowed = await confirm(tool.name, cfg.name, call.arguments);
+    final allowed = alwaysAllow.contains('${cfg.name}::${tool.name}') ||
+        await confirm(tool.name, cfg.name, call.arguments);
     if (!allowed) return 'The user denied this tool call.';
     final client = McpClient(cfg);
     try {

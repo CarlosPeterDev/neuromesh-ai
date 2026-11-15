@@ -9,6 +9,7 @@ import '../services/toolbox_service.dart';
 import '../services/voice_service.dart';
 import 'storage_view.dart';
 import 'perf_views.dart';
+import '../services/rag_service.dart';
 import '../services/hive_service.dart';
 import '../services/download_queue.dart';
 import 'voice_views.dart';
@@ -94,6 +95,32 @@ class ToolboxView extends StatelessWidget {
             },
           ),
         ]),
+        const SectionHeader('Chat with documents'),
+        Obx(() {
+          final rag = Get.find<RagService>();
+          return AppGroup(dividerIndent: 60, children: [
+            AppRow(
+              icon: Icons.menu_book_outlined,
+              title: 'Use my documents in chats',
+              subtitle: 'Adds the best-matching passages to your question. Keyword search, fully offline.',
+              trailing: Switch(value: rag.enabled.value, onChanged: rag.setEnabled),
+            ),
+            for (final d in rag.docs)
+              AppRow(
+                icon: Icons.description_outlined,
+                title: d.name,
+                subtitle: '${d.chunks} passages',
+                trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline, size: 20),
+                    onPressed: () => rag.remove(d)),
+              ),
+            AppRow(
+              icon: rag.busy.value ? Icons.hourglass_top_rounded : Icons.add_rounded,
+              title: rag.busy.value ? 'Reading document…' : 'Add document (PDF, DOCX, TXT…)',
+              onTap: rag.busy.value ? null : () async => _toast(await rag.addDocument()),
+            ),
+          ]);
+        }),
         const SectionHeader('Performance & downloads'),
         AppGroup(dividerIndent: 60, children: [
           AppRow(

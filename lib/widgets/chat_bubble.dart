@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 import '../controllers/chat_controller.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/chat_message.dart';
+import '../utils/text_direction.dart';
 import '../utils/thought_parser.dart';
 import 'attachment_preview.dart';
 import 'image_viewer.dart';
@@ -139,6 +140,7 @@ class ChatBubble extends StatelessWidget {
             ),
             child: SelectableText(
               text,
+              textDirection: detectDirection(text),
               style: GoogleFonts.inter(
                 fontSize: 15.5,
                 height: 1.45,
@@ -171,10 +173,16 @@ class ChatBubble extends StatelessWidget {
             styleSheet: _thoughtMarkdownStyle(context),
           ),
         if (answerContent.isNotEmpty)
-          MarkdownBody(
-            data: answerContent,
-            selectable: true,
-            styleSheet: answerStyle(context),
+          Directionality(
+            textDirection: detectDirection(answerContent),
+            child: SizedBox(
+              width: double.infinity,
+              child: MarkdownBody(
+                data: answerContent,
+                selectable: true,
+                styleSheet: answerStyle(context),
+              ),
+            ),
           ),
         if (message.fileName != null) ...[
           const SizedBox(height: 10),

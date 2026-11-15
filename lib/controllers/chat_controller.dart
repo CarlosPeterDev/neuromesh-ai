@@ -25,6 +25,7 @@ import '../services/local_image_service.dart';
 import '../services/app_log_service.dart';
 import '../services/image_generation_notification_service.dart';
 import '../services/document_extractor_service.dart';
+import '../services/rag_service.dart';
 import '../utils/thought_parser.dart';
 
 const int _visionImageMaxSide = 768;
@@ -760,6 +761,11 @@ class ChatController extends GetxController {
       if (idx >= 0) sessions[idx] = updated;
     }
 
+    // Add the best-matching passages from the user's documents (if enabled).
+    final genPrompt = Get.isRegistered<RagService>()
+        ? await Get.find<RagService>().augment(effectiveText, visibleText)
+        : effectiveText;
+
     // Start generating
     final generationId = ++_generationSerial;
     isLoading.value = true;
@@ -905,7 +911,7 @@ class ChatController extends GetxController {
           // returns a clear unsupported message from the inference layer.
 
           rawResponse = await inference.generate(
-            prompt: effectiveText,
+            prompt: genPrompt,
             systemPrompt: _effectiveSystemPrompt,
             conversationHistory: history,
             source: 'chat',

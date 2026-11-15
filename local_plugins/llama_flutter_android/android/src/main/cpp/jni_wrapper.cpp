@@ -254,8 +254,14 @@ static int readBlockCount(const char* model_path) {
         const int64_t id = gguf_find_key(gguf, key.c_str());
         if (id >= 0) {
             switch (gguf_get_kv_type(gguf, id)) {
+                case GGUF_TYPE_UINT8:  count = (int)gguf_get_val_u8(gguf, id); break;
+                case GGUF_TYPE_INT8:   count = (int)gguf_get_val_i8(gguf, id); break;
+                case GGUF_TYPE_UINT16: count = (int)gguf_get_val_u16(gguf, id); break;
+                case GGUF_TYPE_INT16:  count = (int)gguf_get_val_i16(gguf, id); break;
                 case GGUF_TYPE_UINT32: count = (int)gguf_get_val_u32(gguf, id); break;
                 case GGUF_TYPE_INT32:  count = gguf_get_val_i32(gguf, id); break;
+                case GGUF_TYPE_UINT64: count = (int)gguf_get_val_u64(gguf, id); break;
+                case GGUF_TYPE_INT64:  count = (int)gguf_get_val_i64(gguf, id); break;
                 default: break;
             }
         }
@@ -793,10 +799,12 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     if (has_cluster) {
         const std::string error = planCluster(model_path, cluster);
         if (!error.empty()) {
-            env->ReleaseStringUTFChars(path, model_path);
-            throwLoadError(env, "Cluster: " + error);
-            return;
+            // Don't fail the whole load: run on this phone alone instead.
+            LOGE("Cluster unavailable (%s); loading on this phone only", error.c_str());
+            has_cluster = false;
         }
+    }
+    if (has_cluster) {
         model_params.devices = cluster.devices.data();
         model_params.tensor_split = cluster.split.data();
         model_params.n_gpu_layers = cluster.n_gpu_layers;

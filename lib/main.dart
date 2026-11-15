@@ -16,6 +16,7 @@ import 'core/theme.dart';
 import 'core/routes.dart';
 import 'services/agent_service.dart';
 import 'services/toolbox_service.dart';
+import 'services/rag_service.dart';
 import 'services/device_bridge.dart';
 import 'services/download_queue.dart';
 import 'services/voice_models.dart';
@@ -96,6 +97,7 @@ void main() {
     Get.put(InferenceService());
     Get.put(AgentService());
     Get.put(ToolboxService());
+    Get.put(RagService());
     Get.put(DeviceBridge(), permanent: true);
     Get.put(VoiceModelStore(), permanent: true);
     Get.put(VoiceService(), permanent: true);

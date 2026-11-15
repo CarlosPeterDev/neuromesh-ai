@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -26,7 +29,7 @@ class _AgentViewState extends State<AgentView> {
   Future<bool> _confirm(
       String tool, String server, Map<String, dynamic> args) async {
     if (!mounted) return false;
-    final ok = await showDialog<bool>(
+    final ok = await showDialog<String>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
@@ -44,15 +47,19 @@ class _AgentViewState extends State<AgentView> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
+              onPressed: () => Navigator.pop(ctx, 'deny'),
               child: const Text('Deny')),
           TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Allow')),
+              onPressed: () => Navigator.pop(ctx, 'always'),
+              child: const Text('Always allow')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, 'once'),
+              child: const Text('Allow once')),
         ],
       ),
     );
-    return ok == true;
+    if (ok == 'always') await _agent.allowAlwaysFor(server, tool);
+    return ok == 'once' || ok == 'always';
   }
 
   void _start() {
@@ -177,7 +184,52 @@ class _AgentViewState extends State<AgentView> {
                 icon: Icons.schedule_rounded,
                 title: 'Current time',
                 subtitle: 'Built in · runs without asking'),
+            const AppRow(
+                icon: Icons.folder_outlined,
+                title: 'Files (private folder)',
+                subtitle: 'List, read and write files inside the app only'),
+            const AppRow(
+                icon: Icons.public_rounded,
+                title: 'Fetch web page',
+                subtitle: 'Asks every time unless you choose Always allow'),
           ]),
+          const SectionHeader('Memory'),
+          Obx(() => AppGroup(children: [
+                AppRow(
+                    icon: Icons.psychology_outlined,
+                    title: _agent.memory.isEmpty
+                        ? 'No saved notes'
+                        : '${_agent.memory.length} saved notes',
+                    subtitle: _agent.memory.isEmpty
+                        ? 'The agent can save notes with the remember tool.'
+                        : _agent.memory.reversed.take(3).join(' · ')),
+                if (_agent.memory.isNotEmpty)
+                  AppRow(
+                      icon: Icons.delete_outline,
+                      title: 'Clear memory',
+                      destructive: true,
+                      onTap: _agent.clearMemory),
+                if (_agent.alwaysAllow.isNotEmpty)
+                  AppRow(
+                      icon: Icons.lock_reset_rounded,
+                      title:
+                          'Reset "always allow" (${_agent.alwaysAllow.length})',
+                      onTap: _agent.revokeAlways),
+                AppRow(
+                    icon: Icons.upload_file_rounded,
+                    title: 'Give the agent a file',
+                    subtitle: 'Copies it into the private folder',
+                    onTap: () async {
+                      final r = await FilePicker.pickFiles(withData: false);
+                      final path = r?.files.single.path;
+                      if (path == null) return;
+                      final dest = File(
+                          '${(await _agent.filesDir()).path}/${path.split('/').last}');
+                      await File(path).copy(dest.path);
+                      Get.snackbar('Added', path.split('/').last,
+                          snackPosition: SnackPosition.BOTTOM);
+                    }),
+              ])),
           const SectionHeader('MCP servers'),
           Obx(() => AppGroup(children: [
                 for (final s in _agent.servers)

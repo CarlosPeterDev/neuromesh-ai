@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-import '../views/quick_start.dart';
+import '../views/onboarding.dart';
 
 class HomeController extends GetxController {
   final currentTab = 0.obs;
@@ -17,7 +17,7 @@ class HomeController extends GetxController {
       final ctx = Get.context;
       if (ctx == null) return;
       try {
-        maybeShowQuickStart(ctx);
+        runFirstRunFlow(ctx);
       } catch (_) {}
     });
   }
