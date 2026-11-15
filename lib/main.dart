@@ -15,6 +15,7 @@ import 'core/theme.dart';
 //////
 import 'core/routes.dart';
 import 'services/agent_service.dart';
+import 'services/user_files.dart';
 import 'services/toolbox_service.dart';
 import 'services/rag_service.dart';
 import 'services/web_search_service.dart';
@@ -98,6 +99,7 @@ void main() {
 
     if (ClusterService.isSupported) Get.put(ClusterService(), permanent: true);
     Get.put(InferenceService());
+    Get.put(UserFilesService(), permanent: true);
     Get.put(AgentService());
     Get.put(ToolboxService());
     Get.put(RagService());

@@ -26,6 +26,9 @@ import '../services/app_log_service.dart';
 import '../services/image_generation_notification_service.dart';
 import '../services/document_extractor_service.dart';
 import '../services/rag_service.dart';
+import '../services/agent_service.dart';
+import '../services/download_service.dart';
+import '../widgets/tool_confirm.dart';
 import '../services/web_search_service.dart';
 import '../utils/thought_parser.dart';
 
@@ -447,38 +450,11 @@ class ChatController extends GetxController {
         'png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', //
         'mp3', 'm4a', 'wav', 'aac', 'ogg', 'flac',
       };
+      // Any file type is allowed: images, audio, PDF, DOCX and text are read
+      // directly; everything else is placed in the agent workspace so the AI
+      // can inspect it with its file tools.
       final result = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: [
-          'png',
-          'jpg',
-          'jpeg',
-          'webp',
-          'gif',
-          'heic',
-          'pdf',
-          'docx',
-          'mp3',
-          'm4a',
-          'wav',
-          'aac',
-          'ogg',
-          'flac',
-          'txt',
-          'md',
-          'json',
-          'csv',
-          'log',
-          'yaml',
-          'yml',
-          'xml',
-          'dart',
-          'kt',
-          'java',
-          'js',
-          'ts',
-          'py'
-        ].where((e) => !documentsOnly || !mediaExtensions.contains(e)).toList(),
+        type: FileType.any,
         withData: kIsWeb,
       );
       if (result == null) return;
@@ -496,10 +472,13 @@ class ChatController extends GetxController {
         return;
       }
 
-      if (extension.isEmpty || fileType == 'file') {
+      if (fileType == 'file' &&
+          (kIsWeb || Get.find<AgentService>().mode.value == AgentChatMode.off)) {
         showToast(
-          'Unsupported file',
-          'Only images, audio, PDF, DOCX, and text/code files are supported.',
+          'Tools are off',
+          kIsWeb
+              ? 'Other file types need the phone app.'
+              : 'Turn tools on (Toolbox → Agent & tools) so the AI can open this file.',
           tone: ToastTone.warning,
         );
         return;
@@ -700,9 +679,35 @@ class ChatController extends GetxController {
     final imageBase64 = selectedImageBase64.value;
     final visibleText =
         text.isEmpty ? _defaultAttachmentPrompt(fileType) : text;
-    final effectiveText = (fileContent != null && fileContent.trim().isNotEmpty)
+
+    // Copy non-media attachments into the agent workspace so the AI's file
+    // tools can read the whole file (not just what fits in the prompt).
+    String? workspaceName;
+    if (!kIsWeb &&
+        filePath != null &&
+        fileName != null &&
+        fileType != 'image' &&
+        fileType != 'audio' &&
+        Get.isRegistered<AgentService>()) {
+      try {
+        workspaceName =
+            await Get.find<AgentService>().importToWorkspace(filePath, fileName);
+      } catch (_) {}
+    }
+    final hasInline = fileContent != null && fileContent.trim().isNotEmpty;
+    final truncated = hasInline && fileContent.contains('[File truncated');
+    var effectiveText = hasInline
         ? '$visibleText\n\nAttached file: $fileName\n```text\n$fileContent\n```'
         : visibleText;
+    if (workspaceName != null && (!hasInline || truncated)) {
+      final size = fileSize > 0 ? ' (${DownloadService.formatBytes(fileSize)})' : '';
+      final note = 'The attached file "$fileName"$size is saved in your workspace as '
+          '"$workspaceName". Use file_info, read_file and search_in_file to look inside it.';
+      effectiveText = hasInline
+          ? '$effectiveText\n\n(Only the start is shown. $note)'
+          : '$visibleText\n\nAttached file: $fileName\n$note';
+    }
+    final needsFileTools = workspaceName != null && (!hasInline || truncated);
 
     // Create a session if none selected
     if (currentSessionId.value.isEmpty) {
@@ -833,7 +838,7 @@ class ChatController extends GetxController {
           .map((m) => {
                 'role': m.role,
                 'content': m.role == 'assistant'
-                    ? splitThoughtTags(m.content).answer
+                    ? stripToolTrace(splitThoughtTags(m.content).answer)
                     : m.content,
               })
           .toList();
@@ -931,27 +936,85 @@ class ChatController extends GetxController {
           }
         } else {
           final inference = Get.find<InferenceService>();
+          final agent = Get.find<AgentService>();
+          final stops = Get.find<SettingsController>().stopSequences.toList();
+
+          // Explicit "remember that …" is handled directly, without the model.
+          final saved = await agent.rememberDirect(visibleText);
+          final useTools =
+              agent.wantsTools(visibleText, hasFile: needsFileTools);
+          final system = agent.composeSystem(_effectiveSystemPrompt,
+              withTools: useTools);
 
           // LiteRT models can consume image/audio attachments. GGUF currently
           // returns a clear unsupported message from the inference layer.
+          Future<String> generateOnce(
+                  String prompt,
+                  List<Map<String, String>> hist,
+                  void Function(String) onTok) =>
+              inference.generate(
+                prompt: prompt,
+                systemPrompt: system,
+                conversationHistory: hist,
+                source: 'chat',
+                imagePath: imagePath,
+                audioPath: fileType == 'audio' ? filePath : null,
+                stopSequences: stops,
+                onToken: onTok,
+              );
 
-          rawResponse = await inference.generate(
-            prompt: finalPrompt,
-            systemPrompt: _effectiveSystemPrompt,
-            conversationHistory: history,
-            source: 'chat',
-            imagePath: imagePath,
-            audioPath: fileType == 'audio' ? filePath : null,
-            stopSequences:
-                Get.find<SettingsController>().stopSequences.toList(),
-            onToken: (token) {
+          if (!useTools) {
+            rawResponse = await generateOnce(finalPrompt, history, (token) {
               // Ignore tokens from a generation the user already stopped.
               if (generationId != _generationSerial) return;
               streamingResponse.value += token;
               trackThoughtTiming();
               _scrollToBottom();
-            },
-          );
+            });
+          } else {
+            var traceMd = '';
+            var visible = '';
+            var status = '';
+            void render() {
+              if (generationId != _generationSerial) return;
+              final parts = <String>[
+                if (traceMd.isNotEmpty) traceMd,
+                if (status.isNotEmpty) '> ⏳ $status',
+              ];
+              streamingResponse.value =
+                  [if (parts.isNotEmpty) parts.join('\n'), visible]
+                      .where((e) => e.isNotEmpty)
+                      .join('\n\n');
+              trackThoughtTiming();
+              _scrollToBottom();
+            }
+
+            final result = await agent.runToolLoop(
+              generate: generateOnce,
+              prompt: finalPrompt,
+              history: history,
+              confirm: confirmToolCall,
+              cancelled: () => generationId != _generationSerial,
+              onVisible: (v) {
+                visible = v;
+                render();
+              },
+              onStatus: (st) {
+                status = st;
+                render();
+              },
+              onTrace: (t) {
+                traceMd = t.join('\n');
+                visible = '';
+                status = '';
+                render();
+              },
+            );
+            rawResponse = result.markdown;
+          }
+          if (saved != null && !rawResponse.startsWith('ERROR')) {
+            rawResponse = '🧠 Saved to memory: $saved\n\n$rawResponse';
+          }
         }
       } else {
         final cloud = Get.find<CloudService>();
@@ -959,7 +1022,11 @@ class ChatController extends GetxController {
           history.last['content'] = '${webCtx.block}\n\n${history.last['content']}';
         }
         final apiMessages = [
-          {'role': 'system', 'content': _effectiveSystemPrompt},
+          {
+            'role': 'system',
+            'content': Get.find<AgentService>()
+                .composeSystem(_effectiveSystemPrompt, withTools: false)
+          },
           ...history,
         ];
         rawResponse = await cloud.sendMessage(
@@ -1214,7 +1281,7 @@ class ChatController extends GetxController {
       case 'text':
         return 'Review this file.';
       default:
-        return 'Review this attachment.';
+        return 'Look at this file and tell me what it is and what is in it.';
     }
   }
 }

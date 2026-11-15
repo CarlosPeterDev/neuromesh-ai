@@ -21,13 +21,15 @@ ${'<p>Filler sentence about nothing in particular here. </p>' * 12}
   });
 
   test('bestPassages picks the matching passage', () {
+    String para(String sentence) => List.filled(6, sentence).join(' ');
     final text = [
-      'Bananas are rich in potassium and grow in tropical climates around the world today.',
-      'The capital of France is Paris, a city on the Seine known for the Louvre museum.',
-      'Football is played with eleven players per side on a rectangular grass pitch always.',
+      para('Bananas are rich in potassium and grow in tropical climates.'),
+      para('The capital of France is Paris, a city on the Seine.'),
+      para('Football is played with eleven players per side on grass.'),
     ].join('\n\n');
-    final r = bestPassages(text, 'capital of France', maxChars: 120);
+    final r = bestPassages(text, 'capital of France', maxChars: 300);
     expect(r, contains('Paris'));
+    expect(r, isNot(contains('Football')));
   });
 
   test('searchQuery strips filler and borrows context for follow-ups', () {

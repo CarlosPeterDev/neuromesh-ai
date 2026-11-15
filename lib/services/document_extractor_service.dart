@@ -38,6 +38,24 @@ class DocumentExtractorService {
     }
   }
 
+  /// Same as [extractText] but for bytes already in memory (PDF, DOCX or text).
+  static Future<String> extractTextFromBytes(
+      List<int> bytes, String extension) async {
+    switch (extension.toLowerCase()) {
+      case 'pdf':
+        final document = PdfDocument(inputBytes: bytes);
+        try {
+          return PdfTextExtractor(document).extractText();
+        } finally {
+          document.dispose();
+        }
+      case 'docx':
+        return _docxText(bytes);
+      default:
+        return utf8.decode(bytes, allowMalformed: true);
+    }
+  }
+
   /// Extract text from a PDF file using Syncfusion PDF.
   static Future<String> _extractPdf(String path) async {
     final bytes = await File(path).readAsBytes();
@@ -52,7 +70,10 @@ class DocumentExtractorService {
 
   /// Extract text from a DOCX file using pure Dart (archive + xml).
   static Future<String> _extractDocx(String path) async {
-    final bytes = await File(path).readAsBytes();
+    return _docxText(await File(path).readAsBytes());
+  }
+
+  static String _docxText(List<int> bytes) {
     final archive = ZipDecoder().decodeBytes(bytes);
 
     final documentFile = archive.files.firstWhere(

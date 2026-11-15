@@ -24,6 +24,7 @@ import '../widgets/thought_disclosure.dart';
 import '../core/haptics.dart';
 import 'voice_views.dart';
 import '../services/web_search_service.dart';
+import 'chat_tools.dart';
 
 // ── Apple-style color helpers ──
 Color _appleBlue(BuildContext c) => Theme.of(c).brightness == Brightness.dark
@@ -214,6 +215,10 @@ class ChatView extends GetView<ChatController> {
                   size: 20, color: on ? Colors.blue : null),
               onPressed: () => w.setMode(on ? WebSearchMode.off : WebSearchMode.auto));
         }),
+        IconButton(
+            tooltip: 'Tools & permissions',
+            icon: const Icon(Icons.handyman_outlined, size: 20),
+            onPressed: () => Get.to(() => const ChatToolsView())),
         IconButton(
             tooltip: 'Voice call',
             icon: const Icon(Icons.call_outlined, size: 20),

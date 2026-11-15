@@ -48,6 +48,16 @@ class DeviceBridge extends GetxService {
     }
   }
 
+  /// Read-only phone facts (battery, storage, memory, network, temperature).
+  Future<Map<String, dynamic>> status() async {
+    try {
+      final m = await _ch.invokeMapMethod<String, dynamic>('deviceStatus');
+      return m ?? <String, dynamic>{};
+    } catch (_) {
+      return <String, dynamic>{};
+    }
+  }
+
   Future<void> _takeShared() async {
     try {
       final fresh = await _ch.invokeMethod<bool>('takeNewChat');
