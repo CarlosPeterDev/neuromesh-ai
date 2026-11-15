@@ -20,7 +20,9 @@ String _compact(int n) {
 /// Search Hugging Face for GGUF models and download them. Replaces the old
 /// fixed list of download links.
 class HfBrowser extends StatefulWidget {
-  const HfBrowser({super.key});
+  /// True to search image (Stable Diffusion) models instead of GGUF chat models.
+  final bool images;
+  const HfBrowser({super.key, this.images = false});
 
   @override
   State<HfBrowser> createState() => _HfBrowserState();
@@ -67,7 +69,7 @@ class _HfBrowserState extends State<HfBrowser> {
       _error = null;
     });
     try {
-      final repos = await _hf.searchModels(_query, limit: _limit);
+      final repos = await _hf.searchModels(_query, limit: _limit, images: widget.images);
       if (!mounted || seq != _seq) return;
       setState(() {
         _repos = repos;
@@ -87,7 +89,7 @@ class _HfBrowserState extends State<HfBrowser> {
       context,
       title: repo.name,
       subtitle: repo.id,
-      builder: (ctx) => _RepoFiles(repo: repo, hf: _hf),
+      builder: (ctx) => _RepoFiles(repo: repo, hf: _hf, images: widget.images),
     );
   }
 
@@ -109,15 +111,17 @@ class _HfBrowserState extends State<HfBrowser> {
           },
           decoration: appInputDecoration(
             context,
-            hint: 'Search Hugging Face, e.g. deepseek',
+            hint: widget.images
+                ? 'Search image models, e.g. sd-turbo'
+                : 'Search Hugging Face, e.g. deepseek',
             prefix: const Icon(Icons.search_rounded),
           ),
         ),
         const SizedBox(height: 10),
         Text(
           _query.isEmpty
-              ? 'Most downloaded GGUF models'
-              : 'GGUF models matching "$_query"',
+              ? (widget.images ? 'Most downloaded image models' : 'Most downloaded GGUF models')
+              : '${widget.images ? 'Image' : 'GGUF'} models matching "$_query"',
           style: t.small,
         ),
         const SizedBox(height: 8),
@@ -173,7 +177,8 @@ class _HfBrowserState extends State<HfBrowser> {
 class _RepoFiles extends StatefulWidget {
   final HfRepo repo;
   final HfService hf;
-  const _RepoFiles({required this.repo, required this.hf});
+  final bool images;
+  const _RepoFiles({required this.repo, required this.hf, this.images = false});
 
   @override
   State<_RepoFiles> createState() => _RepoFilesState();
@@ -185,7 +190,7 @@ class _RepoFilesState extends State<_RepoFiles> {
   @override
   void initState() {
     super.initState();
-    _files = widget.hf.listGgufFiles(widget.repo.id);
+    _files = widget.hf.listGgufFiles(widget.repo.id, images: widget.images);
   }
 
   AiModel _asModel(HfGgufFile f) => AiModel(
@@ -194,7 +199,8 @@ class _RepoFilesState extends State<_RepoFiles> {
         url: HfService.downloadUrl(widget.repo.id, f.path),
         size: DownloadService.formatBytes(f.size),
         description: 'Hugging Face · ${widget.repo.id}',
-        template: 'chatml',
+        template: widget.images ? 'sd' : 'chatml',
+        runtime: widget.images ? AiModel.runtimeSd : null,
       );
 
   void _choose(HfGgufFile f) {
@@ -214,8 +220,10 @@ class _RepoFilesState extends State<_RepoFiles> {
             trailing: Text(DownloadService.formatBytes(f.size)),
           ),
           const SizedBox(height: 12),
-          const AppNotice(
-            'Large download. Wi-Fi is recommended. Models bigger than your phone\'s free memory will not load.',
+          AppNotice(
+            widget.images
+                ? 'Image models are 1-5 GB. Small models (SD 1.5, SD-Turbo, SDXS) run best on phones; large SDXL/Flux files may not load. Some repos only work on a PC.'
+                : 'Large download. Wi-Fi is recommended. Models bigger than your phone\'s free memory will not load.',
             icon: Icons.wifi_rounded,
           ),
           const SizedBox(height: 20),
@@ -281,10 +289,14 @@ class _RepoFilesState extends State<_RepoFiles> {
         }
         final files = snap.data ?? const <HfGgufFile>[];
         if (files.isEmpty) {
-          return const EmptyState(
+          return EmptyState(
             icon: Icons.search_off_rounded,
-            title: 'No single-file GGUF models here',
-            message: 'This repository only has split or projector files.',
+            title: widget.images
+                ? 'No single-file image models here'
+                : 'No single-file GGUF models here',
+            message: widget.images
+                ? 'This repository uses a multi-folder layout the app cannot load.'
+                : 'This repository only has split or projector files.',
           );
         }
         final controller = Get.find<ModelController>();

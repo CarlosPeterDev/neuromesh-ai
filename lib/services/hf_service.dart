@@ -40,6 +40,16 @@ class HfRepo {
   }
 }
 
+/// True for files that are add-ons (VAE, LoRA, ControlNet...) and not a
+/// full checkpoint.
+bool isImageAddon(String lowerName) =>
+    lowerName.contains('vae') ||
+    lowerName.contains('lora') ||
+    lowerName.contains('controlnet') ||
+    lowerName.contains('embedding') ||
+    lowerName.contains('taesd') ||
+    lowerName.contains('refiner');
+
 /// One .gguf file inside a repository.
 class HfGgufFile {
   final String path;
@@ -80,9 +90,10 @@ class HfService {
 
   /// GGUF repos matching [query], most downloaded first. An empty query
   /// returns the most downloaded GGUF repos overall.
-  Future<List<HfRepo>> searchModels(String query, {int limit = 30}) async {
+  Future<List<HfRepo>> searchModels(String query,
+      {int limit = 30, bool images = false}) async {
     final params = <String, String>{
-      'filter': 'gguf',
+      'filter': images ? 'text-to-image' : 'gguf',
       'sort': 'downloads',
       'direction': '-1',
       'limit': '$limit',
@@ -98,20 +109,32 @@ class HfService {
   }
 
   /// Downloadable single-file .gguf models in [repoId], smallest first.
-  Future<List<HfGgufFile>> listGgufFiles(String repoId) async {
+  Future<List<HfGgufFile>> listGgufFiles(String repoId,
+      {bool images = false}) async {
     final data = await _getJson(
-      Uri.https(_host, '/api/models/$repoId/tree/main', {'recursive': 'true'}),
+      Uri.https(_host, '/api/models/$repoId/tree/main',
+          {if (!images) 'recursive': 'true'}),
     );
     if (data is! List) throw HfException('Unexpected reply from Hugging Face.');
     final files = <HfGgufFile>[];
     for (final item in data.whereType<Map<String, dynamic>>()) {
       if (item['type'] != 'file') continue;
       final path = (item['path'] ?? '').toString();
-      if (!path.toLowerCase().endsWith('.gguf')) continue;
+      final lower = path.toLowerCase();
+      if (images) {
+        // Single-file checkpoints at the repo root only (not diffusers
+        // folders), without add-ons the generator can't use on their own.
+        if (!lower.endsWith('.safetensors') || path.contains('/')) continue;
+        if (isImageAddon(lower)) continue;
+      } else if (!lower.endsWith('.gguf')) {
+        continue;
+      }
       final lfs = item['lfs'];
       final size = (lfs is Map ? lfs['size'] : null) ?? item['size'];
       final file = HfGgufFile(path: path, size: (size as num?)?.toInt() ?? 0);
-      if (file.isSplit || file.isProjector) continue;
+      if (!images && (file.isSplit || file.isProjector)) continue;
+      // Phones can't hold huge image checkpoints.
+      if (images && (file.size > 6 * 1024 * 1024 * 1024)) continue;
       files.add(file);
     }
     files.sort((a, b) => a.size.compareTo(b.size));

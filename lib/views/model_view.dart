@@ -79,7 +79,9 @@ class ModelView extends GetView<ModelController> {
                 _buildImportingProgress(context),
                 ..._buildLibrary(context),
               ] else if (scope == 'browse') ...[
-                const HfBrowser(),
+                const HfBrowser(key: ValueKey('hf-gguf')),
+              ] else if (scope == 'images') ...[
+                const HfBrowser(key: ValueKey('hf-images'), images: true),
               ] else
                 _buildOnlineProviders(context),
             ],
@@ -94,6 +96,7 @@ class ModelView extends GetView<ModelController> {
           items: const [
             ('local', 'My models'),
             ('browse', 'Browse'),
+            ('images', 'Images'),
             ('online', 'Cloud'),
           ],
           selected: controller.modelScope.value,
