@@ -9,6 +9,7 @@ import '../models/ai_model.dart';
 import '../services/download_service.dart';
 import '../services/device_info_service.dart';
 import '../services/hf_service.dart';
+import '../utils/model_fit.dart';
 import '../services/download_queue.dart';
 
 String _compact(int n) {
@@ -248,7 +249,7 @@ class _HfBrowserState extends State<HfBrowser> {
                   }),
               _chip(
                   icon: Icons.smartphone_rounded,
-                  label: 'Fits my phone',
+                  label: 'Recommended for my phone',
                   selected: _fitsOnly,
                   onTap: () {
                     setState(() => _fitsOnly = !_fitsOnly);
@@ -313,7 +314,10 @@ class _HfBrowserState extends State<HfBrowser> {
                         : Icons.memory_rounded,
                 title: r.name,
                 subtitle:
-                    '${r.author}${r.paramsB != null ? ' · ${r.paramsB! < 1 ? '${(r.paramsB! * 1000).round()}M' : '${r.paramsB!.toStringAsFixed(r.paramsB! < 10 ? 1 : 0)}B'}' : ''} · ${_compact(r.downloads)} downloads${r.isVision ? ' · vision' : ''}${r.fitsPhone(_ram) == true ? ' · fits your phone' : (r.fitsPhone(_ram) == false ? ' · may be too big' : '')}${r.gated ? ' · login required' : ''}${!r.supported ? ' · unsupported (${r.architecture})' : ''}',
+                    '${r.author}${r.paramsB != null ? ' · ${r.paramsB! < 1 ? '${(r.paramsB! * 1000).round()}M' : '${r.paramsB!.toStringAsFixed(r.paramsB! < 10 ? 1 : 0)}B'}' : ''} · ${_compact(r.downloads)} downloads${r.isVision ? ' · vision' : ''}${r.gated ? ' · login required' : ''}${!r.supported ? ' · unsupported (${r.architecture})' : ''}',
+                trailing: r.estimatedRamGB == null
+                    ? null
+                    : FitBadge(fitFor(r.estimatedRamGB!, _ram)),
                 chevron: true,
                 onTap: () => _openRepo(r),
               ),
@@ -335,17 +339,6 @@ class _HfBrowserState extends State<HfBrowser> {
       ],
     );
   }
-}
-
-/// "Fits" label for a model file of [bytes] on this phone's RAM.
-String _fit(int bytes) {
-  if (!Get.isRegistered<DeviceInfoService>()) return '';
-  final ram = Get.find<DeviceInfoService>().totalRamGB.value;
-  if (ram <= 0 || bytes <= 0) return '';
-  final needGB = bytes / 1073741824 * 1.15 + 0.5;
-  if (needGB <= ram * 0.45) return 'runs well · ';
-  if (needGB <= ram * 0.6) return 'fits · ';
-  return 'too big for this phone · ';
 }
 
 class _RepoFiles extends StatefulWidget {
@@ -480,12 +473,12 @@ class _RepoFilesState extends State<_RepoFiles> {
                   icon: Icons.insert_drive_file_outlined,
                   title: f.quant.isEmpty ? f.filename : f.quant,
                   subtitle:
-                      '${DownloadService.formatBytes(f.size)} · ${_fit(f.size)}${f.filename}',
+                      '${DownloadService.formatBytes(f.size)} · ${f.filename}',
                   trailing: controller.downloadedFiles.contains(f.filename)
                       ? Text('On phone', style: t.small)
                       : controller.isDownloadingModel(f.filename)
                           ? Text('Downloading', style: t.small)
-                          : null,
+                          : FitBadge(fitFor(needGBForBytes(f.size))),
                   chevron: !controller.downloadedFiles.contains(f.filename),
                   onTap: controller.downloadedFiles.contains(f.filename) ||
                           controller.isDownloadingModel(f.filename)

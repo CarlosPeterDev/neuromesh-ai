@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'scheduled_tasks_view.dart';
 import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -71,6 +72,18 @@ class _ChatToolsViewState extends State<ChatToolsView> {
                 style: t.caption,
               ),
             ])),
+
+        // ── schedule ──
+        const SectionHeader('Scheduled tasks'),
+        AppGroup(children: [
+          AppRow(
+            icon: Icons.schedule_rounded,
+            title: 'Run tasks on a schedule',
+            subtitle: 'Daily news, reminders, reports: the AI does them by itself',
+            chevron: true,
+            onTap: () => Get.to(() => const ScheduledTasksView()),
+          ),
+        ]),
 
         // ── memory ──
         const SectionHeader('Memory'),

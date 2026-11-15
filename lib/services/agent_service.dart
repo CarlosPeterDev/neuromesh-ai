@@ -12,6 +12,7 @@ import '../utils/page_text.dart';
 import '../widgets/ask_user.dart';
 import 'agent_tools.dart';
 import 'device_bridge.dart';
+import 'scheduler_service.dart';
 import 'voice_service.dart';
 import 'document_extractor_service.dart';
 import 'hive_service.dart';
@@ -389,6 +390,49 @@ class AgentService extends GetxService {
         await f.writeAsBytes(wav);
         return 'Saved ${f.path.split('/').last} (${wav.length ~/ 1024} KB). Show it with [📎 ${f.path.split('/').last}](nmfile:${f.path.split('/').last}).';
       },
+    ),
+    AgentTool(
+      'schedule_task',
+      'Schedule a prompt to run automatically later or repeatedly. when examples: "in 30 minutes", "daily 08:00", "every 2 hours", "weekly mon,thu 09:00", "once 2026-12-01 18:30".',
+      '{"title":"string","prompt":"what to do when it runs","when":"string"}',
+      (args) async {
+        final s = Get.find<SchedulerService>();
+        final t = parseWhen((args['when'] ?? '').toString(),
+            id: DateTime.now().microsecondsSinceEpoch.toString(),
+            title: (args['title'] ?? 'Task').toString(),
+            prompt: (args['prompt'] ?? '').toString());
+        if (t == null || t.prompt.trim().isEmpty) {
+          return 'Error: could not understand "when". Use forms like "daily 08:00" or "in 30 minutes".';
+        }
+        s.upsert(t);
+        return 'Scheduled "${t.title}": ${t.whenText}.';
+      },
+      needsConfirm: true,
+    ),
+    AgentTool(
+      'list_schedules',
+      'List the scheduled tasks.',
+      '{}',
+      (args) async {
+        final s = Get.find<SchedulerService>();
+        if (s.tasks.isEmpty) return '(no scheduled tasks)';
+        return s.tasks
+            .map((t) => '${t.id}: ${t.title} — ${t.whenText}${t.enabled ? '' : ' (off)'}')
+            .join('\n');
+      },
+    ),
+    AgentTool(
+      'cancel_schedule',
+      'Delete a scheduled task by id (from list_schedules).',
+      '{"id":"string"}',
+      (args) async {
+        final s = Get.find<SchedulerService>();
+        final id = (args['id'] ?? '').toString();
+        if (!s.tasks.any((t) => t.id == id)) return 'Error: unknown id.';
+        s.remove(id);
+        return 'Deleted.';
+      },
+      needsConfirm: true,
     ),
     AgentTool(
       'list_files',
