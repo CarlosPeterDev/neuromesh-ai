@@ -79,7 +79,7 @@ class AgentService extends GetxService {
   static const _policyKey = 'agent_tool_policy';
   static const _modeKey = 'agent_chat_mode';
   static const _autoMemKey = 'agent_auto_memory';
-  static const maxSteps = 8;
+  static const maxSteps = 14;
   static const maxMemory = 60;
 
   final HiveService _hive = Get.find<HiveService>();
@@ -499,7 +499,6 @@ class AgentService extends GetxService {
         if (r.isEmpty) return 'No results.';
         return r.map((e) => '${e.title}\n${e.url}\n${e.snippet}').join('\n\n');
       },
-      needsConfirm: true,
     ),
     AgentTool(
       'fetch_url',
@@ -519,7 +518,6 @@ class AgentService extends GetxService {
         final text = ct.contains('html') ? readableText(body) : body;
         return _page(text, int.tryParse('${args['start'] ?? 0}') ?? 0);
       },
-      needsConfirm: true,
     ),
   ];
 
@@ -688,6 +686,7 @@ class AgentService extends GetxService {
       ..writeln('<tool_call>{"name":"TOOL_NAME","arguments":{...}}</tool_call>')
       ..writeln('Call one tool at a time and wait for its result. Use a tool only when it is needed; otherwise answer directly.')
       ..writeln('After you have the information you need, give the final answer in normal text.')
+      ..writeln('For questions that need current or detailed facts, search more than once: run several web_search calls with different wording, then fetch_url the best pages before answering. Never repeat an identical call.')
       ..writeln()
       ..writeln('Tools:');
     for (final t in _allBuiltIns) {
@@ -744,6 +743,7 @@ class AgentService extends GetxService {
       hist.last['content'] = prompt;
     }
     final trace = <String>[];
+    final seen = <String>{};
     var current = prompt;
     var last = '';
     for (var step = 0; step < maxSteps; step++) {
@@ -773,13 +773,21 @@ class AgentService extends GetxService {
       final call = parseToolCall(last);
       if (call == null) return ToolLoopResult(last, trace, false);
 
-      onStatus('Running ${call.name}…');
-      final result = await executeTool(call, confirm);
-      final shortArgs = jsonEncode(call.arguments);
-      final oneLine = result.replaceAll(RegExp(r'\s+'), ' ');
-      trace.add('${ToolLoopResult.traceMark}**${call.name}** '
-          '`${shortArgs.length > 90 ? '${shortArgs.substring(0, 90)}…' : shortArgs}` → '
-          '${oneLine.length > 110 ? '${oneLine.substring(0, 110)}…' : oneLine}');
+      final label = stepLabel(call.name, call.arguments);
+      onStatus(label);
+      final key = '${call.name}${jsonEncode(call.arguments)}';
+      final idx = trace.length;
+      final sw = Stopwatch()..start();
+      trace.add(stepLine(call.name, call.arguments, label, null, running: true));
+      onTrace?.call(List.of(trace));
+      String result;
+      if (!seen.add(key)) {
+        result = 'You already ran this exact call. Use a different query or argument, or answer now.';
+      } else {
+        result = await executeTool(call, confirm);
+      }
+      trace[idx] = stepLine(call.name, call.arguments, label, result,
+          ms: sw.elapsedMilliseconds);
       onTrace?.call(List.of(trace));
       hist.add({'role': 'assistant', 'content': last});
       current = 'Tool result for ${call.name}:\n$result\n\n'
@@ -793,6 +801,61 @@ class AgentService extends GetxService {
         'I used $maxSteps tool steps without reaching an answer. A small model may be too weak for this request; try a bigger model or a simpler request.',
         trace,
         true);
+  }
+
+  /// Human wording for what a tool call is doing right now.
+  static String stepLabel(String name, Map<String, dynamic> a) {
+    String q(String k) => (a[k] ?? '').toString();
+    switch (name) {
+      case 'web_search':
+        return 'Searching the web: ${q('query')}';
+      case 'fetch_url':
+        return 'Reading ${q('url')}';
+      case 'run_shell':
+        return 'Running command: ${q('command')}';
+      case 'read_file':
+      case 'read_user_file':
+        return 'Reading ${q('name').isNotEmpty ? q('name') : q('path')}';
+      case 'write_file':
+      case 'write_user_file':
+        return 'Writing ${q('name').isNotEmpty ? q('name') : q('path')}';
+      case 'search_in_file':
+        return 'Searching ${q('name')} for "${q('query')}"';
+      case 'list_files':
+      case 'list_folder':
+        return 'Looking through files';
+      case 'transcribe_audio':
+        return 'Transcribing ${q('name')}';
+      case 'text_to_speech':
+        return 'Speaking to ${q('name')}';
+      case 'generate_image':
+        return 'Creating an image';
+      case 'device_status':
+        return 'Checking the phone status';
+      case 'ask_user':
+        return 'Asking you a question';
+      case 'remember':
+        return 'Saving to memory';
+      case 'calculator':
+        return 'Calculating ${q('expression')}';
+      default:
+        return 'Using $name';
+    }
+  }
+
+  /// One saved trace line: the marker followed by a JSON step.
+  static String stepLine(String name, Map<String, dynamic> args, String label, String? result,
+      {bool running = false, int ms = 0}) {
+    var r = result ?? '';
+    if (r.length > 3000) r = '${r.substring(0, 3000)}\n… (${result!.length - 3000} more characters)';
+    return '${ToolLoopResult.traceMark}${jsonEncode({
+      'n': name,
+      'l': label,
+      'a': args,
+      'r': r,
+      'run': running,
+      'ms': ms,
+    })}';
   }
 
   static String stripCall(String reply) {

@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../models/chat_message.dart';
 import '../utils/text_direction.dart';
 import '../utils/thought_parser.dart';
+import 'agent_steps.dart';
 import 'attachment_preview.dart';
 import 'image_viewer.dart';
 import 'thought_disclosure.dart';
@@ -187,7 +188,8 @@ class ChatBubble extends StatelessWidget {
   Widget _buildAssistant(BuildContext context, bool isDark,
       ThoughtParts thoughtParts, String fullAnswer) {
     final muted = Theme.of(context).hintColor;
-    final (answerContent, sources) = splitSources(fullAnswer);
+    final (steps, withoutSteps) = splitSteps(fullAnswer);
+    final (answerContent, sources) = splitSources(withoutSteps);
     final meta = <String>[
       if (message.tokensPerSec != null && message.tokensPerSec! > 0)
         '${message.tokensPerSec!.toStringAsFixed(1)} tok/s',
@@ -203,6 +205,7 @@ class ChatBubble extends StatelessWidget {
             durationSeconds: message.thoughtDurationSeconds,
             styleSheet: _thoughtMarkdownStyle(context),
           ),
+        if (steps.isNotEmpty) AgentStepsView(steps: steps),
         if (answerContent.isNotEmpty)
           Directionality(
             textDirection: detectDirection(answerContent),
@@ -212,8 +215,16 @@ class ChatBubble extends StatelessWidget {
                 data: answerContent,
                 selectable: true,
                 styleSheet: answerStyle(context),
+                imageBuilder: (uri, title, alt) => uri.toString().startsWith(nmFileScheme)
+                    ? agentImage(uri, alt)
+                    : const SizedBox.shrink(),
                 onTapLink: (text, href, title) {
-                  if (href != null) openLink(context, href);
+                  if (href == null) return;
+                  if (href.startsWith(nmFileScheme)) {
+                    openAgentFile(context, href.substring(nmFileScheme.length));
+                  } else {
+                    openLink(context, href);
+                  }
                 },
               ),
             ),
