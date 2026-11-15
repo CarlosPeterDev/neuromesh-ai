@@ -215,8 +215,8 @@ class ChatBubble extends StatelessWidget {
                 data: answerContent,
                 selectable: true,
                 styleSheet: answerStyle(context),
-                imageBuilder: (uri, title, alt) => uri.toString().startsWith(nmFileScheme)
-                    ? agentImage(uri, alt)
+                sizedImageBuilder: (cfg) => cfg.uri.toString().startsWith(nmFileScheme)
+                    ? agentImage(cfg.uri, cfg.alt)
                     : const SizedBox.shrink(),
                 onTapLink: (text, href, title) {
                   if (href == null) return;

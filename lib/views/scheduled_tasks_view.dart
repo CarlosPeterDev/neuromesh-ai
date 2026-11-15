@@ -81,7 +81,7 @@ class _TaskEditorState extends State<_TaskEditor> {
   late String _kind = widget.existing?.kind ?? 'daily';
   late TimeOfDay _time = TimeOfDay(
       hour: widget.existing?.hour ?? 8, minute: widget.existing?.minute ?? 0);
-  late Set<int> _days = {...(widget.existing?.days ?? [1, 2, 3, 4, 5])};
+  late final Set<int> _days = {...(widget.existing?.days ?? [1, 2, 3, 4, 5])};
   late final _every = TextEditingController(text: '${widget.existing?.everyMin ?? 60}');
   late DateTime _once = widget.existing != null && widget.existing!.onceAt > 0
       ? DateTime.fromMillisecondsSinceEpoch(widget.existing!.onceAt)

@@ -320,7 +320,7 @@ class SchedulerService extends GetxService with WidgetsBindingObserver {
           if (!chat.isLoading.value && !chat.isStreaming.value) break;
           await Future.delayed(const Duration(milliseconds: 500));
         }
-        final last = chat.messages.lastWhereOrNull((m) => m.role == 'assistant');
+        final last = chat.messages.toList().reversed.firstWhereOrNull((m) => m.role == 'assistant');
         result = last?.content ?? '';
         result = result.split('\n').where((l) => !l.startsWith('> 🔧')).join('\n').trim();
       }
