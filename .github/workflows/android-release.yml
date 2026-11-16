@@ -231,8 +231,8 @@ jobs:
           V="${BASE_VERSION}.${GITHUB_RUN_NUMBER}"
           B=build/linux/x64/release/bundle
           mkdir -p "$B/llama" dl
-          gh release view --repo ggml-org/llama.cpp --json tagName,assets -q '.tagName, (.assets[].name)'
-          gh release download --repo ggml-org/llama.cpp --pattern '*ubuntu*x64*' --pattern '*linux*x64*' --dir dl || true
+          TAG=$(gh release list --repo ggml-org/llama.cpp --limit 20 --json tagName -q '.[].tagName' | grep -E '^b[0-9]+$' | head -1); echo "llama.cpp $TAG"
+          gh release download "$TAG" --repo ggml-org/llama.cpp --pattern '*ubuntu*x64*' --pattern '*linux*x64*' --dir dl || true
           ls dl
           mkdir -p dl/x
           for f in dl/*; do case "$f" in *.zip) unzip -q -o "$f" -d dl/x;; *.tar.gz) tar -xzf "$f" -C dl/x;; esac; done
@@ -254,8 +254,8 @@ jobs:
           V="${BASE_VERSION}.${GITHUB_RUN_NUMBER}"
           B=build/windows/x64/runner/Release
           mkdir -p "$B/llama" dl
-          gh release view --repo ggml-org/llama.cpp --json tagName,assets -q '.tagName, (.assets[].name)'
-          gh release download --repo ggml-org/llama.cpp --pattern '*win*cpu*x64*' --dir dl
+          TAG=$(gh release list --repo ggml-org/llama.cpp --limit 20 --json tagName -q '.[].tagName' | grep -E '^b[0-9]+$' | head -1); echo "llama.cpp $TAG"
+          gh release download "$TAG" --repo ggml-org/llama.cpp --pattern '*win*cpu*x64*' --dir dl
           ls dl
           mkdir -p dl/x
           for f in dl/*.zip; do unzip -q -o "$f" -d dl/x; done
