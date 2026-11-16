@@ -219,6 +219,7 @@ jobs:
         if: runner.os == 'Windows'
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+          CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
         run: flutter build windows --release
 
       - name: Bundle llama-server and package (Linux)
@@ -230,8 +231,11 @@ jobs:
           V="${BASE_VERSION}.${GITHUB_RUN_NUMBER}"
           B=build/linux/x64/release/bundle
           mkdir -p "$B/llama" dl
-          gh release download --repo ggml-org/llama.cpp --pattern 'llama-*-bin-ubuntu-x64.zip' --dir dl
-          unzip -q -o dl/llama-*-bin-ubuntu-x64.zip -d dl/x
+          gh release view --repo ggml-org/llama.cpp --json assets -q '.assets[].name' | grep -i ubuntu || true
+          gh release download --repo ggml-org/llama.cpp --pattern 'llama-*-bin-ubuntu-x64.*' --dir dl
+          mkdir -p dl/x
+          for f in dl/llama-*-bin-ubuntu-x64.*; do case "$f" in *.zip) unzip -q -o "$f" -d dl/x;; *.tar.gz) tar -xzf "$f" -C dl/x;; esac; done
+          test -n "$(find dl/x -name llama-server | head -1)" || { echo "llama-server not in archive"; find dl/x | head; exit 1; }
           cp -r $(dirname "$(find dl/x -name llama-server | head -1)")/* "$B/llama/"
           chmod +x "$B/llama/llama-server"
           ls "$B/llama" | head -20
