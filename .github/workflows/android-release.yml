@@ -168,9 +168,9 @@ jobs:
           - Checksums: SHA256SUMS.txt"
           # Immutable version tag: never overwritten.
           gh release create "v${V}" dist/* --target "${GITHUB_SHA}" --title "NeuroMesh AI v${V}" --notes "$NOTES" $PRE
-          # Moving 'latest' channel: replaced only after this build succeeded.
+          # Moving 'latest' channel (marked as GitHub's Latest release, even when dev-signed): replaced only after this build succeeded.
           gh release delete latest --cleanup-tag --yes 2>/dev/null || true
-          gh release create latest dist/* --target "${GITHUB_SHA}" --title "NeuroMesh AI latest (v${V})" --notes "$NOTES" $PRE
+          gh release create latest dist/* --target "${GITHUB_SHA}" --title "NeuroMesh AI latest (v${V})" --notes "$NOTES" --latest
 
   # Windows and Linux desktop builds. They bundle llama.cpp's llama-server (CPU)
   # next to the app; the AI's shell commands use the computer's own shell.
