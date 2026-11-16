@@ -4,9 +4,11 @@ import 'dart:io' show Platform, Directory, File;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_litert_lm/flutter_litert_lm.dart';
 import 'package:llama_flutter_android/llama_flutter_android.dart';
+import 'inference_desktop.dart';
 
 /// Whether the current platform supports local inference.
-bool get supportsLocalInference => Platform.isAndroid || Platform.isIOS;
+bool get supportsLocalInference =>
+    Platform.isAndroid || Platform.isIOS || isDesktopPlatform;
 
 /// True when the app runs as a 32-bit process (32-bit Android, e.g. Android
 /// Go phones). LiteRT ships 64-bit only, and the address space limits model
@@ -46,7 +48,9 @@ class InferenceEngine {
   bool _isLiteRt = false;
   // GGUF model loaded together with a working vision projector.
   bool _ggufVisionLoaded = false;
-  bool get ggufVisionLoaded => _ggufVisionLoaded;
+  // Windows / Linux / macOS run llama.cpp's own server instead.
+  final DesktopEngine? _desk = isDesktopPlatform ? DesktopEngine() : null;
+  bool get ggufVisionLoaded => _desk?.visionLoaded ?? _ggufVisionLoaded;
   bool _disposed = false;
   bool _hasLoadedModel = false;
   String? _liteConversationSystemPrompt;
@@ -70,6 +74,13 @@ class InferenceEngine {
     String? mmprojPath,
     void Function(double)? onProgress,
   }) async {
+    if (_desk != null) {
+      return _desk.loadModel(
+          modelPath: modelPath,
+          contextSize: contextSize,
+          mmprojPath: mmprojPath,
+          onProgress: onProgress);
+    }
     _disposed = false;
     final runtime = _runtimeFor(modelPath, modelRuntime);
     if (runtime == 'litert') {
@@ -370,6 +381,16 @@ class InferenceEngine {
     String source = 'chat',
     void Function(String token)? onToken,
   }) async {
+    if (_desk != null) {
+      return _desk.generate(
+          prompt: prompt,
+          conversationHistory: conversationHistory,
+          systemPrompt: systemPrompt,
+          maxTokens: maxTokens,
+          temperature: temperature,
+          imagePath: imagePath,
+          onToken: onToken);
+    }
     if (_isLiteRt) {
       return _generateLiteRt(
         prompt: prompt,
@@ -730,6 +751,7 @@ class InferenceEngine {
   }
 
   Future<void> stop() async {
+    if (_desk != null) return _desk.stop();
     if (_disposed) return;
     _idleTimer?.cancel();
     final stopCallback = _onStop;
@@ -766,7 +788,7 @@ class InferenceEngine {
   }
 
   Future<ContextInfo?> getContextInfo() async {
-    if (_isLiteRt) return null;
+    if (_isLiteRt || _desk != null) return null;
     try {
       return await _controller?.getContextInfo();
     } catch (_) {
@@ -775,6 +797,7 @@ class InferenceEngine {
   }
 
   Future<void> dispose() async {
+    if (_desk != null) return _desk.dispose();
     if (_disposed) return;
     await stop();
     _disposed = true;

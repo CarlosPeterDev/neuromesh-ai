@@ -22,6 +22,7 @@ import 'services/web_search_service.dart';
 import 'services/device_bridge.dart';
 import 'services/scheduler_service.dart';
 import 'services/relay_service.dart';
+import 'services/sandbox_service.dart';
 import 'services/desktop_shell.dart';
 import 'services/download_queue.dart';
 import 'services/voice_models.dart';
@@ -110,6 +111,10 @@ void main() {
     Get.put(DeviceBridge(), permanent: true);
     Get.put(SchedulerService(), permanent: true);
     registerDesktopShell(Get.find<AgentService>());
+    if (SandboxService.supported) {
+      Get.put(SandboxService(), permanent: true);
+      registerSandboxShell(Get.find<AgentService>());
+    }
     Get.put(VoiceModelStore(), permanent: true);
     Get.put(VoiceService(), permanent: true);
     Get.put(VoiceCloneStore(), permanent: true);

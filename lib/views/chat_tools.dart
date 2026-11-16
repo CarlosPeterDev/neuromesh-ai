@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../services/sandbox_service.dart';
 import 'scheduled_tasks_view.dart';
 import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -72,6 +73,11 @@ class _ChatToolsViewState extends State<ChatToolsView> {
                 style: t.caption,
               ),
             ])),
+
+        if (SandboxService.supported) ...[
+          const SectionHeader('Linux sandbox (Pro build)'),
+          const _SandboxCard(),
+        ],
 
         // ── schedule ──
         const SectionHeader('Scheduled tasks'),
@@ -669,4 +675,40 @@ class FileSystemEntityInfo {
   final String name;
   final int size;
   const FileSystemEntityInfo(this.path, this.name, this.size);
+}
+
+
+class _SandboxCard extends StatelessWidget {
+  const _SandboxCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final sb = Get.find<SandboxService>();
+    return Obx(() => AppGroup(children: [
+          AppRow(
+            icon: Icons.terminal_rounded,
+            title: sb.installed.value ? 'Alpine Linux is installed' : 'Install Alpine Linux',
+            subtitle: sb.busy.value
+                ? sb.status.value
+                : sb.installed.value
+                    ? 'The AI can run commands, create files and deploy from here'
+                    : 'About 4 MB download. Lets the AI run real commands (python, node, git, curl…).',
+            trailing: sb.busy.value
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : sb.installed.value
+                    ? IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () => sb.uninstall())
+                    : IconButton(
+                        icon: const Icon(Icons.download_rounded),
+                        onPressed: () async {
+                          try {
+                            await sb.install();
+                          } catch (e) {
+                            Get.snackbar('Install failed', '$e'.replaceFirst('Exception: ', ''));
+                          }
+                        }),
+          ),
+        ]));
+  }
 }

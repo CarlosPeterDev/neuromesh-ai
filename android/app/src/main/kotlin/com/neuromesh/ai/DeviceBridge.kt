@@ -53,6 +53,7 @@ class DeviceBridge(private val context: Context) {
                     result.success(pendingShare)
                     pendingShare = null
                 }
+                "nativeLibDir" -> result.success(context.applicationInfo.nativeLibraryDir)
                 "deviceStatus" -> background(result) { deviceStatus() }
                 "decodeAudio" -> background(result) {
                     decodeAudio(call.argument<String>("path")!!, call.argument<Int>("rate") ?: 16000)
