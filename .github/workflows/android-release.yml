@@ -261,9 +261,16 @@ jobs:
           for f in dl/*.zip; do unzip -q -o "$f" -d dl/x; done
           cp -r $(dirname "$(find dl/x -name llama-server.exe | head -1)")/* "$B/llama/"
           ls "$B/llama" | head -20
-          powershell -Command "Compress-Archive -Path '$B/*' -DestinationPath 'NeuroMesh-AI-v${V}-windows-x64.zip'"
-          gh release upload "v${V}" "NeuroMesh-AI-v${V}-windows-x64.zip" --clobber --repo "$GITHUB_REPOSITORY"
-          gh release upload latest "NeuroMesh-AI-v${V}-windows-x64.zip" --clobber --repo "$GITHUB_REPOSITORY"
+          powershell -Command "Compress-Archive -Path '$B/*' -DestinationPath 'NeuroMesh-AI-v${V}-windows-x64-portable.zip'"
+          # Real installer (Start-menu entry, uninstaller) built with Inno Setup.
+          choco install innosetup -y --no-progress
+          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          "$ISCC" "/DAppVersion=${V}" "/DSourceDir=$(cygpath -w "$PWD/$B")" "/DOutDir=$(cygpath -w "$PWD")" installer/neuromesh.iss
+          ls -la NeuroMesh-AI-Setup-*.exe
+          for f in "NeuroMesh-AI-v${V}-windows-x64-portable.zip" "NeuroMesh-AI-Setup-v${V}-x64.exe"; do
+            gh release upload "v${V}" "$f" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload latest "$f" --clobber --repo "$GITHUB_REPOSITORY"
+          done
 
   # "Pro" APK: the normal app plus an Alpine Linux sandbox (proot) so the AI can
   # run real commands. Not for Google Play (it downloads and runs programs).
