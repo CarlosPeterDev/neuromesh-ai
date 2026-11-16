@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -10,7 +12,10 @@ import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import '../controllers/settings_controller.dart';
 import '../core/ui.dart';
+import '../services/agent_service.dart';
 import '../services/hive_service.dart';
+import '../widgets/agent_steps.dart';
+import '../widgets/tool_confirm.dart';
 import '../services/inference_service.dart';
 import '../services/voice_clone_store.dart';
 import '../services/voice_models.dart';
@@ -247,6 +252,53 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   String _status = 'Getting ready…';
   String _lang = 'en';
   bool _muted = false;
+  CameraController? _cam;
+  bool _camBusy = false;
+
+  /// Video call: the camera opens and the model sees a frame with every
+  /// sentence you say. Needs a vision model.
+  Future<void> _toggleCamera() async {
+    if (_cam != null) {
+      final c = _cam;
+      setState(() => _cam = null);
+      await c?.dispose();
+      return;
+    }
+    if (!Get.find<InferenceService>().isVisionLoaded.value) {
+      Get.snackbar('Video call needs a vision model',
+          'Load a model that can see images (Models → filter: Vision), then try again.');
+      return;
+    }
+    if (_camBusy) return;
+    _camBusy = true;
+    try {
+      final cams = await availableCameras();
+      if (cams.isEmpty) throw Exception('No camera found.');
+      final cam = cams.firstWhere((c) => c.lensDirection == CameraLensDirection.front,
+          orElse: () => cams.first);
+      final ctl = CameraController(cam, ResolutionPreset.low, enableAudio: false);
+      await ctl.initialize();
+      if (!mounted) {
+        await ctl.dispose();
+        return;
+      }
+      setState(() => _cam = ctl);
+    } catch (e) {
+      Get.snackbar('Camera unavailable', '$e');
+    } finally {
+      _camBusy = false;
+    }
+  }
+
+  Future<String?> _snap() async {
+    final c = _cam;
+    if (c == null || !c.value.isInitialized) return null;
+    try {
+      return (await c.takePicture()).path;
+    } catch (_) {
+      return null;
+    }
+  }
   bool _ended = false;
   bool _bargeIn = false;
   String _wake = '';
@@ -283,6 +335,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   @override
   void dispose() {
     _ended = true;
+    _cam?.dispose();
     _sub?.cancel();
     _rec.dispose();
     _vad?.free();
@@ -474,12 +527,27 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   }
 
   /// Speaks sentences as the model writes them, one after another.
-  Future<void> _speakQueue(Stream<String> sentences, String? sysLang) async {
+  Future<void> _speakQueue(Stream<String> sentences, String? sysLang,
+      {void Function(String sentence)? onSpoken}) async {
     await for (final s in sentences) {
       if (_ended || _interrupted) break;
+      onSpoken?.call(s); // the caption grows as each sentence is spoken
       await _voice.speak(s, systemLang: sysLang);
     }
   }
+
+  /// What is worth reading aloud: no markdown, links, tool traces or thinking.
+  static String _spoken(String t) => t
+      .replaceAll(RegExp(r'<think>[\s\S]*?(</think>|$)'), '')
+      .split('\n')
+      .where((l) => !l.startsWith('>'))
+      .join('\n')
+      .replaceAll(RegExp(r'!\[[^\]]*\]\([^)]*\)'), '')
+      .replaceAllMapped(RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m.group(1) ?? '')
+      .replaceAll(RegExp(r'[*_`#]+'), '')
+      .trim();
+
+  final _shots = <File>[];
 
   Future<void> _turn(Float32List samples) async {
     if (_busy) {
@@ -515,49 +583,96 @@ class _VoiceCallViewState extends State<VoiceCallView> {
 
       _interrupted = false;
       final ctl = StreamController<String>();
-      var raw = '';
       var read = 0;
       var started = false;
-      final speakingDone = _speakQueue(ctl.stream, sys);
-
-      final reply = await Get.find<InferenceService>().generate(
-        prompt: heard,
-        systemPrompt: '${settings.globalSystemPrompt.value}\n'
-            'You are on a voice call. Answer in one to three short spoken sentences, no markdown or lists.',
-        conversationHistory: List.of(_history),
-        source: 'voice',
-        maxTokens: 160,
-        onToken: (t) {
-          raw += t;
-          final r = nextSentences(raw, read);
-          read = r.next;
-          for (final sentence in r.sentences) {
-            if (!started) {
-              started = true;
-              _speaking = true;
-              _set(_CallState.speaking, 'Speaking…');
-            }
-            ctl.add(sentence);
+      int? liveIdx;
+      void caption(String sentence) {
+        if (!mounted) return;
+        setState(() {
+          if (liveIdx == null) {
+            _lines.add((me: false, text: sentence));
+            liveIdx = _lines.length - 1;
+          } else {
+            _lines[liveIdx!] = (me: false, text: '${_lines[liveIdx!].text} $sentence');
           }
-        },
-      );
-      final finalRaw = raw.isEmpty ? reply : raw;
-      final tail = nextSentences(finalRaw, read, flush: true);
-      for (final sentence in tail.sentences) {
-        if (!started) {
-          started = true;
-          _speaking = true;
-          _set(_CallState.speaking, 'Speaking…');
+        });
+      }
+
+      final speakingDone = _speakQueue(ctl.stream, sys, onSpoken: caption);
+
+      void feed(String text, {bool flush = false}) {
+        final v = _spoken(text);
+        if (v.length < read) read = 0; // a new segment after a tool step
+        final r = nextSentences(v, read, flush: flush);
+        read = r.next;
+        for (final sentence in r.sentences) {
+          if (!started) {
+            started = true;
+            _speaking = true;
+            _set(_CallState.speaking, 'Speaking…');
+          }
+          ctl.add(sentence);
         }
-        ctl.add(sentence);
+      }
+
+      final shot = await _snap();
+      final agent = Get.find<AgentService>();
+      final inference = Get.find<InferenceService>();
+      final settings2 = settings;
+      final useTools = agent.wantsTools(heard);
+      final system = agent.composeSystem(
+          '${settings2.globalSystemPrompt.value}\n'
+          'You are on a voice call. Speak naturally in one to three short sentences. No markdown, lists or emoji. '
+          'If you used tools, just say the result.',
+          withTools: useTools);
+      Future<String> gen(String prompt, List<Map<String, String>> hist, void Function(String) onTok) =>
+          inference.generate(
+            prompt: prompt,
+            systemPrompt: system,
+            conversationHistory: hist,
+            source: 'voice',
+            imagePath: shot,
+            maxTokens: useTools ? 500 : 160,
+            onToken: onTok,
+          );
+
+      String finalText;
+      if (!useTools) {
+        var raw = '';
+        final reply = await gen(heard, List.of(_history), (t) {
+          raw += t;
+          feed(raw);
+        });
+        finalText = raw.isEmpty ? reply : raw;
+        feed(finalText, flush: true);
+      } else {
+        final result = await agent.runToolLoop(
+          generate: gen,
+          prompt: heard,
+          history: List.of(_history),
+          confirm: confirmToolCall,
+          cancelled: () => _ended || _interrupted,
+          onVisible: (v) => feed(v),
+          onStatus: (st) {
+            if (!_speaking) _set(_CallState.thinking, st);
+          },
+        );
+        finalText = result.markdown;
+        feed(_spoken(finalText), flush: true);
+        for (final m in RegExp(r'!\[[^\]]*\]\(nmfile:([^)]+)\)').allMatches(finalText)) {
+          final f = await agentFile(m.group(1)!);
+          if (f != null && mounted) setState(() => _shots.add(f));
+        }
       }
       await ctl.close();
 
-      final clean = finalRaw.replaceAll(RegExp(r'<think>[\s\S]*?</think>'), '').trim();
+      final clean = _spoken(finalText);
       _history
         ..add({'role': 'user', 'content': heard})
         ..add({'role': 'assistant', 'content': clean});
-      if (mounted) setState(() => _lines.add((me: false, text: clean)));
+      if (liveIdx == null && clean.isNotEmpty && mounted) {
+        setState(() => _lines.add((me: false, text: clean)));
+      }
       await speakingDone;
     } catch (e) {
       _speaking = false;
@@ -646,6 +761,9 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       ]),
       body: SafeArea(
         child: Column(children: [
+          if (_cam != null && _cam!.value.isInitialized)
+            SizedBox(height: 150, child: ClipRRect(
+                borderRadius: BorderRadius.circular(12), child: CameraPreview(_cam!))),
           Expanded(
             child: ListView(padding: const EdgeInsets.all(16), children: [
               if (_vad == null && _state == _CallState.listening)
@@ -666,6 +784,18 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                     child: Text(l.text),
                   ),
                 ),
+              if (_shots.isNotEmpty)
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  for (final f in _shots)
+                    GestureDetector(
+                      onTap: () => showDialog(
+                          context: context,
+                          builder: (_) => Dialog(child: InteractiveViewer(child: Image.file(f)))),
+                      child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.file(f, height: 160, fit: BoxFit.cover)),
+                    ),
+                ]),
             ]),
           ),
           Icon(Icons.graphic_eq_rounded, size: 56, color: color),
@@ -679,7 +809,13 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                   iconSize: 28,
                   onPressed: () => setState(() => _muted = !_muted),
                   icon: Icon(_muted ? Icons.mic_off : Icons.mic)),
-              const SizedBox(width: 24),
+              const SizedBox(width: 16),
+              IconButton.filledTonal(
+                  iconSize: 28,
+                  tooltip: 'Video call (vision models)',
+                  onPressed: _toggleCamera,
+                  icon: Icon(_cam != null ? Icons.videocam : Icons.videocam_off_outlined)),
+              const SizedBox(width: 16),
               IconButton.filled(
                   iconSize: 28,
                   style: IconButton.styleFrom(backgroundColor: Colors.red),

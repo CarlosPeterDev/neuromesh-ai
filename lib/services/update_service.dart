@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import '../core/constants.dart';
 import '../core/ui.dart';
 import '../widgets/update_sheet.dart';
+import '../core/build_flavor.dart';
 import 'hive_service.dart';
 
 /// A published GitHub release and the APK chosen for this device.
@@ -64,7 +65,8 @@ class UpdateService extends GetxService with WidgetsBindingObserver {
   String? _pendingInstallPath;
   bool _sheetOpen = false;
 
-  static bool get isSupported => !kIsWeb && Platform.isAndroid;
+  /// Google Play forbids apps that update themselves, so the Play build never does.
+  static bool get isSupported => !kIsWeb && Platform.isAndroid && !kPlayBuild;
 
   @override
   void onInit() {

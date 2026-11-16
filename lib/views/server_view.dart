@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import '../controllers/server_controller.dart';
 import '../core/ui.dart';
 import '../core/haptics.dart';
+import 'relay_view.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:convert';
 
@@ -50,6 +51,18 @@ class ServerView extends GetView<ServerController> {
                 trailing: controller.hasLocalModel
                     ? AppTag('Ready', color: t.green)
                     : AppTag('Not loaded', color: t.orange),
+              ),
+            ]),
+
+            // ── Outdoor ──
+            const SectionHeader('From anywhere'),
+            AppGroup(children: [
+              AppRow(
+                icon: Icons.public_rounded,
+                title: 'Outdoor access (free Cloudflare)',
+                subtitle: 'Chat and API from any device, with optional password',
+                chevron: true,
+                onTap: () => Get.to(() => const RelayView()),
               ),
             ]),
 

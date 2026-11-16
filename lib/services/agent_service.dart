@@ -12,6 +12,8 @@ import '../utils/page_text.dart';
 import '../widgets/ask_user.dart';
 import 'agent_tools.dart';
 import 'device_bridge.dart';
+import '../controllers/model_controller.dart';
+import 'local_image_service.dart';
 import 'scheduler_service.dart';
 import 'voice_service.dart';
 import 'document_extractor_service.dart';
@@ -435,6 +437,53 @@ class AgentService extends GetxService {
       needsConfirm: true,
     ),
     AgentTool(
+      'generate_image',
+      'Create an image from a text description with the on-device image model. Takes a while on a phone. Write the prompt in English, describing subject, style and lighting. Show the result with ![short description](nmfile:name).',
+      '{"prompt":"detailed English description","name":"output file name ending in .png"}',
+      (args) async {
+        final prompt = (args['prompt'] ?? '').toString().trim();
+        if (prompt.isEmpty) return 'Error: empty prompt.';
+        final mc = Get.find<ModelController>();
+        final img = Get.find<LocalImageService>();
+        final inf = Get.find<InferenceService>();
+        final imgName = img.lastModelName ?? '';
+        if (imgName.isEmpty || !mc.isDownloaded(imgName)) {
+          return 'Error: no image model is installed. Ask the user to download one in Models → Image models.';
+        }
+        final textName = mc.lastLoadedModelName;
+        var name = (args['name'] ?? 'image_${DateTime.now().millisecondsSinceEpoch}.png').toString();
+        if (!name.toLowerCase().endsWith('.png')) name = '$name.png';
+        try {
+          // Phone memory holds one model at a time: swap the chat model out,
+          // draw, then bring it back.
+          await inf.unloadModel();
+          if (!img.isModelLoaded.value) {
+            await mc.loadModel(imgName);
+            for (var i = 0; i < 600 && img.isLoadingModel.value; i++) {
+              await Future.delayed(const Duration(milliseconds: 500));
+            }
+          }
+          if (!img.isModelLoaded.value) {
+            return 'Error: the image model could not be loaded (not enough memory?).';
+          }
+          final bytes = await img.generateImage(prompt: prompt);
+          if (bytes == null || bytes.isEmpty) return 'Error: the image model produced nothing.';
+          final f = await _safeFile(name);
+          await f.writeAsBytes(bytes);
+          final n = f.path.split('/').last;
+          return 'Saved $n. Show it to the user with ![${prompt.length > 40 ? prompt.substring(0, 40) : prompt}](nmfile:$n)';
+        } finally {
+          await img.unloadModel();
+          if (textName.isNotEmpty && !inf.isModelLoaded.value) {
+            await mc.loadModel(textName);
+            for (var i = 0; i < 600 && inf.isLoadingModel.value; i++) {
+              await Future.delayed(const Duration(milliseconds: 500));
+            }
+          }
+        }
+      },
+    ),
+    AgentTool(
       'list_files',
       'List the files in your workspace (files the user attached are here).',
       '{}',
@@ -567,6 +616,32 @@ class AgentService extends GetxService {
 
   /// Every built-in tool, including blocked or currently unavailable ones
   /// (for the permissions screen).
+  /// Runs a tool by name without the model (used by the HTTP API).
+  Future<String> callTool(String name, Map<String, dynamic> args) async {
+    final t = catalog.firstWhere((t) => t.name == name,
+        orElse: () => throw Exception('Unknown tool $name'));
+    return await t.run(args);
+  }
+
+  Future<List<Map<String, dynamic>>> listWorkspace() async {
+    final dir = await filesDir();
+    return [
+      for (final e in dir.listSync().whereType<File>())
+        {
+          'name': e.path.split('/').last,
+          'bytes': e.lengthSync(),
+          'modified': e.lastModifiedSync().toIso8601String(),
+        }
+    ];
+  }
+
+  Future<File?> workspaceFile(String name) async {
+    final f = await _safeFile(name);
+    return await f.exists() ? f : null;
+  }
+
+  Future<File> newWorkspaceFile(String name) => _safeFile(name);
+
   List<AgentTool> get catalog => [..._builtIns, ..._extra];
 
   Iterable<AgentTool> get _allBuiltIns sync* {

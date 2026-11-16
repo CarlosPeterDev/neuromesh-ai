@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import '../core/build_flavor.dart';
 import 'dart:ui';
 
 import 'package:flutter_background_service/flutter_background_service.dart';
@@ -66,7 +67,7 @@ class ImageGenerationNotificationService {
             AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
     await Permission.notification.request();
-    await Permission.ignoreBatteryOptimizations.request();
+    if (!kPlayBuild) await Permission.ignoreBatteryOptimizations.request();
   }
 
   Future<void> start({
@@ -226,19 +227,25 @@ class ImageGenerationNotificationService {
 void imageGenerationBackgroundStart(ServiceInstance service) async {
   DartPluginRegistrant.ensureInitialized();
 
+  var keepAlive = false; // remote access keeps the service running
   if (service is AndroidServiceInstance) {
     await service.setAsForegroundService();
     service.on('progress').listen((event) {
       final content = event?['content'] as String? ??
           'You can leave the app. We will notify you when it finishes.';
       service.setForegroundNotificationInfo(
-        title: 'Image generation running',
+        title: event?['title'] as String? ?? 'Image generation running',
         content: content,
       );
     });
   }
-
+  service.on('keepAlive').listen((event) {
+    keepAlive = event?['on'] == true;
+  });
   service.on('stopService').listen((event) {
+    if (!keepAlive) service.stopSelf();
+  });
+  service.on('forceStop').listen((event) {
     service.stopSelf();
   });
 }

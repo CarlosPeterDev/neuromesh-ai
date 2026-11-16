@@ -21,6 +21,7 @@ import 'services/rag_service.dart';
 import 'services/web_search_service.dart';
 import 'services/device_bridge.dart';
 import 'services/scheduler_service.dart';
+import 'services/relay_service.dart';
 import 'services/desktop_shell.dart';
 import 'services/download_queue.dart';
 import 'services/voice_models.dart';
@@ -149,6 +150,7 @@ void main() {
     }
     appLog.info('Notifications initialized');
     Get.put(ServerController(), permanent: true);
+    Get.put(RelayService(), permanent: true);
     Get.put(ModelController());
     Get.put(DownloadQueue(), permanent: true);
     appLog.info('All services initialized, launching app');

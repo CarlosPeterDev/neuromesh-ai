@@ -9,7 +9,9 @@ import 'package:path_provider/path_provider.dart';
 
 import '../controllers/settings_controller.dart';
 import '../core/constants.dart';
+import 'agent_service.dart';
 import 'inference_service.dart';
+import 'voice_service.dart';
 
 class OpenAiServerService {
   HttpServer? _server;
@@ -97,6 +99,11 @@ class OpenAiServerService {
 
       // Requiring a JSON content type forces browsers to send a CORS
       // preflight, so web pages can't fire "simple" cross-origin requests.
+      if (path.startsWith('/v1/files') && request.method == 'GET') {
+        await _handleFilesGet(request, path);
+        return;
+      }
+
       if (request.method == 'POST' &&
           request.headers.contentType?.mimeType != ContentType.json.mimeType) {
         await _json(request, {'error': 'Content-Type must be application/json'},
@@ -114,6 +121,22 @@ class OpenAiServerService {
       }
       if (request.method == 'POST' && path == '/v1/chat/completions') {
         await _handleChatCompletions(request);
+        return;
+      }
+      if (request.method == 'POST' && path == '/v1/audio/transcriptions') {
+        await _handleTranscribe(request);
+        return;
+      }
+      if (request.method == 'POST' && path == '/v1/audio/speech') {
+        await _handleSpeech(request);
+        return;
+      }
+      if (request.method == 'POST' && path == '/v1/images/generations') {
+        await _handleImages(request);
+        return;
+      }
+      if (request.method == 'POST' && path == '/v1/files') {
+        await _handleFilePost(request);
         return;
       }
       if (request.method == 'POST' && path == '/v1/completions') {
@@ -154,6 +177,120 @@ class OpenAiServerService {
       diff |= x[i] ^ y[i];
     }
     return diff == 0;
+  }
+
+  // ── Outputs: files, audio and images ──────────────────────────────────
+
+  Future<void> _handleFilesGet(HttpRequest request, String path) async {
+    final agent = Get.find<AgentService>();
+    if (path == '/v1/files') {
+      await _json(request, {'object': 'list', 'data': await agent.listWorkspace()});
+      return;
+    }
+    final name = Uri.decodeComponent(path.substring('/v1/files/'.length)).replaceAll('/content', '');
+    final f = await agent.workspaceFile(name);
+    if (f == null) {
+      await _json(request, {'error': 'File not found'}, status: HttpStatus.notFound);
+      return;
+    }
+    final ext = name.split('.').last.toLowerCase();
+    const types = {
+      'png': 'image/png',
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'wav': 'audio/wav',
+      'mp3': 'audio/mpeg',
+      'txt': 'text/plain; charset=utf-8',
+      'md': 'text/markdown; charset=utf-8',
+      'json': 'application/json',
+      'csv': 'text/csv; charset=utf-8',
+      'html': 'text/html; charset=utf-8',
+      'pdf': 'application/pdf',
+    };
+    _addCorsHeaders(request.response);
+    request.response.headers.set(HttpHeaders.contentTypeHeader, types[ext] ?? 'application/octet-stream');
+    request.response.headers.set('Content-Disposition', 'attachment; filename="${f.path.split('/').last}"');
+    await request.response.addStream(f.openRead());
+    await request.response.close();
+  }
+
+  Future<void> _handleFilePost(HttpRequest request) async {
+    final body = await _readJson(request);
+    final name = '${body['name'] ?? ''}';
+    final b64 = '${body['content_base64'] ?? ''}';
+    if (name.isEmpty || b64.isEmpty) {
+      await _json(request, {'error': 'name and content_base64 are required'}, status: HttpStatus.badRequest);
+      return;
+    }
+    final f = await Get.find<AgentService>().newWorkspaceFile(name);
+    await f.writeAsBytes(base64Decode(b64));
+    await _json(request, {'name': f.path.split('/').last, 'bytes': await f.length()});
+  }
+
+  /// JSON body: {"audio_base64": "...", "file_name": "voice.mp3", "language": "en"}
+  Future<void> _handleTranscribe(HttpRequest request) async {
+    final body = await _readJson(request);
+    final b64 = '${body['audio_base64'] ?? body['file'] ?? ''}';
+    if (b64.isEmpty) {
+      await _json(request, {'error': 'audio_base64 is required'}, status: HttpStatus.badRequest);
+      return;
+    }
+    final agent = Get.find<AgentService>();
+    final ext = '${body['file_name'] ?? 'audio.wav'}'.split('.').last;
+    final tmp = await agent.newWorkspaceFile('api_upload_${DateTime.now().millisecondsSinceEpoch}.$ext');
+    try {
+      await tmp.writeAsBytes(base64Decode(b64));
+      final text = await Get.find<VoiceService>()
+          .transcribeFile(tmp.path, language: '${body['language'] ?? ''}');
+      await _json(request, {'text': text});
+    } catch (e) {
+      await _json(request, {'error': '$e'}, status: HttpStatus.internalServerError);
+    } finally {
+      if (await tmp.exists()) await tmp.delete();
+    }
+  }
+
+  /// JSON body: {"input": "text to speak"} → audio/wav
+  Future<void> _handleSpeech(HttpRequest request) async {
+    final body = await _readJson(request);
+    final text = '${body['input'] ?? ''}'.trim();
+    if (text.isEmpty) {
+      await _json(request, {'error': 'input is required'}, status: HttpStatus.badRequest);
+      return;
+    }
+    try {
+      final wav = await Get.find<VoiceService>().synthesizeToWav(text);
+      _addCorsHeaders(request.response);
+      request.response.headers.set(HttpHeaders.contentTypeHeader, 'audio/wav');
+      request.response.add(wav);
+      await request.response.close();
+    } catch (e) {
+      await _json(request, {'error': '$e'}, status: HttpStatus.internalServerError);
+    }
+  }
+
+  /// JSON body: {"prompt": "..."} → {"data":[{"b64_json":"..."}]}
+  Future<void> _handleImages(HttpRequest request) async {
+    final body = await _readJson(request);
+    final prompt = '${body['prompt'] ?? ''}'.trim();
+    if (prompt.isEmpty) {
+      await _json(request, {'error': 'prompt is required'}, status: HttpStatus.badRequest);
+      return;
+    }
+    final agent = Get.find<AgentService>();
+    final name = 'api_image_${DateTime.now().millisecondsSinceEpoch}.png';
+    final r = await agent.callTool('generate_image', {'prompt': prompt, 'name': name});
+    final f = await agent.workspaceFile(name);
+    if (f == null) {
+      await _json(request, {'error': r}, status: HttpStatus.internalServerError);
+      return;
+    }
+    await _json(request, {
+      'created': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      'data': [
+        {'b64_json': base64Encode(await f.readAsBytes()), 'file': name}
+      ],
+    });
   }
 
   Future<void> _handleModels(HttpRequest request) async {

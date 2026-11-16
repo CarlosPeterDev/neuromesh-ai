@@ -85,14 +85,51 @@ jobs:
       - name: Test
         run: flutter test
 
-      - name: Build APKs and AAB
+      - name: Build APKs
         env:
           NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.sign.outputs.production == 'true' && 'false' || 'true' }}
         run: |
           V='--build-name=${{ steps.ver.outputs.name }} --build-number=${{ steps.ver.outputs.code }}'
           flutter build apk --release --target-platform android-arm64 --split-per-abi $V
           flutter build apk --release $V
-          flutter build appbundle --release $V
+
+      # Google Play build: no self-updater and none of the restricted permissions
+      # (all-files access, install packages, battery-optimisation exemption).
+      - name: Build Play AAB
+        env:
+          NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.sign.outputs.production == 'true' && 'false' || 'true' }}
+        run: |
+          V='--build-name=${{ steps.ver.outputs.name }} --build-number=${{ steps.ver.outputs.code }}'
+          M=android/app/src/main/AndroidManifest.xml
+          sed -i -E '/MANAGE_EXTERNAL_STORAGE|REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|WRITE_EXTERNAL_STORAGE|READ_EXTERNAL_STORAGE/d' "$M"
+          flutter build appbundle --release --dart-define=PLAY_BUILD=true $V
+
+      - name: Play policy and size check
+        run: |
+          set -e
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/bundletool.jar" https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar
+          AAB=build/app/outputs/bundle/release/app-release.aab
+          # 1) The merged manifest must not contain restricted permissions.
+          java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle="$AAB" > "$RUNNER_TEMP/manifest.xml"
+          if grep -E 'MANAGE_EXTERNAL_STORAGE|REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|SYSTEM_ALERT_WINDOW|READ_SMS|READ_CALL_LOG|QUERY_ALL_PACKAGES|ACCESS_BACKGROUND_LOCATION' "$RUNNER_TEMP/manifest.xml"; then
+            echo "::error::Play-restricted permission found in the AAB manifest"; exit 1
+          fi
+          echo "Permissions in the Play build:"; grep -o 'android.permission.[A-Z_]*' "$RUNNER_TEMP/manifest.xml" | sort -u
+          # 2) Download size AFTER Play splits the bundle (arm64 phone, typical density).
+          cat > "$RUNNER_TEMP/spec.json" <<'EOF2'
+          {"supportedAbis":["arm64-v8a","armeabi-v7a"],"supportedLocales":["en","ar"],"screenDensity":480,"sdkVersion":34}
+          EOF2
+          java -jar "$RUNNER_TEMP/bundletool.jar" build-apks --bundle="$AAB" --output="$RUNNER_TEMP/out.apks" --device-spec="$RUNNER_TEMP/spec.json" --overwrite
+          SIZE=$(java -jar "$RUNNER_TEMP/bundletool.jar" get-size total --apks="$RUNNER_TEMP/out.apks" --device-spec="$RUNNER_TEMP/spec.json" | tail -1 | awk -F, '{print $2}')
+          AABSZ=$(stat -c%s "$AAB")
+          echo "AAB file: $((AABSZ/1048576)) MB"
+          echo "Download size on an arm64 phone after Play splitting: $((SIZE/1048576)) MB (Play limit: 200 MB per module)"
+          echo "SPLIT_MB=$((SIZE/1048576))" >> "$GITHUB_ENV"
+          echo "AAB_MB=$((AABSZ/1048576))" >> "$GITHUB_ENV"
+          if [ "$SIZE" -gt 198000000 ] || [ "$AABSZ" -gt 198000000 ]; then
+            echo "::error::Over the Play 200 MB limit"; exit 1
+          fi
+          if [ "$SIZE" -gt 170000000 ]; then echo "::warning::Download size is close to the Play limit"; fi
 
       - name: Collect and verify artifacts
         id: art
@@ -127,6 +164,7 @@ jobs:
           - Build date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
           - Commit: ${GITHUB_SHA}
           - Signing: ${KIND}
+          - Play AAB: ${AAB_MB} MB file, ${SPLIT_MB} MB download on an arm64 phone after Play splitting (limit 200 MB)
           - Checksums: SHA256SUMS.txt"
           # Immutable version tag: never overwritten.
           gh release create "v${V}" dist/* --target "${GITHUB_SHA}" --title "NeuroMesh AI v${V}" --notes "$NOTES" $PRE
