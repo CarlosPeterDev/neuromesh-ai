@@ -335,6 +335,25 @@ class ModelController extends GetxController {
     return model.isVision || AiModel.hasVisionMarker(lower);
   }
 
+  /// Downloads a multi-file image model (diffusion model + VAE + text
+  /// encoders…) into one folder, then refreshes the list.
+  Future<void> downloadImageBundle(
+      String name, List<({String url, String file, int size})> files) async {
+    final safe = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
+    showToast('Downloading', '$safe (${files.length} files)', tone: ToastTone.info);
+    try {
+      final r = await _download.downloadBundle(safe, files);
+      if (r == 'OK') {
+        showToast('Downloaded', safe, tone: ToastTone.success);
+      } else {
+        showToast('Cancelled', safe, tone: ToastTone.warning);
+      }
+    } catch (e) {
+      showToast('Download failed', '$e', tone: ToastTone.warning);
+    }
+    await refreshDownloaded();
+  }
+
   bool isUncensoredModel(AiModel model) {
     return AppConstants.isUncensoredModelName(
       '${model.name} ${model.filename} ${model.description}',
@@ -345,6 +364,7 @@ class ModelController extends GetxController {
     final lower = model.filename.toLowerCase();
     return model.runtime == AiModel.runtimeSd ||
         lower.endsWith('.safetensors') ||
+        lower.endsWith('.sdbundle') ||
         lower.endsWith('.coreml') ||
         lower.endsWith('.mlpackage') ||
         lower.endsWith('.mlmodelc') ||

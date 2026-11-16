@@ -1,11 +1,12 @@
 import 'dart:async';
-import 'dart:io' show File, Platform;
+import 'dart:io' show Directory, File, Platform;
 import 'dart:typed_data';
 import 'package:get/get.dart';
 import 'package:image/image.dart' as img;
 import 'package:sd_flutter_android/sd_flutter_android.dart';
 import '../core/constants.dart';
 import '../ffi/sd_ffi_bindings.dart';
+import '../utils/image_bundle.dart';
 import 'app_log_service.dart';
 import 'hive_service.dart';
 import 'sd_isolate_processor.dart';
@@ -75,12 +76,16 @@ class LocalImageService extends GetxService {
     required String modelPath,
     required String? taesdPath,
     required double maxVramGb,
+    ImageBundle? bundle,
   }) async {
     final isGpuBackend = backend != Backend.cpu;
     print(
         '[LocalImageService] Creating SdIsolateProcessor (backend=${backend.displayName}, quant=${currentQuantization.value.displayName})...');
     _processor = SdIsolateProcessor(
-      modelPath: modelPath,
+      modelPath: bundle == null ? modelPath : bundle.model,
+      vaePath: bundle?.vae,
+      clipLPath: bundle?.clipL,
+      extraPaths: bundle?.extraPaths ?? const {},
       nThreads: 0,
       flashAttn: !isGpuBackend,
       vaeTiling: true,
@@ -148,6 +153,28 @@ class LocalImageService extends GetxService {
       }
 
       int modelSizeMb = 0;
+      ImageBundle? bundle;
+      if (await Directory(modelPath).exists()) {
+        final files = <String>[];
+        final sizes = <String, int>{};
+        for (final e in Directory(modelPath).listSync(recursive: true)) {
+          if (e is File) {
+            files.add(e.path);
+            sizes[e.path] = e.lengthSync();
+          }
+        }
+        bundle = resolveBundle(files, sizes: sizes);
+        if (!bundle.isValid) {
+          throw Exception(
+              'No model file found in this folder. It needs a diffusion/checkpoint file (.safetensors or .gguf).');
+        }
+        modelSizeMb = (sizes.entries
+                    .where((e) => roleOfFile(e.key) != BundleRole.other)
+                    .fold<int>(0, (a, e) => a + e.value) /
+                (1024 * 1024))
+            .round();
+        print('[LocalImageService] Multi-file model: diffusion=${bundle.diffusion} model=${bundle.model} vae=${bundle.vae} clipL=${bundle.clipL} t5=${bundle.t5xxl} llm=${bundle.llm}');
+      }
       try {
         final file = File(modelPath);
         final exists = await file.exists();
@@ -223,8 +250,9 @@ class LocalImageService extends GetxService {
         final modelLoaded = await _tryLoadWithBackend(
           backend: backend,
           modelPath: modelPath,
-          taesdPath: taesdPath,
+          taesdPath: bundle == null ? taesdPath : null,
           maxVramGb: backend == Backend.cpu ? 0.0 : maxVramGb,
+          bundle: bundle,
         );
         if (!modelLoaded) {
           print(

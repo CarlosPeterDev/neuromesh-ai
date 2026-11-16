@@ -423,6 +423,20 @@ SD_FFI_API void sd_ffi_set_log_callback(sd_ffi_log_fn cb) {
     sd_set_log_callback(cb ? sd_ffi_log_trampoline : nullptr, nullptr);
 }
 
+// Extra model components for multi-file models (Flux, Z-Image, SD3, Qwen...).
+// Stored here and applied by the next sd_ffi_init_ex call.
+static std::string g_extra_diffusion, g_extra_t5xxl, g_extra_llm, g_extra_clip_g;
+
+SD_FFI_API void sd_ffi_set_extra_paths(const char* diffusion_model_path,
+                                       const char* t5xxl_path,
+                                       const char* llm_path,
+                                       const char* clip_g_path) {
+    g_extra_diffusion = diffusion_model_path ? diffusion_model_path : "";
+    g_extra_t5xxl = t5xxl_path ? t5xxl_path : "";
+    g_extra_llm = llm_path ? llm_path : "";
+    g_extra_clip_g = clip_g_path ? clip_g_path : "";
+}
+
 // Extended init with full stable-diffusion.cpp parameter exposure.
 // Paths may be NULL to use defaults / embedded components.
 SD_FFI_API void* sd_ffi_init_ex(const char* model_path,
@@ -487,6 +501,23 @@ SD_FFI_API void* sd_ffi_init_ex(const char* model_path,
     if (clip_l_path && clip_l_path[0] != '\0') {
         params.clip_l_path = clip_l_path;
         LOGI("[FFI] Using separate CLIP-L: %s", clip_l_path);
+    }
+
+    if (!g_extra_diffusion.empty()) {
+        params.diffusion_model_path = g_extra_diffusion.c_str();
+        LOGI("[FFI] Using separate diffusion model: %s", g_extra_diffusion.c_str());
+    }
+    if (!g_extra_t5xxl.empty()) {
+        params.t5xxl_path = g_extra_t5xxl.c_str();
+        LOGI("[FFI] Using T5-XXL: %s", g_extra_t5xxl.c_str());
+    }
+    if (!g_extra_llm.empty()) {
+        params.llm_path = g_extra_llm.c_str();
+        LOGI("[FFI] Using LLM text encoder: %s", g_extra_llm.c_str());
+    }
+    if (!g_extra_clip_g.empty()) {
+        params.clip_g_path = g_extra_clip_g.c_str();
+        LOGI("[FFI] Using CLIP-G: %s", g_extra_clip_g.c_str());
     }
 
     // TAESD: tiny autoencoder for much faster VAE decode (10-30s saved per image)

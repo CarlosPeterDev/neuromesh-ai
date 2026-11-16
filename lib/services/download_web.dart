@@ -23,3 +23,7 @@ Future<String> downloadModel({
 void pauseDownload(String filename) {}
 
 Future<void> deleteModel(String path) async {}
+
+void cancelDartDownload(String filename) {}
+Future<void> ensureParentDir(String filePath) async {}
+Future<void> renameDir(String from, String to) async {}

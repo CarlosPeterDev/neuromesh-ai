@@ -246,6 +246,11 @@ typedef SdFfiInitEx = Pointer<Void> Function(
   double maxVram,
 );
 
+typedef SdFfiSetExtraPathsNative = Void Function(Pointer<Utf8> diffusion,
+    Pointer<Utf8> t5xxl, Pointer<Utf8> llm, Pointer<Utf8> clipG);
+typedef SdFfiSetExtraPaths = void Function(Pointer<Utf8> diffusion,
+    Pointer<Utf8> t5xxl, Pointer<Utf8> llm, Pointer<Utf8> clipG);
+
 typedef SdFfiFreeNative = Void Function(Pointer<Void> ctx);
 typedef SdFfiFree = void Function(Pointer<Void> ctx);
 
@@ -326,6 +331,7 @@ class SdFfiBindings {
   static late SdFfiSetLogCallback setLogCallback;
   static late SdFfiInit init;
   static late SdFfiInitEx initEx;
+  static late SdFfiSetExtraPaths setExtraPaths;
   static late SdFfiFree freeCtx;
   static late SdFfiGenerate generate;
   static late SdFfiGetCores getCores;
@@ -371,6 +377,8 @@ class SdFfiBindings {
     init = _lib!.lookupFunction<SdFfiInitNative, SdFfiInit>('sd_ffi_init');
     initEx =
         _lib!.lookupFunction<SdFfiInitExNative, SdFfiInitEx>('sd_ffi_init_ex');
+    setExtraPaths = _lib!.lookupFunction<SdFfiSetExtraPathsNative,
+        SdFfiSetExtraPaths>('sd_ffi_set_extra_paths');
     // Ensure the backend library is actually available; if not, mark it unavailable
     if (_currentBackendLib != Backend.cpu.libraryName) {
       final backend =

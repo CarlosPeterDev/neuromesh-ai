@@ -39,6 +39,9 @@ class SdIsolateProcessor {
   final String? taesdPath;
   final String? vaePath;
   final String? clipLPath;
+
+  /// Multi-file models: diffusion, t5xxl, llm, clipG component paths.
+  final Map<String, String> extraPaths;
   final Backend backend;
   final QuantizationType quantizationType;
   final bool offloadParamsToCpu;
@@ -70,6 +73,7 @@ class SdIsolateProcessor {
     this.taesdPath,
     this.vaePath,
     this.clipLPath,
+    this.extraPaths = const {},
     this.backend = Backend.cpu,
     this.quantizationType = QuantizationType.f16,
     this.offloadParamsToCpu = false,
@@ -93,6 +97,7 @@ class SdIsolateProcessor {
           'taesdPath': taesdPath,
           'vaePath': vaePath,
           'clipLPath': clipLPath,
+          'extraPaths': extraPaths,
           'backend': backend.index,
           'quantizationType': quantizationType.nativeValue,
           'offloadParamsToCpu': offloadParamsToCpu,
@@ -342,7 +347,18 @@ class SdIsolateProcessor {
     final clipLPtr = (clipLPath != null && clipLPath.isNotEmpty)
         ? clipLPath.toNativeUtf8()
         : nullptr;
+    final extra = (args['extraPaths'] as Map?)?.cast<String, String>() ?? const {};
+    Pointer<Utf8> ex(String k) {
+      final v = extra[k];
+      return (v != null && v.isNotEmpty) ? v.toNativeUtf8() : nullptr;
+    }
+
+    final exDiffusion = ex('diffusion');
+    final exT5 = ex('t5xxl');
+    final exLlm = ex('llm');
+    final exClipG = ex('clipG');
     try {
+      SdFfiBindings.setExtraPaths(exDiffusion, exT5, exLlm, exClipG);
       final newCtx = SdFfiBindings.initEx(
         pathPtr,
         nThreads,
@@ -379,6 +395,9 @@ class SdIsolateProcessor {
       if (taesdPtr != nullptr) calloc.free(taesdPtr);
       if (vaePtr != nullptr) calloc.free(vaePtr);
       if (clipLPtr != nullptr) calloc.free(clipLPtr);
+      for (final p in [exDiffusion, exT5, exLlm, exClipG]) {
+        if (p != nullptr) calloc.free(p);
+      }
     }
   }
 

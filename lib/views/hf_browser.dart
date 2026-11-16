@@ -9,6 +9,7 @@ import '../models/ai_model.dart';
 import '../services/download_service.dart';
 import '../services/device_info_service.dart';
 import '../services/hf_service.dart';
+import '../utils/image_bundle.dart';
 import '../utils/model_fit.dart';
 import '../services/download_queue.dart';
 
@@ -455,6 +456,9 @@ class _RepoFilesState extends State<_RepoFiles> {
           );
         }
         final files = snap.data ?? const <HfGgufFile>[];
+        if (files.isEmpty && widget.images) {
+          return _BundlePicker(repo: widget.repo, hf: widget.hf);
+        }
         if (files.isEmpty) {
           return EmptyState(
             icon: Icons.search_off_rounded,
@@ -467,7 +471,8 @@ class _RepoFilesState extends State<_RepoFiles> {
           );
         }
         final controller = Get.find<ModelController>();
-        return Obx(() => AppGroup(children: [
+        return Obx(() => Column(children: [
+            AppGroup(children: [
               for (final f in files)
                 AppRow(
                   icon: Icons.insert_drive_file_outlined,
@@ -485,7 +490,117 @@ class _RepoFilesState extends State<_RepoFiles> {
                       ? null
                       : () => _choose(f),
                 ),
-            ]));
+            ]),
+            if (widget.images) ...[
+              const SizedBox(height: 12),
+              _BundlePicker(repo: widget.repo, hf: widget.hf, compact: true),
+            ],
+          ]));
+      },
+    );
+  }
+}
+
+/// Multi-file image models (Flux, Z-Image, SD3…): choose the parts, download
+/// them into one folder, and the app loads them together.
+class _BundlePicker extends StatefulWidget {
+  final HfRepo repo;
+  final HfService hf;
+  final bool compact;
+  const _BundlePicker({required this.repo, required this.hf, this.compact = false});
+
+  @override
+  State<_BundlePicker> createState() => _BundlePickerState();
+}
+
+class _BundlePickerState extends State<_BundlePicker> {
+  late final Future<List<HfGgufFile>> _parts = widget.hf.listImageParts(widget.repo.id);
+  Set<String>? _selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppTokens.of(context);
+    return FutureBuilder<List<HfGgufFile>>(
+      future: _parts,
+      builder: (ctx, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return widget.compact
+              ? const SizedBox.shrink()
+              : const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 32),
+                  child: Center(child: CircularProgressIndicator()));
+        }
+        final parts = (snap.data ?? const <HfGgufFile>[])
+            .where((f) => roleOfFile(f.path) != BundleRole.other)
+            .toList();
+        if (parts.isEmpty) {
+          return widget.compact
+              ? const SizedBox.shrink()
+              : const EmptyState(
+                  icon: Icons.search_off_rounded,
+                  title: 'No loadable files here',
+                  message:
+                      'This repository has no .safetensors or .gguf weights the app can use.');
+        }
+        final sizes = {for (final f in parts) f.path: f.size};
+        _selected ??= recommendBundle(sizes).toSet();
+        final sel = _selected!;
+        final total = parts.where((f) => sel.contains(f.path)).fold<int>(0, (a, f) => a + f.size);
+        final b = resolveBundle(sel.toList(), sizes: sizes);
+        final ok = b.isValid;
+        parts.sort((a, b) =>
+            roleOfFile(a.path).index.compareTo(roleOfFile(b.path).index));
+        const roleName = {
+          BundleRole.diffusion: 'Diffusion model',
+          BundleRole.checkpoint: 'Full model',
+          BundleRole.vae: 'VAE',
+          BundleRole.clipL: 'CLIP-L',
+          BundleRole.clipG: 'CLIP-G',
+          BundleRole.t5xxl: 'T5 text encoder',
+          BundleRole.llm: 'Language text encoder',
+        };
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+            child: Text('Multi-file model: pick the parts (recommended ones are ticked)',
+                style: t.small),
+          ),
+          AppGroup(children: [
+            for (final f in parts)
+              CheckboxListTile(
+                dense: true,
+                value: sel.contains(f.path),
+                onChanged: (v) => setState(() => v == true ? sel.add(f.path) : sel.remove(f.path)),
+                title: Text(f.path, style: const TextStyle(fontSize: 13)),
+                subtitle: Text(
+                    '${roleName[roleOfFile(f.path)] ?? ''} · ${DownloadService.formatBytes(f.size)}',
+                    style: const TextStyle(fontSize: 11.5)),
+              ),
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: Text('Total: ${DownloadService.formatBytes(total)}')),
+            FitBadge(fitFor(needGBForBytes(total))),
+          ]),
+          const SizedBox(height: 8),
+          PrimaryButton(
+            label: ok ? 'Download these parts as one model' : 'Select a diffusion or full model file',
+            onPressed: !ok
+                ? null
+                : () {
+                    final chosen = parts.where((f) => sel.contains(f.path)).toList();
+                    final used = <String>{};
+                    final files = <({String url, String file, int size})>[];
+                    for (final f in chosen) {
+                      var n = f.filename;
+                      if (!used.add(n)) n = '${used.length}_$n';
+                      files.add((url: HfService.downloadUrl(widget.repo.id, f.path), file: n, size: f.size));
+                    }
+                    Get.find<ModelController>().downloadImageBundle(widget.repo.name, files);
+                    Navigator.of(context).maybePop();
+                  },
+          ),
+        ]);
       },
     );
   }

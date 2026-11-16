@@ -260,6 +260,70 @@ class DownloadService extends GetxService with WidgetsBindingObserver {
     }
   }
 
+  /// Progress of multi-file model downloads, keyed by bundle name.
+  final bundleProgress = <String, DownloadProgress>{}.obs;
+  final _bundleCancelled = <String>{};
+
+  void cancelBundle(String name) {
+    _bundleCancelled.add(name);
+    for (final f in List.of(_bundleFiles[name] ?? const <String>[])) {
+      platform_dl.cancelDartDownload(f);
+    }
+  }
+
+  final _bundleFiles = <String, List<String>>{};
+
+  /// Downloads several files into one model folder (`<name>.sdbundle`).
+  /// Files land in a temporary folder and are renamed when all are complete,
+  /// so a half-finished model never shows up in the list.
+  Future<String> downloadBundle(
+    String name,
+    List<({String url, String file, int size})> files, {
+    String? authToken,
+  }) async {
+    if (kIsWeb) return 'ERROR: Downloading models is not supported on web.';
+    final dir = await modelsDir;
+    final tmp = '$dir/$name.sdbundle.downloading';
+    final fin = '$dir/$name.sdbundle';
+    final prog = DownloadProgress(filename: name);
+    prog.totalBytes.value = files.fold<int>(0, (a, f) => a + f.size);
+    bundleProgress[name] = prog;
+    activeDownloads[name] = prog;
+    _bundleCancelled.remove(name);
+    _bundleFiles[name] = [for (final f in files) f.file];
+    var doneBytes = 0;
+    try {
+      for (final f in files) {
+        final savePath = '$tmp/${f.file}';
+        await platform_dl.ensureParentDir(savePath);
+        final r = await platform_dl.downloadModel(
+          url: f.url,
+          savePath: savePath,
+          authToken: authToken,
+          onProgress: (received, total) {
+            final cur = doneBytes + received;
+            prog.downloadedBytes.value = cur;
+            if (prog.totalBytes.value > 0) {
+              prog.progress.value = cur / prog.totalBytes.value;
+            }
+            final el = DateTime.now().difference(prog.startedAt).inMilliseconds;
+            if (el > 0) prog.bytesPerSecond.value = cur / (el / 1000);
+          },
+        );
+        if (r == 'PAUSED' || _bundleCancelled.contains(name)) {
+          return 'CANCELLED';
+        }
+        doneBytes += f.size > 0 ? f.size : await platform_dl.getModelSize(savePath);
+      }
+      await platform_dl.renameDir(tmp, fin);
+      return 'OK';
+    } finally {
+      bundleProgress.remove(name);
+      activeDownloads.remove(name);
+      _bundleFiles.remove(name);
+    }
+  }
+
   Future<String> downloadModel({
     required String url,
     required String filename,
@@ -360,6 +424,10 @@ class DownloadService extends GetxService with WidgetsBindingObserver {
   }
 
   void pauseDownload(String filename) {
+    if (_bundleFiles.containsKey(filename)) {
+      cancelBundle(filename);
+      return;
+    }
     final nativeId = _nativeDownloadIds[filename];
     if (nativeId != null && Platform.isAndroid) {
       platform_dl.cancelNativeDownload(

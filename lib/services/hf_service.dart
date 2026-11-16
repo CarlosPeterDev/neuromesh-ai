@@ -215,6 +215,25 @@ class HfService {
     return files;
   }
 
+  /// Every weight file (.safetensors / .gguf) in an image repo, including
+  /// sub-folders: the parts of a multi-file model.
+  Future<List<HfGgufFile>> listImageParts(String repoId) async {
+    final data = await _getJson(
+        Uri.https(_host, '/api/models/$repoId/tree/main', {'recursive': 'true'}));
+    if (data is! List) throw HfException('Unexpected reply from Hugging Face.');
+    final out = <HfGgufFile>[];
+    for (final item in data.whereType<Map<String, dynamic>>()) {
+      if (item['type'] != 'file') continue;
+      final path = (item['path'] ?? '').toString();
+      final lower = path.toLowerCase();
+      if (!(lower.endsWith('.safetensors') || lower.endsWith('.gguf'))) continue;
+      final lfs = item['lfs'];
+      final size = (lfs is Map ? lfs['size'] : null) ?? item['size'];
+      out.add(HfGgufFile(path: path, size: (size as num?)?.toInt() ?? 0));
+    }
+    return out;
+  }
+
   static String downloadUrl(String repoId, String path) {
     final encoded = path.split('/').map(Uri.encodeComponent).join('/');
     return 'https://$_host/$repoId/resolve/main/$encoded';

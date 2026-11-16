@@ -16,7 +16,7 @@ Future<String> getModelsDir() async {
 }
 
 Future<bool> isModelDownloaded(String path) async {
-  return File(path).existsSync();
+  return File(path).existsSync() || Directory(path).existsSync();
 }
 
 Future<List<String>> getDownloadedModels(String modelsDir) async {
@@ -30,12 +30,23 @@ Future<List<String>> getDownloadedModels(String modelsDir) async {
           f.path.endsWith('.safetensors') ||
           f.path.endsWith('.coreml') ||
           f.path.endsWith('.mlpackage') ||
-          f.path.endsWith('.mlmodelc'))
+          f.path.endsWith('.mlmodelc') ||
+          f.path.endsWith('.sdbundle'))
       .map((f) => f.path.split('/').last)
       .toList();
 }
 
 Future<int> getModelSize(String path) async {
+  final d = Directory(path);
+  if (await d.exists()) {
+    var total = 0;
+    for (final e in d.listSync(recursive: true)) {
+      if (e is File && !e.path.endsWith('.part') && !e.path.endsWith('.tmp')) {
+        total += e.lengthSync();
+      }
+    }
+    return total;
+  }
   final file = File(path);
   if (!await file.exists()) return 0;
   return await file.length();
@@ -228,6 +239,11 @@ void pauseDownload(String filename) {
 }
 
 Future<void> deleteModel(String path) async {
+  final dir = Directory(path);
+  if (await dir.exists()) {
+    await dir.delete(recursive: true);
+    return;
+  }
   final file = File(path);
   if (await file.exists()) await file.delete();
   final partFile = File('$path.part');
@@ -294,4 +310,21 @@ Future<List<Map<String, dynamic>>> getActiveNativeDownloads() async {
     print('[DownloadNative] getActiveNativeDownloads failed: $e');
     return [];
   }
+}
+
+/// Stops a Dart-side download started with [downloadModel].
+void cancelDartDownload(String filename) {
+  _cancelTokens[filename]?.cancel();
+}
+
+/// Makes sure the folder for [filePath] exists.
+Future<void> ensureParentDir(String filePath) async {
+  await File(filePath).parent.create(recursive: true);
+}
+
+/// Renames a finished download folder.
+Future<void> renameDir(String from, String to) async {
+  final dest = Directory(to);
+  if (await dest.exists()) await dest.delete(recursive: true);
+  await Directory(from).rename(to);
 }
