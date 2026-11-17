@@ -241,8 +241,11 @@ jobs:
           chmod +x "$B/llama/llama-server"
           ls "$B/llama" | head -20
           tar -C "$B" -czf "NeuroMesh-AI-v${V}-linux-x64.tar.gz" .
-          gh release upload "v${V}" "NeuroMesh-AI-v${V}-linux-x64.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
-          gh release upload latest "NeuroMesh-AI-v${V}-linux-x64.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+          bash scripts/package_linux.sh "$B" "$V" web/icons/Icon-512.png
+          for f in NeuroMesh-AI-v${V}-linux-x64.*; do
+            gh release upload "v${V}" "$f" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload latest "$f" --clobber --repo "$GITHUB_REPOSITORY"
+          done
 
       - name: Bundle llama-server and package (Windows)
         if: runner.os == 'Windows'
@@ -265,6 +268,7 @@ jobs:
           # Real installer (Start-menu entry, uninstaller) built with Inno Setup.
           choco install innosetup -y --no-progress
           ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
           "$ISCC" "/DAppVersion=${V}" "/DSourceDir=$(cygpath -w "$PWD/$B")" "/DOutDir=$(cygpath -w "$PWD")" installer/neuromesh.iss
           ls -la NeuroMesh-AI-Setup-*.exe
           for f in "NeuroMesh-AI-v${V}-windows-x64-portable.zip" "NeuroMesh-AI-Setup-v${V}-x64.exe"; do

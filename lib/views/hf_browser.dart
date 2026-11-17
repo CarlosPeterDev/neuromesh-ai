@@ -7,6 +7,7 @@ import '../controllers/model_controller.dart';
 import '../core/ui.dart';
 import '../models/ai_model.dart';
 import '../services/download_service.dart';
+import '../services/favorites_service.dart';
 import '../services/device_info_service.dart';
 import '../services/hf_service.dart';
 import '../utils/image_bundle.dart';
@@ -42,10 +43,14 @@ class _HfBrowserState extends State<HfBrowser> {
   int _seq = 0;
   int _rawCount = 0;
   bool _showUnsupported = false;
-  bool _vision = false;
   bool _fitsOnly = false;
+  bool _onlyFav = false;
+  bool _exhausted = false;
+  String _task = 'any'; // any | text | vision | embedding
+  String _quant = 'any'; // any | Q4 | Q5 | Q6 | Q8 | other (applies to files)
   String _sort = 'downloads';
   String _size = 'any'; // any | s | m | l | xl
+  ScrollPosition? _scrollPos;
 
   static const _sizes = {
     'any': 'Any size',
@@ -67,9 +72,49 @@ class _HfBrowserState extends State<HfBrowser> {
     };
   }
 
-  double get _ram => Get.isRegistered<DeviceInfoService>()
-      ? Get.find<DeviceInfoService>().totalRamGB.value
-      : 0;
+  /// This phone's memory plus connected cluster workers.
+  double get _ram => availableMemoryGB();
+
+  FavoritesService? get _favs =>
+      Get.isRegistered<FavoritesService>() ? Get.find<FavoritesService>() : null;
+
+  int get _activeFilters =>
+      (_size != 'any' ? 1 : 0) +
+      (_task != 'any' ? 1 : 0) +
+      (_quant != 'any' ? 1 : 0) +
+      (_sort != 'downloads' ? 1 : 0) +
+      (_fitsOnly ? 1 : 0) +
+      (_onlyFav ? 1 : 0);
+
+  void _applyFilters() {
+    _limit = 30;
+    _exhausted = false;
+    _run();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Infinite scroll: watch the scrollable this browser sits in.
+    final pos = Scrollable.maybeOf(context)?.position;
+    if (pos != _scrollPos) {
+      _scrollPos?.removeListener(_onScroll);
+      _scrollPos = pos;
+      _scrollPos?.addListener(_onScroll);
+    }
+  }
+
+  void _onScroll() {
+    final pos = _scrollPos;
+    if (pos == null || !pos.hasPixels) return;
+    if (pos.extentAfter < 600) _loadMore();
+  }
+
+  void _loadMore() {
+    if (_loading || _exhausted || _repos.isEmpty || _rawCount < _limit) return;
+    _limit += 30;
+    _run(more: true);
+  }
 
   @override
   void initState() {
@@ -79,6 +124,7 @@ class _HfBrowserState extends State<HfBrowser> {
 
   @override
   void dispose() {
+    _scrollPos?.removeListener(_onScroll);
     _debounce?.cancel();
     _search.dispose();
     _hf.dispose();
@@ -89,27 +135,29 @@ class _HfBrowserState extends State<HfBrowser> {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 500), () {
       _query = value.trim();
-      _limit = 30;
-      _run();
+      _applyFilters();
     });
   }
 
-  Future<void> _run() async {
+  Future<void> _run({bool more = false}) async {
     final seq = ++_seq;
+    final before = _rawCount;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
       final repos = await _hf.searchModels(_query,
-          limit: (_size != 'any' || _fitsOnly) ? _limit * 2 : _limit,
+          limit: (_size != 'any' || _fitsOnly || _onlyFav) ? _limit * 2 : _limit,
           images: widget.images,
-          vision: _vision,
+          task: _task == 'any' ? null : _task,
           sort: _sort);
       if (!mounted || seq != _seq) return;
       setState(() {
         _repos = repos;
         _rawCount = repos.length;
+        // A bigger request that returned nothing new means the end.
+        if (more && repos.length <= before) _exhausted = true;
         _loading = false;
       });
     } catch (e) {
@@ -126,7 +174,18 @@ class _HfBrowserState extends State<HfBrowser> {
     if (!widget.images) {
       if (!_showUnsupported) out = out.where((r) => r.supported);
       out = out.where(_sizeOk);
-      if (_fitsOnly) out = out.where((r) => r.fitsPhone(_ram) != false && r.paramsB != null);
+      if (_fitsOnly) {
+        out = out.where((r) {
+          final need = r.estimatedRamGB;
+          if (need == null) return false;
+          final f = fitFor(need, _ram);
+          return f == ModelFit.recommended || f == ModelFit.fits;
+        });
+      }
+    }
+    if (_onlyFav) {
+      final favs = _favs;
+      out = out.where((r) => favs?.isFav(FavoritesService.hfKey(r.id)) ?? false);
     }
     return out;
   }
@@ -150,41 +209,104 @@ class _HfBrowserState extends State<HfBrowser> {
         ),
       );
 
-  Future<void> _pickSort() async {
-    final v = await showAppSheet<String>(context, title: 'Sort by', builder: (ctx) {
-      return AppGroup(children: [
-        for (final e in const {
-          'downloads': 'Most downloaded',
-          'likes': 'Most liked',
-          'trendingScore': 'Trending',
-          'lastModified': 'Newest',
-        }.entries)
-          AppRow(
-              title: e.value,
-              selected: _sort == e.key,
-              onTap: () => Navigator.pop(ctx, e.key)),
-      ]);
-    });
-    if (v != null && v != _sort) {
-      setState(() => _sort = v);
-      _run();
-    }
+  Widget _choices(
+    String title,
+    Map<String, String> options,
+    String current,
+    void Function(String) onPick,
+  ) {
+    final t = AppTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6, left: 2),
+          child: Text(title, style: t.small),
+        ),
+        Wrap(spacing: 8, runSpacing: 6, children: [
+          for (final e in options.entries)
+            ChoiceChip(
+              label: Text(e.value),
+              selected: current == e.key,
+              visualDensity: VisualDensity.compact,
+              onSelected: (_) => onPick(e.key),
+            ),
+        ]),
+      ]),
+    );
   }
 
-  Future<void> _pickSize() async {
-    final v = await showAppSheet<String>(context, title: 'Model size', builder: (ctx) {
-      return AppGroup(children: [
-        for (final e in _sizes.entries)
-          AppRow(
-              title: e.value,
-              selected: _size == e.key,
-              onTap: () => Navigator.pop(ctx, e.key)),
-      ]);
+  Future<void> _openFilters() async {
+    await showAppSheet<void>(context, title: 'Filters', builder: (ctx) {
+      return StatefulBuilder(builder: (ctx, setSheet) {
+        void change(VoidCallback f, {bool refetch = true}) {
+          setState(f);
+          setSheet(() {});
+          if (refetch) _applyFilters();
+        }
+
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _choices('Sort by', const {
+              'downloads': 'Most downloaded',
+              'likes': 'Most liked',
+              'trendingScore': 'Trending',
+              'lastModified': 'Newest',
+            }, _sort, (v) => change(() => _sort = v)),
+            if (!widget.images) ...[
+              _choices('Size', _sizes, _size, (v) => change(() => _size = v)),
+              _choices('Type', const {
+                'any': 'Any',
+                'text': 'Text',
+                'vision': 'Vision',
+                'embedding': 'Embedding',
+              }, _task, (v) => change(() => _task = v)),
+              _choices('Quantisation (applies to files inside a model)', const {
+                'any': 'Any',
+                'Q4': 'Q4',
+                'Q5': 'Q5',
+                'Q6': 'Q6',
+                'Q8': 'Q8',
+                'other': 'Other',
+              }, _quant, (v) => change(() => _quant = v, refetch: false)),
+              Wrap(spacing: 8, runSpacing: 6, children: [
+                FilterChip(
+                  avatar: const Icon(Icons.smartphone_rounded, size: 16),
+                  label: const Text('Fits my device / cluster'),
+                  selected: _fitsOnly,
+                  onSelected: (v) => change(() => _fitsOnly = v),
+                ),
+                FilterChip(
+                  avatar: const Icon(Icons.star_rounded, size: 16),
+                  label: const Text('Only favorites'),
+                  selected: _onlyFav,
+                  onSelected: (v) => change(() => _onlyFav = v, refetch: false),
+                ),
+              ]),
+            ],
+            const SizedBox(height: 12),
+            TonalButton.neutral(
+              ctx,
+              label: 'Reset filters',
+              onTap: () {
+                setState(() {
+                  _sort = 'downloads';
+                  _size = 'any';
+                  _task = 'any';
+                  _quant = 'any';
+                  _fitsOnly = false;
+                  _onlyFav = false;
+                });
+                Navigator.pop(ctx);
+                _applyFilters();
+              },
+            ),
+          ],
+        );
+      });
     });
-    if (v != null && v != _size) {
-      setState(() => _size = v);
-      _run();
-    }
   }
 
   void _openRepo(HfRepo repo) {
@@ -192,7 +314,8 @@ class _HfBrowserState extends State<HfBrowser> {
       context,
       title: repo.name,
       subtitle: repo.id,
-      builder: (ctx) => _RepoFiles(repo: repo, hf: _hf, images: widget.images),
+      builder: (ctx) => _RepoFiles(
+          repo: repo, hf: _hf, images: widget.images, quant: _quant),
     );
   }
 
@@ -209,8 +332,7 @@ class _HfBrowserState extends State<HfBrowser> {
           onSubmitted: (v) {
             _debounce?.cancel();
             _query = v.trim();
-            _limit = 30;
-            _run();
+            _applyFilters();
           },
           decoration: appInputDecoration(
             context,
@@ -220,45 +342,43 @@ class _HfBrowserState extends State<HfBrowser> {
             prefix: const Icon(Icons.search_rounded),
           ),
         ),
-        if (!widget.images) ...[
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 38,
-            child: ListView(scrollDirection: Axis.horizontal, children: [
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 38,
+          child: ListView(scrollDirection: Axis.horizontal, children: [
+            _chip(
+                icon: Icons.tune_rounded,
+                label: _activeFilters > 0 ? 'Filters · $_activeFilters' : 'Filters',
+                selected: _activeFilters > 0,
+                onTap: _openFilters),
+            if (!widget.images) ...[
               _chip(
-                  icon: Icons.sort_rounded,
-                  label: switch (_sort) {
-                    'likes' => 'Most liked',
-                    'lastModified' => 'Newest',
-                    'trendingScore' => 'Trending',
-                    _ => 'Most downloaded',
-                  },
-                  selected: false,
-                  onTap: _pickSort),
-              _chip(
-                  icon: Icons.photo_size_select_large_rounded,
-                  label: _sizes[_size]!,
-                  selected: _size != 'any',
-                  onTap: _pickSize),
+                  icon: Icons.star_rounded,
+                  label: 'Favorites',
+                  selected: _onlyFav,
+                  onTap: () {
+                    setState(() => _onlyFav = !_onlyFav);
+                    _applyFilters();
+                  }),
               _chip(
                   icon: Icons.visibility_outlined,
                   label: 'Vision',
-                  selected: _vision,
+                  selected: _task == 'vision',
                   onTap: () {
-                    setState(() => _vision = !_vision);
-                    _run();
+                    setState(() => _task = _task == 'vision' ? 'any' : 'vision');
+                    _applyFilters();
                   }),
               _chip(
                   icon: Icons.smartphone_rounded,
-                  label: 'Recommended for my phone',
+                  label: 'Fits my device',
                   selected: _fitsOnly,
                   onTap: () {
                     setState(() => _fitsOnly = !_fitsOnly);
-                    _run();
+                    _applyFilters();
                   }),
-            ]),
-          ),
-        ],
+            ],
+          ]),
+        ),
         const SizedBox(height: 10),
         Text(
           _query.isEmpty
@@ -316,25 +436,41 @@ class _HfBrowserState extends State<HfBrowser> {
                 title: r.name,
                 subtitle:
                     '${r.author}${r.paramsB != null ? ' · ${r.paramsB! < 1 ? '${(r.paramsB! * 1000).round()}M' : '${r.paramsB!.toStringAsFixed(r.paramsB! < 10 ? 1 : 0)}B'}' : ''} · ${_compact(r.downloads)} downloads${r.isVision ? ' · vision' : ''}${r.gated ? ' · login required' : ''}${!r.supported ? ' · unsupported (${r.architecture})' : ''}',
-                trailing: r.estimatedRamGB == null
-                    ? null
-                    : FitBadge(fitFor(r.estimatedRamGB!, _ram)),
+                trailing: Obx(() {
+                  final fav = _favs?.isFav(FavoritesService.hfKey(r.id)) ?? false;
+                  return Row(mainAxisSize: MainAxisSize.min, children: [
+                    if (r.estimatedRamGB != null)
+                      FitBadge(fitFor(r.estimatedRamGB!, _ram)),
+                    InkWell(
+                      onTap: () => _favs?.toggle(FavoritesService.hfKey(r.id)),
+                      borderRadius: BorderRadius.circular(20),
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Icon(
+                            fav ? Icons.star_rounded : Icons.star_border_rounded,
+                            size: 22,
+                            color: fav ? const Color(0xFFE0A800) : null),
+                      ),
+                    ),
+                  ]);
+                }),
                 chevron: true,
                 onTap: () => _openRepo(r),
               ),
           ]),
-          if (_rawCount >= _limit)
+          if (_rawCount >= _limit && !_exhausted)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: TextButton(
-                onPressed: _loading
-                    ? null
-                    : () {
-                        _limit += 30;
-                        _run();
-                      },
-                child: Text(_loading ? 'Loading…' : 'Load more'),
-              ),
+              child: _loading
+                  ? const Center(
+                      child: SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2)))
+                  : TextButton(
+                      onPressed: _loadMore,
+                      child: const Text('Load more'),
+                    ),
             ),
         ],
       ],
@@ -346,7 +482,9 @@ class _RepoFiles extends StatefulWidget {
   final HfRepo repo;
   final HfService hf;
   final bool images;
-  const _RepoFiles({required this.repo, required this.hf, this.images = false});
+  final String quant;
+  const _RepoFiles(
+      {required this.repo, required this.hf, this.images = false, this.quant = 'any'});
 
   @override
   State<_RepoFiles> createState() => _RepoFilesState();
@@ -455,7 +593,12 @@ class _RepoFilesState extends State<_RepoFiles> {
             message: snap.error.toString(),
           );
         }
-        final files = snap.data ?? const <HfGgufFile>[];
+        final all = snap.data ?? const <HfGgufFile>[];
+        final filtered = (widget.images || widget.quant == 'any')
+            ? all
+            : all.where((f) => _quantMatches(f.quant, widget.quant)).toList();
+        // A quant filter that matches nothing shows everything instead.
+        final files = filtered.isEmpty ? all : filtered;
         if (files.isEmpty && widget.images) {
           return _BundlePicker(repo: widget.repo, hf: widget.hf);
         }
@@ -499,6 +642,15 @@ class _RepoFilesState extends State<_RepoFiles> {
       },
     );
   }
+}
+
+/// Whether a file's quant label ("Q4_K_M", "IQ4_XS") belongs to bucket
+/// [bucket]: Q4, Q5, Q6, Q8, or other (F16, Q2, Q3…).
+bool _quantMatches(String quant, String bucket) {
+  final q = quant.toUpperCase();
+  const known = ['Q4', 'Q5', 'Q6', 'Q8'];
+  if (bucket == 'other') return !known.any(q.contains);
+  return q.contains(bucket);
 }
 
 /// Multi-file image models (Flux, Z-Image, SD3…): choose the parts, download

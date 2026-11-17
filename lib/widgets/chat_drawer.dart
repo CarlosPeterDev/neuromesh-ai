@@ -7,6 +7,7 @@ import '../models/chat_session.dart';
 import '../services/hive_service.dart';
 import 'tonal_button.dart';
 import '../core/haptics.dart';
+import '../core/nav_hub.dart';
 
 /// Two-bar "sidebar" glyph — the long bar over a short one reads as a list
 /// rather than the generic hamburger.
@@ -46,6 +47,7 @@ class _ChatDrawerState extends State<ChatDrawer> {
   final _search = TextEditingController();
   String _query = '';
   Set<String> _matchIds = {};
+  bool _menuTab = false;
 
   /// Chats that contain [q] anywhere in their messages.
   Set<String> _searchMessages(String q) {
@@ -242,7 +244,7 @@ class _ChatDrawerState extends State<ChatDrawer> {
             padding: const EdgeInsets.fromLTRB(20, 14, 8, 10),
             child: Row(children: [
               Expanded(
-                child: Text('Chats',
+                child: Text(_menuTab ? 'Menu' : 'Chats',
                     style: GoogleFonts.inter(
                         fontSize: 24,
                         fontWeight: FontWeight.w700,
@@ -256,6 +258,53 @@ class _ChatDrawerState extends State<ChatDrawer> {
               ),
             ]),
           ),
+          // Chats / Menu switch
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Container(
+              height: 36,
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                  color: field, borderRadius: BorderRadius.circular(10)),
+              child: Row(children: [
+                for (final e in const [(false, 'Chats'), (true, 'Menu')])
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        Haptics.selectionClick();
+                        setState(() => _menuTab = e.$1);
+                      },
+                      child: Container(
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                            color: _menuTab == e.$1 ? selected : null,
+                            borderRadius: BorderRadius.circular(8)),
+                        child: Text(e.$2,
+                            style: GoogleFonts.inter(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
+                                color: _menuTab == e.$1 ? text : muted)),
+                      ),
+                    ),
+                  ),
+              ]),
+            ),
+          ),
+          if (_menuTab)
+            Expanded(
+              child: _MenuPanel(
+                text: text,
+                muted: muted,
+                accent: accent,
+                selected: selected,
+                onOpen: (e) {
+                  _close();
+                  e.open();
+                },
+              ),
+            )
+          else ...[
           // Search
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -376,6 +425,7 @@ class _ChatDrawerState extends State<ChatDrawer> {
                 style: GoogleFonts.inter(
                     fontSize: 12, color: muted.withValues(alpha: 0.8))),
           ),
+          ],
         ]),
       ),
     );
@@ -425,6 +475,100 @@ class _SessionRow extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The Menu tab: every screen of the app, in collapsible groups.
+class _MenuPanel extends StatefulWidget {
+  final Color text;
+  final Color muted;
+  final Color accent;
+  final Color selected;
+  final void Function(NavEntry) onOpen;
+  const _MenuPanel({
+    required this.text,
+    required this.muted,
+    required this.accent,
+    required this.selected,
+    required this.onOpen,
+  });
+
+  @override
+  State<_MenuPanel> createState() => _MenuPanelState();
+}
+
+class _MenuPanelState extends State<_MenuPanel> {
+  final _open = <String>{'AI & agent'};
+
+  @override
+  Widget build(BuildContext context) {
+    final sections = buildNavSections();
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(10, 0, 10, 16),
+      children: [
+        for (final sec in sections) ...[
+          InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: () => setState(() {
+              if (!_open.remove(sec.title)) _open.add(sec.title);
+            }),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+              child: Row(children: [
+                Icon(sec.icon, size: 18, color: widget.accent),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(sec.title,
+                      style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: widget.text)),
+                ),
+                Icon(
+                    _open.contains(sec.title)
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    size: 20,
+                    color: widget.muted),
+              ]),
+            ),
+          ),
+          if (_open.contains(sec.title))
+            for (final e in sec.entries)
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: () => widget.onOpen(e),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 9, 10, 9),
+                    child: Row(children: [
+                      Icon(e.icon, size: 20, color: widget.muted),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(e.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.inter(
+                                      fontSize: 15, color: widget.text)),
+                              Text(e.subtitle,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.inter(
+                                      fontSize: 12, color: widget.muted)),
+                            ]),
+                      ),
+                    ]),
+                  ),
+                ),
+              ),
+          const SizedBox(height: 4),
+        ],
+      ],
     );
   }
 }

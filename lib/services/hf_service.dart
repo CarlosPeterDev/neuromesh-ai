@@ -148,11 +148,22 @@ class HfService {
       {int limit = 30,
       bool images = false,
       bool vision = false,
+      String? task,
       String sort = 'downloads'}) async {
+    // [task]: 'text' | 'vision' | 'embedding' (null = any). [vision] is kept
+    // for older callers.
+    final pipeline = images
+        ? null
+        : switch (task) {
+            'vision' => 'image-text-to-text',
+            'embedding' => 'feature-extraction',
+            'text' => 'text-generation',
+            _ => vision ? 'image-text-to-text' : null,
+          };
     final params = <String, String>{
       'filter': images ? 'text-to-image' : 'gguf',
       'sort': sort,
-      if (vision && !images) 'pipeline_tag': 'image-text-to-text',
+      if (pipeline != null) 'pipeline_tag': pipeline,
       'direction': '-1',
       'limit': '$limit',
       if (query.trim().isNotEmpty) 'search': query.trim(),

@@ -30,6 +30,24 @@ void main() {
     expect(repos.last.gated, true);
   });
 
+  test('searchModels maps the task filter to a pipeline tag', () async {
+    final seen = <Uri>[];
+    final svc = HfService(
+      client: MockClient((req) async {
+        seen.add(req.url);
+        return http.Response(jsonEncode([]), 200);
+      }),
+    );
+    await svc.searchModels('a', task: 'embedding');
+    await svc.searchModels('a', task: 'vision');
+    await svc.searchModels('a', task: 'text');
+    await svc.searchModels('a');
+    expect(seen[0].queryParameters['pipeline_tag'], 'feature-extraction');
+    expect(seen[1].queryParameters['pipeline_tag'], 'image-text-to-text');
+    expect(seen[2].queryParameters['pipeline_tag'], 'text-generation');
+    expect(seen[3].queryParameters.containsKey('pipeline_tag'), false);
+  });
+
   test('listGgufFiles drops split shards and projector files, sorts by size', () async {
     final svc = HfService(
       client: MockClient((req) async => http.Response(
