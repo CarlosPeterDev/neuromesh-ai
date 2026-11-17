@@ -400,6 +400,9 @@ class ModelController extends GetxController {
     return model.size;
   }
 
+  /// Size in bytes of a model (downloaded file, or the catalogue size).
+  int modelBytes(AiModel model) => _knownModelBytes(model);
+
   int _knownModelBytes(AiModel model) {
     final detected = fileSizes[model.filename] ?? 0;
     if (detected > 0) return detected;

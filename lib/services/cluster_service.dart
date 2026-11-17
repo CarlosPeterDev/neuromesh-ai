@@ -13,6 +13,8 @@ import '../core/constants.dart';
 import '../core/ui.dart';
 import 'app_log_service.dart';
 import 'hive_service.dart';
+import 'inference_service.dart';
+import '../controllers/model_controller.dart';
 
 /// What this phone does in a phone cluster.
 enum ClusterRole {
@@ -121,13 +123,51 @@ class ClusterService extends GetxService {
       ever<ClusterWorkerStatus>(worker, (_) => _updateKeepScreenOn());
       ever<bool>(serving, (_) => _updateKeepScreenOn());
       refreshWifiAddress();
+      _startWatchdog();
     }
   }
 
   @override
   void onClose() {
     _statusTimer?.cancel();
+    _watchdog?.cancel();
     super.onClose();
+  }
+
+  Timer? _watchdog;
+  bool _reloading = false;
+  DateTime _lastReload = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// While a model is split across phones, checks every few seconds that the
+  /// helper phones still answer. If one drops out, the model is loaded again
+  /// right away with the phones that are left (or on this phone alone), so
+  /// the chat does not stay stuck on a half-dead split.
+  void _startWatchdog() {
+    _watchdog?.cancel();
+    _watchdog = Timer.periodic(const Duration(seconds: 12), (_) async {
+      if (_reloading || !enabled.value || role != ClusterRole.master) return;
+      if (split.length < 2) return;
+      if (DateTime.now().difference(_lastReload) < const Duration(seconds: 90)) return;
+      if (!Get.isRegistered<ModelController>()) return;
+      final inference = Get.find<InferenceService>();
+      if (inference.isLoadingModel.value || inference.isGenerating.value) return;
+      final lost = await relocateWorkers();
+      if (lost.isEmpty) return;
+      final file = _hive.getSetting<String>(AppConstants.keyLocalModelName);
+      if (file == null || file.isEmpty) return;
+      _reloading = true;
+      _lastReload = DateTime.now();
+      try {
+        showToast('Phone cluster',
+            '${lost.map((w) => w.model ?? w.name).join(', ')} left. Reloading the model without it…');
+        Get.find<AppLogService>().info('Phone cluster: worker lost, reloading $file');
+        await Get.find<ModelController>().loadModel(file);
+      } catch (e) {
+        Get.find<AppLogService>().error('Cluster auto-reload failed', details: e);
+      } finally {
+        _reloading = false;
+      }
+    });
   }
 
   /// Android throttles a phone whose screen is off (slow cores, low CPU

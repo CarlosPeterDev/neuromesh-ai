@@ -11,6 +11,8 @@ import '../services/download_service.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
 import 'hf_browser.dart';
+import '../services/favorites_service.dart';
+import '../utils/model_fit.dart';
 
 const _tabular = [FontFeature.tabularFigures()];
 
@@ -1555,12 +1557,23 @@ class ModelView extends GetView<ModelController> {
               disableActions ? null : () => _confirmDownload(context, model),
         );
       }
+      final favs = Get.find<FavoritesService>();
       final VoidCallback? load = isDownloaded && !isActive && !disableActions
           ? () => controller.loadModel(actualFilename)
           : null;
 
       // Secondary actions live in the ⋯ sheet.
       final secondary = <(IconData, String, bool, VoidCallback)>[
+        (
+          favs.isFav(FavoritesService.localKey(model.filename))
+              ? Icons.star_rounded
+              : Icons.star_outline_rounded,
+          favs.isFav(FavoritesService.localKey(model.filename))
+              ? 'Remove from favorites'
+              : 'Add to favorites',
+          false,
+          () => favs.toggle(FavoritesService.localKey(model.filename)),
+        ),
         if (!isCurrentlyDownloading && isDownloaded)
           (
             Icons.save_alt_rounded,
@@ -1598,7 +1611,17 @@ class ModelView extends GetView<ModelController> {
       final filter = controller.localFilter.value.isEmpty
           ? controller.defaultLocalFilter
           : controller.localFilter.value;
-      final recommended = !library && model.recommendedFor.contains(filter);
+      final fitBytes = controller.modelBytes(model);
+      final fit = controller.isImageModel(model) || fitBytes <= 0
+          ? ModelFit.unknown
+          : fitFor(needGBForBytes(fitBytes));
+      // "Recommended" only for models that really fit this phone (or the
+      // cluster): never for ones that are too big for the memory.
+      final recommended = !library &&
+          model.recommendedFor.contains(filter) &&
+          fit != ModelFit.heavy &&
+          fit != ModelFit.tooBig;
+      final favKey = FavoritesService.localKey(model.filename);
       // In Browse, skip the label the selected type already implies.
       final (name, variant) = _cleanName(model);
       // Uncensored is a tag next to the name; the type is the section (My
@@ -1656,6 +1679,16 @@ class ModelView extends GetView<ModelController> {
                               const SizedBox(width: 8),
                               AppTag('Uncensored', color: t.orange),
                             ],
+                            if (fit != ModelFit.unknown) ...[
+                              const SizedBox(width: 8),
+                              FitBadge(fit),
+                            ],
+                            Obx(() => favs.items.contains(favKey)
+                                ? const Padding(
+                                    padding: EdgeInsets.only(left: 6),
+                                    child: Icon(Icons.star_rounded, size: 15, color: Color(0xFFFFB300)),
+                                  )
+                                : const SizedBox.shrink()),
                           ]),
                           const SizedBox(height: 3),
                           Row(children: [
@@ -1721,6 +1754,11 @@ class ModelView extends GetView<ModelController> {
     var first = true;
     List<Widget> group(String title, List<AiModel> list) {
       if (list.isEmpty) return const [];
+      final favs = Get.find<FavoritesService>();
+      list = [
+        ...list.where((m) => favs.isFav(FavoritesService.localKey(m.filename))),
+        ...list.where((m) => !favs.isFav(FavoritesService.localKey(m.filename))),
+      ];
       final header = SectionHeader(title,
           padding: EdgeInsets.fromLTRB(4, first ? 14 : 22, 0, 8));
       first = false;

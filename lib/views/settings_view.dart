@@ -16,6 +16,7 @@ import 'cluster_view.dart';
 import 'log_view.dart';
 import 'toolbox_view.dart';
 import '../core/haptics.dart';
+import '../core/nav_hub.dart';
 
 const _tabular = [FontFeature.tabularFigures()];
 
@@ -91,6 +92,21 @@ class SettingsView extends GetView<SettingsController> {
                     ]),
               ),
             ]),
+            // Every tool and screen of the app, grouped, so nothing lives only
+            // in the chat's top bar or the toolbox.
+            for (final sec in buildNavSections()) ...[
+              SectionHeader(sec.title),
+              AppGroup(dividerIndent: 60, children: [
+                for (final e in sec.entries.where((e) => e.title != 'Settings'))
+                  AppRow(
+                    icon: e.icon,
+                    title: e.title,
+                    subtitle: e.subtitle,
+                    chevron: true,
+                    onTap: e.open,
+                  ),
+              ]),
+            ],
             const SectionHeader('Performance'),
             AppGroup(dividerIndent: 60, children: [
               _navRow(
