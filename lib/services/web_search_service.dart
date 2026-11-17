@@ -56,23 +56,50 @@ class WebSearchService extends GetxService {
     }
   }
 
-  Future<List<WebResult>> search(String query, {int max = 4}) async {
+  static final _fresh = RegExp(
+      r'\b(latest|newest|newly|recent(ly)?|current(ly)?|today|tonight|now|this (week|month|year)|just (released|launched)|new|release[sd]?|news|update[sd]?|202\d)\b|اليوم|الآن|آخر|أخر|أحدث|احدث|جديد',
+      caseSensitive: false);
+
+  /// DuckDuckGo date filter for questions about "the latest …": past month.
+  String? freshnessFor(String question) => _fresh.hasMatch(question) ? 'm' : null;
+
+  static const _months = [
+    'January', 'February', 'March', 'April', 'May', 'June', 'July',
+    'August', 'September', 'October', 'November', 'December'
+  ];
+
+  /// One or two search queries for a question: the cleaned question, plus the
+  /// same with the current month and year when it asks for fresh information.
+  List<String> researchQueries(String question, {String? previous}) {
+    final base = searchQuery(question, previous: previous);
+    final out = <String>[base];
+    if (freshnessFor(question) != null) {
+      final now = DateTime.now();
+      final stamp = '${_months[now.month - 1]} ${now.year}';
+      if (!base.contains('${now.year}')) out.add('$base $stamp');
+    }
+    return out;
+  }
+
+  Future<List<WebResult>> search(String query, {int max = 4, String? freshness}) async {
     final q = query.trim().replaceAll(RegExp(r'\s+'), ' ');
     final trimmed = q.length > 200 ? q.substring(0, 200) : q;
-    try {
-      final res = await http
-          .post(Uri.parse('https://html.duckduckgo.com/html/'),
-              headers: {
-                'User-Agent': _ua,
-                'Content-Type': 'application/x-www-form-urlencoded'
-              },
-              body: {'q': trimmed})
-          .timeout(const Duration(seconds: 12));
-      if (res.statusCode == 200) {
-        final r = parseDdgHtml(res.body, max: max);
-        if (r.isNotEmpty) return r;
-      }
-    } catch (_) {}
+    for (final df in [if (freshness != null) freshness, null]) {
+      try {
+        final res = await http
+            .post(Uri.parse('https://html.duckduckgo.com/html/'),
+                headers: {
+                  'User-Agent': _ua,
+                  'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: {'q': trimmed, if (df != null) 'df': df})
+            .timeout(const Duration(seconds: 12));
+        if (res.statusCode == 200) {
+          final r = parseDdgHtml(res.body, max: max);
+          if (r.isNotEmpty) return r;
+        }
+      } catch (_) {}
+    }
     // Backup: Wikipedia.
     try {
       final ar = RegExp(r'[؀-ۿ]').hasMatch(trimmed);
@@ -95,7 +122,11 @@ class WebSearchService extends GetxService {
     return [];
   }
 
-  Future<String> _pageText(String url, String query) async {
+  /// Reads a page and returns the passages that best match [query].
+  Future<String> pageText(String url, String query, {int maxChars = 1800}) =>
+      _pageText(url, query, maxChars: maxChars);
+
+  Future<String> _pageText(String url, String query, {int maxChars = 1100}) async {
     try {
       final res = await http
           .get(Uri.parse(url), headers: {'User-Agent': _ua})
@@ -104,7 +135,7 @@ class WebSearchService extends GetxService {
       final ct = res.headers['content-type'] ?? '';
       if (!ct.contains('text/html') && !ct.contains('text/plain')) return '';
       final body = res.body.length > 600000 ? res.body.substring(0, 600000) : res.body;
-      return bestPassages(readableText(body), query, maxChars: 1100);
+      return bestPassages(readableText(body), query, maxChars: maxChars);
     } catch (_) {
       return '';
     }
@@ -120,15 +151,22 @@ class WebSearchService extends GetxService {
     if (hit != null && DateTime.now().difference(hit.$1).inMinutes < 10) {
       return hit.$2;
     }
-    final raw = await search(query, max: 8);
-    final results = dedupeByHost(raw, (r) => r.url).take(5).toList();
+    final fresh = freshnessFor(question);
+    final merged = <WebResult>[];
+    for (final q in researchQueries(question, previous: previous)) {
+      merged.addAll(await search(q, max: 8, freshness: fresh));
+    }
+    final results = dedupeByHost(merged, (r) => r.url).take(6).toList();
     if (results.isEmpty) return null;
-    // Read the top three pages and keep only the passages that match.
-    final pages =
-        await Future.wait(results.take(3).map((r) => _pageText(r.url, query)));
+    // Read the top four pages and keep only the passages that match.
+    final pages = await Future.wait(
+        results.take(4).map((r) => _pageText(r.url, query, maxChars: 1600)));
     final b = StringBuffer(
-        'Web search results for "$query" (retrieved ${DateTime.now().toIso8601String().substring(0, 10)}). '
-        'Use them if they help, cite sources like [1], and say so if they do not answer the question.\n');
+        'Web search results for "$query". Today is ${DateTime.now().toIso8601String().substring(0, 10)}. '
+        'Your own knowledge of recent events is out of date, so answer ONLY from these results. '
+        'Give a complete, specific answer (names, versions, dates, numbers) and never a one-word reply. '
+        'Prefer the newest information by date; if sources disagree, say so. Cite sources like [1]. '
+        'If the results do not answer the question, say that plainly.\n');
     for (var i = 0; i < results.length; i++) {
       final r = results[i];
       final body = i < pages.length && pages[i].length > r.snippet.length

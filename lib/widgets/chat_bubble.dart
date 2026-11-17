@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:get/get.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 import '../controllers/chat_controller.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -214,6 +215,9 @@ class ChatBubble extends StatelessWidget {
               child: MarkdownBody(
                 data: answerContent,
                 selectable: true,
+                // Plain URLs become tappable links too, not only [text](url).
+                extensionSet: md.ExtensionSet.gitHubFlavored,
+                builders: {'pre': _CodeBlockBuilder(context)},
                 styleSheet: answerStyle(context),
                 sizedImageBuilder: (cfg) => cfg.uri.toString().startsWith(nmFileScheme)
                     ? agentImage(cfg.uri, cfg.alt)
@@ -231,27 +235,7 @@ class ChatBubble extends StatelessWidget {
           ),
         if (sources.isNotEmpty) ...[
           const SizedBox(height: 10),
-          Text('Sources',
-              style: GoogleFonts.inter(
-                  fontSize: 12, fontWeight: FontWeight.w600, color: muted)),
-          const SizedBox(height: 6),
-          Wrap(spacing: 6, runSpacing: 6, children: [
-            for (var i = 0; i < sources.length; i++)
-              ActionChip(
-                visualDensity: VisualDensity.compact,
-                avatar: CircleAvatar(
-                    radius: 9,
-                    backgroundColor: muted.withValues(alpha: 0.18),
-                    child: Text('${i + 1}',
-                        style: GoogleFonts.inter(fontSize: 10, color: muted))),
-                label: Text(
-                    Uri.tryParse(sources[i].$2)?.host.replaceFirst('www.', '') ??
-                        sources[i].$1,
-                    style: GoogleFonts.inter(fontSize: 12)),
-                tooltip: sources[i].$1,
-                onPressed: () => openLink(context, sources[i].$2),
-              ),
-          ]),
+          _SourcesList(sources: sources, muted: muted),
         ],
         if (message.fileName != null) ...[
           const SizedBox(height: 10),
@@ -514,6 +498,128 @@ class _CopyButtonState extends State<_CopyButton> {
           ),
         ),
       ),
+    );
+  }
+}
+
+
+/// "Sources" row that stays collapsed (showing the first site names) until
+/// tapped, then lists every source as a tappable chip.
+class _SourcesList extends StatefulWidget {
+  final List<(String, String)> sources;
+  final Color muted;
+  const _SourcesList({required this.sources, required this.muted});
+
+  @override
+  State<_SourcesList> createState() => _SourcesListState();
+}
+
+class _SourcesListState extends State<_SourcesList> {
+  bool _open = false;
+
+  String _host(int i) =>
+      Uri.tryParse(widget.sources[i].$2)?.host.replaceFirst('www.', '') ??
+      widget.sources[i].$1;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = widget.muted;
+    final n = widget.sources.length;
+    final preview = [for (var i = 0; i < n && i < 2; i++) _host(i)].join(', ');
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => setState(() => _open = !_open),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.link_rounded, size: 16, color: muted),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                _open ? 'Sources ($n)' : 'Sources ($n) · $preview${n > 2 ? ' …' : ''}',
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.inter(
+                    fontSize: 12.5, fontWeight: FontWeight.w600, color: muted),
+              ),
+            ),
+            Icon(_open ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                size: 18, color: muted),
+          ]),
+        ),
+      ),
+      if (_open) ...[
+        const SizedBox(height: 4),
+        Wrap(spacing: 6, runSpacing: 6, children: [
+          for (var i = 0; i < n; i++)
+            ActionChip(
+              visualDensity: VisualDensity.compact,
+              avatar: CircleAvatar(
+                  radius: 9,
+                  backgroundColor: muted.withValues(alpha: 0.18),
+                  child: Text('${i + 1}',
+                      style: GoogleFonts.inter(fontSize: 10, color: muted))),
+              label: Text(_host(i), style: GoogleFonts.inter(fontSize: 12)),
+              tooltip: '${widget.sources[i].$1}\n${widget.sources[i].$2}',
+              onPressed: () => ChatBubble.openLink(context, widget.sources[i].$2),
+            ),
+        ]),
+      ],
+    ]);
+  }
+}
+
+/// Fenced code blocks get their own copy button, so a file's text can be
+/// copied without copying the whole message.
+class _CodeBlockBuilder extends MarkdownElementBuilder {
+  final BuildContext context;
+  _CodeBlockBuilder(this.context);
+
+  @override
+  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
+    final text = element.textContent.replaceAll(RegExp(r'\n$'), '');
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? const Color(0xFF161618) : const Color(0xFFF3F3F5);
+    final muted = Theme.of(context).hintColor;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.07)
+                : Colors.black.withValues(alpha: 0.06),
+            width: 0.5),
+      ),
+      child: Stack(children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.fromLTRB(12, 12, 44, 12),
+          child: SelectableText(
+            text,
+            style: GoogleFonts.firaCode(
+                fontSize: 13, height: 1.5, color: Theme.of(context).colorScheme.onSurface),
+          ),
+        ),
+        Positioned(
+          top: 2,
+          right: 2,
+          child: IconButton(
+            tooltip: 'Copy this block',
+            visualDensity: VisualDensity.compact,
+            iconSize: 17,
+            color: muted,
+            icon: const Icon(Icons.copy_rounded),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: text));
+              ScaffoldMessenger.maybeOf(context)
+                  ?.showSnackBar(const SnackBar(content: Text('Copied'), duration: Duration(seconds: 1)));
+            },
+          ),
+        ),
+      ]),
     );
   }
 }

@@ -856,7 +856,13 @@ class ChatController extends GetxController {
     // Optional web search (off by default; auto/always in Toolbox).
     var finalPrompt = genPrompt;
     WebContext? webCtx;
-    if (Get.isRegistered<WebSearchService>() &&
+    // When the agent will research by itself (local models), skip this simpler
+    // pre-search so the web is not searched twice.
+    final agentResearches = Get.find<SettingsController>().inferenceMode.value == 'local' &&
+        Get.find<AgentService>().wantsTools(visibleText) &&
+        Get.find<AgentService>().needsResearch(visibleText);
+    if (!agentResearches &&
+        Get.isRegistered<WebSearchService>() &&
         Get.find<WebSearchService>().shouldSearch(visibleText)) {
       streamingResponse.value = '🔍 Searching the web…';
       try {
@@ -1067,6 +1073,8 @@ class ChatController extends GetxController {
               prompt: finalPrompt,
               history: history,
               confirm: confirmToolCall,
+              userText: visibleText,
+              researchQuestion: agent.needsResearch(visibleText) ? visibleText : null,
               cancelled: () => generationId != _generationSerial,
               onVisible: (v) {
                 visible = v;

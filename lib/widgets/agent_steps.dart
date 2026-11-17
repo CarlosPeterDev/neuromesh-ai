@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -219,7 +221,125 @@ Future<void> openAgentFile(BuildContext context, String name) async {
         context: context, builder: (_) => _AudioSheet(file: f));
     return;
   }
-  await Share.shareXFiles([XFile(f.path)]);
+  if (!context.mounted) return;
+  await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _FileSheet(file: f));
+}
+
+const _textExts = {
+  'txt', 'md', 'csv', 'tsv', 'json', 'html', 'htm', 'xml', 'yaml', 'yml', 'log',
+  'py', 'js', 'ts', 'dart', 'kt', 'java', 'c', 'cpp', 'h', 'sh', 'sql', 'css',
+  'ini', 'toml', 'conf', 'srt', 'vtt', 'tex'
+};
+const _imageExts = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'};
+
+/// Preview of a file the agent made, with copy, save to the phone, and share.
+class _FileSheet extends StatefulWidget {
+  final File file;
+  const _FileSheet({required this.file});
+
+  @override
+  State<_FileSheet> createState() => _FileSheetState();
+}
+
+class _FileSheetState extends State<_FileSheet> {
+  String? _text;
+  bool _truncated = false;
+  late final String _name = widget.file.path.split('/').last;
+  late final String _ext = _name.contains('.') ? _name.split('.').last.toLowerCase() : '';
+
+  @override
+  void initState() {
+    super.initState();
+    if (_textExts.contains(_ext)) _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final bytes = await widget.file.readAsBytes();
+      final cut = bytes.length > 60000;
+      final t = utf8.decode(cut ? bytes.sublist(0, 60000) : bytes, allowMalformed: true);
+      if (mounted) setState(() {
+        _text = t;
+        _truncated = cut;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _text = 'Could not read this file: $e');
+    }
+  }
+
+  Future<void> _save() async {
+    try {
+      final bytes = await widget.file.readAsBytes();
+      final path = await FilePicker.saveFile(
+          dialogTitle: 'Save $_name', fileName: _name, bytes: bytes);
+      if (path != null) Get.snackbar('Saved', _name);
+    } catch (e) {
+      Get.snackbar('Could not save', '$e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = widget.file.lengthSync();
+    final isImage = _imageExts.contains(_ext);
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(_name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+            Text('${(size / 1024).toStringAsFixed(size < 10240 ? 1 : 0)} KB',
+                style: TextStyle(color: Theme.of(context).hintColor, fontSize: 12)),
+            const SizedBox(height: 10),
+            Flexible(
+              child: isImage
+                  ? InteractiveViewer(child: Image.file(widget.file, fit: BoxFit.contain))
+                  : _text != null
+                      ? Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                              borderRadius: BorderRadius.circular(12)),
+                          child: SingleChildScrollView(
+                              child: SelectableText(
+                                  _truncated ? '$_text\n… (preview cut; save the file for everything)' : _text!,
+                                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5, height: 1.45))))
+                      : Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 24),
+                          child: Text(_textExts.contains(_ext)
+                              ? 'Loading…'
+                              : 'No preview for .$_ext files. Save or share it instead.')),
+            ),
+            const SizedBox(height: 12),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              FilledButton.icon(
+                  onPressed: _save,
+                  icon: const Icon(Icons.download_rounded),
+                  label: const Text('Save to phone')),
+              OutlinedButton.icon(
+                  onPressed: () => Share.shareXFiles([XFile(widget.file.path)]),
+                  icon: const Icon(Icons.ios_share_rounded),
+                  label: const Text('Share')),
+              if (_text != null)
+                OutlinedButton.icon(
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: _text!));
+                      Get.snackbar('Copied', _name);
+                    },
+                    icon: const Icon(Icons.copy_rounded),
+                    label: const Text('Copy text')),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
 }
 
 class _AudioSheet extends StatefulWidget {

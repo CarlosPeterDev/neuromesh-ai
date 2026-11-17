@@ -785,9 +785,91 @@ class ModelController extends GetxController {
         await _settings.setInferenceMode('local');
         showToast('Model Loaded', result, tone: ToastTone.success);
       } else {
-        _showLoadFailedSheet(filename, result);
+        final diag = await _diagnoseLoad(filename, path, result, isLiteRt: isLiteRt);
+        Get.find<AppLogService>().error('Model load failed: $filename',
+            details: '$result\n\n${diag.details}');
+        _showLoadFailedSheet(filename, result, diagnosis: diag);
       }
     }
+  }
+
+  /// Looks at the file, the model's header and the phone to explain WHY a
+  /// model did not load. [likely] is the most probable cause in plain words;
+  /// [details] lists everything that was checked.
+  Future<({String? likely, String details})> _diagnoseLoad(
+      String filename, String path, String error,
+      {required bool isLiteRt}) async {
+    final d = StringBuffer();
+    String? likely;
+    void line(String s) => d.writeln(s);
+    try {
+      final f = File(path);
+      final exists = await f.exists();
+      final bytes = exists ? await f.length() : 0;
+      line('File: $filename');
+      line('Exists: $exists, size: ${DownloadService.formatBytes(bytes)}');
+      if (!exists || bytes == 0) {
+        likely = 'The model file is missing or empty. Download it again.';
+      }
+      if (exists && bytes > 0 && !isLiteRt && filename.toLowerCase().endsWith('.gguf')) {
+        final raf = await f.open();
+        List<int> head;
+        try {
+          head = await raf.read(8);
+        } finally {
+          await raf.close();
+        }
+        final magic = String.fromCharCodes(head.take(4));
+        line('Header magic: ${magic == 'GGUF' ? 'GGUF (valid)' : 'NOT GGUF ("$magic")'}');
+        if (magic != 'GGUF') {
+          likely ??= 'This file is not a valid GGUF model (wrong header). The download is probably corrupt or it is an HTML error page: delete it and download again.';
+        } else {
+          final info = await readGgufInfo(path);
+          if (info == null) {
+            line('Header details: could not be read (file may be cut short).');
+            likely ??= 'The GGUF header could not be read, so the file is probably incomplete. Delete it and download again.';
+          } else {
+            line('Architecture: ${info.architecture}${info.name != null ? ' (${info.name})' : ''}');
+            line('Layers: ${info.layers}, trained context: ${info.trainedContext}');
+            if (!isSupportedLlamaArch(info.architecture)) {
+              likely ??= 'This app\'s llama.cpp engine does not support the "${info.architecture}" architecture yet, so this model cannot run here. Pick another model.';
+            }
+            final ctx = _hive.getSetting<int>(AppConstants.keyContextSize,
+                    defaultValue: AppConstants.defaultContextSize) ??
+                AppConstants.defaultContextSize;
+            final need = info.estimateBytes(ctx);
+            line('Context size setting: $ctx tokens');
+            line('Estimated memory needed: ${DownloadService.formatBytes(need)}');
+            if (Get.isRegistered<DeviceInfoService>()) {
+              final dev = Get.find<DeviceInfoService>();
+              final total = dev.totalRamGB.value;
+              final avail = dev.availableRamGB.value;
+              line('Phone RAM: ${total.toStringAsFixed(1)} GB total, ${avail.toStringAsFixed(1)} GB free now');
+              if (avail > 0 && need / (1024 * 1024 * 1024) > avail) {
+                likely ??= 'Not enough free memory: it needs about ${(need / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB but only ${avail.toStringAsFixed(1)} GB is free. Close other apps, lower the context size in Settings, or choose a smaller quantisation.';
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      line('Diagnosis itself failed: $e');
+    }
+    final low = error.toLowerCase();
+    if (likely == null) {
+      if (low.contains('out of memory') || low.contains('oom') || low.contains('alloc')) {
+        likely = 'The phone ran out of memory while loading. Lower the context size, close other apps, or use a smaller model.';
+      } else if (low.contains('vulkan') || low.contains('gpu')) {
+        likely = 'The GPU backend failed. Turn on CPU Safe mode in Performance settings and try again.';
+      } else if (low.contains('unknown model architecture') || low.contains('unsupported')) {
+        likely = 'This model type is not supported by the engine in this app version.';
+      } else if (low.contains('mmproj') || low.contains('vision')) {
+        likely = 'The vision projector file did not load. Re-download the matching mmproj file.';
+      }
+    }
+    line('');
+    line('Engine said: $error');
+    return (likely: likely, details: d.toString().trimRight());
   }
 
   Future<int> _modelFileBytes(
@@ -1510,8 +1592,9 @@ class ModelController extends GetxController {
     return 'The native AI engine encountered an unexpected error while loading the model. Please check the technical details below for more information.';
   }
 
-  void _showLoadFailedSheet(String filename, String result) {
-    final friendlyMsg = _getFriendlyErrorMessage(result);
+  void _showLoadFailedSheet(String filename, String result,
+      {({String? likely, String details})? diagnosis}) {
+    final friendlyMsg = diagnosis?.likely ?? _getFriendlyErrorMessage(result);
     final context = Get.context;
     if (context == null) {
       showToast('Model load failed', friendlyMsg,
@@ -1587,7 +1670,7 @@ class ModelController extends GetxController {
                     ? Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Container(
-                          constraints: const BoxConstraints(maxHeight: 180),
+                          constraints: const BoxConstraints(maxHeight: 260),
                           width: double.infinity,
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
@@ -1596,7 +1679,7 @@ class ModelController extends GetxController {
                           ),
                           child: SingleChildScrollView(
                             child: SelectableText(
-                              result,
+                              diagnosis == null ? result : diagnosis.details,
                               style:
                                   t.mono.copyWith(fontSize: 11.5, height: 1.45),
                             ),

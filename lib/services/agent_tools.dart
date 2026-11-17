@@ -13,9 +13,21 @@ class ParsedToolCall {
 /// and surrounding prose; returns null when there is no valid call.
 ParsedToolCall? parseToolCall(String reply) {
   const open = '<tool_call>';
-  final start = reply.indexOf(open);
-  if (start < 0) return null;
-  final jsonStart = reply.indexOf('{', start + open.length);
+  final tag = reply.indexOf(open);
+  var start = tag;
+  var jsonStart = -1;
+  var bare = false;
+  if (tag >= 0) {
+    jsonStart = reply.indexOf('{', tag + open.length);
+  } else {
+    // Small models often forget the tag: accept a bare JSON object (optionally
+    // inside a code fence) that looks like {"name":..., "arguments":{...}}.
+    final m = RegExp(r'\{\s*"(?:name|tool|function)"\s*:').firstMatch(reply);
+    if (m == null) return null;
+    jsonStart = m.start;
+    start = m.start;
+    bare = true;
+  }
   if (jsonStart < 0) return null;
   var depth = 0;
   var inString = false;
@@ -41,13 +53,18 @@ ParsedToolCall? parseToolCall(String reply) {
       if (depth == 0) {
         try {
           final obj = jsonDecode(reply.substring(jsonStart, i + 1));
-          if (obj is Map && obj['name'] is String) {
-            final args = obj['arguments'];
-            return ParsedToolCall(
-              obj['name'] as String,
-              args is Map ? Map<String, dynamic>.from(args) : <String, dynamic>{},
-              reply.substring(0, start).trim(),
-            );
+          if (obj is Map) {
+            final name = obj['name'] ?? obj['tool'] ?? obj['function'];
+            final args = obj['arguments'] ?? obj['parameters'] ?? obj['args'] ?? obj['input'];
+            if (name is String && (!bare || args is Map)) {
+              var before = reply.substring(0, start).trim();
+              before = before.replaceAll(RegExp(r'```\w*\s*$'), '').trim();
+              return ParsedToolCall(
+                name,
+                args is Map ? Map<String, dynamic>.from(args) : <String, dynamic>{},
+                before,
+              );
+            }
           }
         } catch (_) {}
         return null;

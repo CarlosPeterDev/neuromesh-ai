@@ -335,6 +335,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   @override
   void dispose() {
     _ended = true;
+    _micWatchdog?.cancel();
     _cam?.dispose();
     _sub?.cancel();
     _rec.dispose();
@@ -409,13 +410,10 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       }
       _voice.loadWorkerSettings();
       _vad = await _voice.createVad();
-      final stream = await _rec.startStream(const RecordConfig(
-          encoder: AudioEncoder.pcm16bits,
-          sampleRate: _rate,
-          numChannels: 1,
-          echoCancel: true,
-          noiseSuppress: true));
+      final stream = await _rec.startStream(_recConfig);
+      _lastAudio = DateTime.now();
       _sub = stream.listen(_onAudio);
+      _startMicWatchdog();
       _set(_CallState.listening, _listeningText());
     } catch (e) {
       _set(_CallState.error, 'Could not start the call: $e');
@@ -435,6 +433,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   }
 
   void _onAudio(Uint8List bytes) {
+    _lastAudio = DateTime.now();
     if (_ended || _muted) return;
     final chunk = _toFloat(bytes);
 
@@ -563,13 +562,13 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         final low = heard.toLowerCase();
         final at = low.indexOf(_wake);
         if (at < 0) {
-          _set(_CallState.listening, _listeningText());
+          _afterTurn();
           return;
         }
         heard = heard.substring(at + _wake.length).replaceFirst(RegExp(r'^[\s,.!?]+'), '');
       }
       if (heard.isEmpty) {
-        _set(_CallState.listening, _listeningText());
+        _afterTurn();
         return;
       }
       if (mounted) setState(() => _lines.add((me: true, text: heard)));
@@ -651,6 +650,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
           prompt: heard,
           history: List.of(_history),
           confirm: confirmToolCall,
+          userText: heard,
+          researchQuestion: agent.needsResearch(heard) ? heard : null,
           cancelled: () => _ended || _interrupted,
           onVisible: (v) => feed(v),
           onStatus: (st) {
@@ -673,23 +674,64 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       if (liveIdx == null && clean.isNotEmpty && mounted) {
         setState(() => _lines.add((me: false, text: clean)));
       }
-      await speakingDone;
+      // Never wait forever for the voice to finish: a lost completion callback
+      // used to leave the call deaf to every later question.
+      await speakingDone.timeout(const Duration(seconds: 180), onTimeout: () {
+        _voice.stopSpeaking();
+      });
     } catch (e) {
-      _speaking = false;
-      _busy = false;
-      _set(_CallState.error, 'Something went wrong: $e');
-      return;
+      // Show the problem but keep the call alive so the next question works.
+      if (mounted) setState(() => _lines.add((me: false, text: '⚠️ $e')));
     }
-    _speaking = false;
-    _busy = false;
-    _preRoll.clear();
-    _vadBuf.clear();
-    _vad?.reset();
-    _set(_CallState.listening, _listeningText());
+    _afterTurn();
     if (_pending.isNotEmpty && !_ended) {
       final next = _pending.removeAt(0);
       unawaited(_turn(next));
     }
+  }
+
+  /// Gets the call ready to hear the next question: clears every buffer and
+  /// detector state left over from the last one.
+  void _afterTurn() {
+    _speaking = false;
+    _busy = false;
+    _interrupted = false;
+    _inSpeech = false;
+    _silentSamples = 0;
+    _bargeFrames = 0;
+    _speech.clear();
+    _preRoll.clear();
+    _vadBuf.clear();
+    try {
+      _vad?.reset();
+    } catch (_) {}
+    _set(_CallState.listening, _listeningText());
+  }
+
+  static const _recConfig = RecordConfig(
+      encoder: AudioEncoder.pcm16bits,
+      sampleRate: _rate,
+      numChannels: 1,
+      echoCancel: true,
+      noiseSuppress: true);
+  DateTime _lastAudio = DateTime.now();
+  Timer? _micWatchdog;
+
+  /// Android can silently stop the microphone when the voice starts playing.
+  /// If no audio arrives for a few seconds, open the microphone again.
+  void _startMicWatchdog() {
+    _micWatchdog?.cancel();
+    _micWatchdog = Timer.periodic(const Duration(seconds: 3), (_) async {
+      if (_ended || _muted) return;
+      if (DateTime.now().difference(_lastAudio) < const Duration(seconds: 4)) return;
+      try {
+        await _sub?.cancel();
+        await _rec.stop();
+        final stream = await _rec.startStream(_recConfig);
+        _lastAudio = DateTime.now();
+        _sub = stream.listen(_onAudio);
+      } catch (_) {}
+    });
   }
 
   Future<void> _toggleLang() async {
