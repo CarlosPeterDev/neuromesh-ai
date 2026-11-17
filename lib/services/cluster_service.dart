@@ -151,7 +151,12 @@ class ClusterService extends GetxService {
       if (!Get.isRegistered<ModelController>()) return;
       final inference = Get.find<InferenceService>();
       if (inference.isLoadingModel.value || inference.isGenerating.value) return;
-      final lost = await relocateWorkers();
+      List<ClusterWorker> lost;
+      try {
+        lost = await relocateWorkers();
+      } catch (_) {
+        return;
+      }
       if (lost.isEmpty) return;
       final file = _hive.getSetting<String>(AppConstants.keyLocalModelName);
       if (file == null || file.isEmpty) return;

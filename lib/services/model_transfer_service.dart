@@ -600,7 +600,7 @@ class ModelTransferClient {
       _done += have;
       final sink = part.openWrite(mode: have > 0 ? FileMode.append : FileMode.write);
       try {
-        await for (final chunk in res.stream) {
+        await for (final chunk in res.stream.timeout(const Duration(seconds: 30))) {
           if (_cancel) throw TransferCancelled();
           sink.add(chunk);
           _done += chunk.length;

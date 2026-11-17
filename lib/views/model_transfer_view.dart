@@ -167,7 +167,7 @@ class _ReceiveTabState extends State<_ReceiveTab> {
       for (final it in items) {
         if (await c.haveLocally(it)) have.add(it.id);
       }
-      setState(() {
+      if (mounted) setState(() {
         _client = c;
         _items = items;
         _have
@@ -178,7 +178,7 @@ class _ReceiveTabState extends State<_ReceiveTab> {
           ..addAll(items.where((i) => !have.contains(i.id)).map((i) => i.id));
       });
     } catch (e) {
-      setState(() => _error = '$e');
+      if (mounted) setState(() => _error = '$e');
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -197,13 +197,13 @@ class _ReceiveTabState extends State<_ReceiveTab> {
       final failed = await c.download(chosen, onProgress: (p) {
         if (mounted) setState(() => _progress = p);
       });
-      setState(() => _result = failed.isEmpty
+      if (mounted) setState(() => _result = failed.isEmpty
           ? 'Done. The models are installed.'
           : 'Finished with problems:\n${failed.join('\n')}');
     } on TransferCancelled {
-      setState(() => _result = 'Stopped.');
+      if (mounted) setState(() => _result = 'Stopped.');
     } catch (e) {
-      setState(() => _error = '$e');
+      if (mounted) setState(() => _error = '$e');
     }
     if (mounted) setState(() => _progress = null);
   }

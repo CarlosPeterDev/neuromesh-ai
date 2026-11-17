@@ -460,16 +460,20 @@ class ChatController extends GetxController {
       if (result == null) return;
       final file = result.files.single;
       final extension = file.extension?.toLowerCase() ?? '';
-      final fileType = _attachmentTypeForExtension(extension);
+      var fileType = _attachmentTypeForExtension(extension);
 
-      // Reject unsupported or extension-less files
+      // A text-only model cannot look at pictures or listen, but the agent can
+      // work on the file with its tools (transcribe_audio, the sandbox, ...).
       if (documentsOnly && (fileType == 'image' || fileType == 'audio')) {
-        showToast(
-          'Not supported by this model',
-          'This model reads text only. Attach a PDF, DOCX, or text/code file.',
-          tone: ToastTone.warning,
-        );
-        return;
+        if (kIsWeb || Get.find<AgentService>().mode.value == AgentChatMode.off) {
+          showToast(
+            'Not supported by this model',
+            'This model reads text only. Attach a PDF, DOCX, or text/code file, or turn tools on so the AI can process this file.',
+            tone: ToastTone.warning,
+          );
+          return;
+        }
+        fileType = 'file';
       }
 
       if (fileType == 'file' &&
@@ -775,8 +779,16 @@ class ChatController extends GetxController {
         : visibleText;
     if (workspaceName != null && (!hasInline || truncated)) {
       final size = fileSize > 0 ? ' (${DownloadService.formatBytes(fileSize)})' : '';
+      final ext = (fileName.contains('.') ? fileName.split('.').last : '').toLowerCase();
+      const audioExt = {'mp3', 'm4a', 'wav', 'aac', 'ogg', 'flac', 'mp4', 'mkv', 'webm', 'mov'};
+      const imageExt = {'png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', 'bmp'};
+      final hint = audioExt.contains(ext)
+          ? 'It is audio/video: use transcribe_audio to get the text.'
+          : imageExt.contains(ext)
+              ? 'It is a picture: you cannot see it, but you can read text in it with the sandbox (tesseract OCR) when available, or convert it with convert_file.'
+              : 'Use file_info, read_file and search_in_file to look inside it; for archives, spreadsheets or other formats use unzip_file, convert_file or the sandbox.';
       final note = 'The attached file "$fileName"$size is saved in your workspace as '
-          '"$workspaceName". Use file_info, read_file and search_in_file to look inside it.';
+          '"$workspaceName". $hint';
       effectiveText = hasInline
           ? '$effectiveText\n\n(Only the start is shown. $note)'
           : '$visibleText\n\nAttached file: $fileName\n$note';

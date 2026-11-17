@@ -69,7 +69,14 @@ class McpOAuth {
   }
 
   /// Gets a new access token with the stored refresh token.
-  static Future<String?> refresh(String serverUrl) async {
+  static final _inflight = <String, Future<String?>>{};
+
+  /// One refresh at a time per server: servers that rotate refresh tokens
+  /// reject a second parallel use of the same token.
+  static Future<String?> refresh(String serverUrl) => _inflight.putIfAbsent(
+      serverUrl, () => _refresh(serverUrl).whenComplete(() => _inflight.remove(serverUrl)));
+
+  static Future<String?> _refresh(String serverUrl) async {
     final rec = _load(serverUrl);
     if (rec == null) return null;
     final rt = '${rec['refresh'] ?? ''}';
@@ -86,6 +93,14 @@ class McpOAuth {
         'client_id': cid,
         if ('${rec['clientSecret'] ?? ''}'.isNotEmpty) 'client_secret': '${rec['clientSecret']}',
       }).timeout(const Duration(seconds: 20));
+      if (res.statusCode == 400 || res.statusCode == 401) {
+        // The refresh token is no longer valid: forget it so the app shows
+        // "sign in again" instead of retrying forever.
+        rec['refresh'] = '';
+        rec['access'] = '';
+        await _save(serverUrl, rec);
+        return null;
+      }
       if (res.statusCode != 200) return null;
       final j = jsonDecode(res.body) as Map<String, dynamic>;
       final access = '${j['access_token'] ?? ''}';
@@ -203,6 +218,14 @@ class McpOAuth {
     final authEndpoint = '${meta['authorization_endpoint']}';
     final tokenEndpoint = '${meta['token_endpoint']}';
     final regEndpoint = '${meta['registration_endpoint'] ?? ''}';
+    bool safe(String u) {
+      final x = Uri.tryParse(u);
+      return x != null && (x.scheme == 'https' || (x.scheme == 'http' && (x.host == 'localhost' || x.host == '127.0.0.1')));
+    }
+
+    if (!safe(authEndpoint) || !safe(tokenEndpoint) || (regEndpoint.isNotEmpty && !safe(regEndpoint))) {
+      throw McpOAuthException('This server uses an insecure sign-in address (not https), so sign-in was stopped.');
+    }
     if (regEndpoint.isEmpty) {
       throw McpOAuthException(
           'This server does not allow automatic sign-in. Use a token or header instead.');
@@ -260,6 +283,7 @@ class McpOAuth {
 
       onStatus?.call('Waiting for you to sign in in the browser…');
       final codeFuture = _awaitCode(listener, state);
+      codeFuture.ignore(); // errors are reported where it is awaited below
       final opened = await launchUrl(authUri, mode: LaunchMode.externalApplication);
       if (!opened) throw McpOAuthException('Could not open the browser.');
       final code = await codeFuture.timeout(const Duration(minutes: 5),
@@ -318,6 +342,12 @@ class McpOAuth {
         continue;
       }
       final q = req.uri.queryParameters;
+      if (q['state'] != state) {
+        // Not our redirect (another app or page poked the port): ignore it.
+        req.response.statusCode = 400;
+        await req.response.close();
+        continue;
+      }
       final error = q['error'];
       final good = error == null && q['state'] == state && (q['code'] ?? '').isNotEmpty;
       req.response.headers.contentType = ContentType.html;
@@ -328,8 +358,9 @@ class McpOAuth {
       if (error != null) {
         throw McpOAuthException('Sign-in was cancelled: ${q['error_description'] ?? error}');
       }
-      if (q['state'] != state) throw McpOAuthException('Sign-in answer did not match. Try again.');
-      return q['code']!;
+      final code = q['code'];
+      if (code == null || code.isEmpty) throw McpOAuthException('The server sent no sign-in code. Try again.');
+      return code;
     }
     throw McpOAuthException('Sign-in was interrupted.');
   }

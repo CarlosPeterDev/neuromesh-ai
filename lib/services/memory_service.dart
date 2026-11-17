@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 
+import '../controllers/chat_controller.dart';
 import 'agent_service.dart';
 import 'hive_service.dart';
 import 'inference_service.dart';
@@ -144,6 +145,12 @@ class MemoryService extends GetxService with WidgetsBindingObserver {
           : done('The model is busy right now. Try again in a moment.');
     }
 
+    // A background run must never get in the way of a chat in progress.
+    if (silentWhenUnavailable && Get.isRegistered<ChatController>()) {
+      final chat = Get.find<ChatController>();
+      if (chat.isLoading.value || chat.isStreaming.value) return status.value;
+    }
+
     running.value = true;
     try {
       final lastTs = _hive.getSetting<int>(_kLastTs) ?? 0;
@@ -180,11 +187,20 @@ class MemoryService extends GetxService with WidgetsBindingObserver {
         stopSequences: const [],
         onToken: (_) {},
       );
-      try {
-        await inf.resetConversation();
-      } catch (_) {}
+      // Clear what this run left in the engine, but not if the user's own
+      // chat has started generating in the meantime.
+      final chatBusy = Get.isRegistered<ChatController>() &&
+          (Get.find<ChatController>().isLoading.value || Get.find<ChatController>().isStreaming.value);
+      if (!chatBusy && !inf.isGenerating.value) {
+        try {
+          await inf.resetConversation();
+        } catch (_) {}
+      }
       raw = raw.trim();
-      if (raw.startsWith('ERROR')) return done('The model could not run: $raw');
+      if (raw.startsWith('ERROR')) {
+        await _markRun(lastTs); // wait for the next interval instead of retrying every 15 min
+        return done('The model could not run: $raw');
+      }
 
       final added = await _merge(parseFacts(raw));
       await _markRun(fresh.newestTs);
@@ -209,7 +225,9 @@ class MemoryService extends GetxService with WidgetsBindingObserver {
     for (final v in _hive.messagesBox.values) {
       if (v is! Map) continue;
       final role = '${v['role']}';
-      if (role != 'user' && role != 'assistant') continue;
+      // Only the user's own words: assistant text may quote web pages, and a
+      // hostile page must not be able to write "facts" into memory.
+      if (role != 'user') continue;
       var content = '${v['content'] ?? ''}'.trim();
       if (content.isEmpty ||
           content.startsWith('[IMAGE_BASE64]') ||

@@ -26,6 +26,8 @@ class TunnelService extends GetxService {
   final url = ''.obs;
 
   bool _want = false;
+  int _gen = 0;
+  Future<void>? _loopFuture;
   SSHClient? _client;
   SSHRemoteForward? _forward;
 
@@ -36,16 +38,28 @@ class TunnelService extends GetxService {
   Future<void> start() async {
     if (_want || !supported) return;
     _want = true;
+    final gen = ++_gen;
     running.value = true;
     final sc = Get.find<ServerController>();
-    if (!sc.useApiKey.value) sc.useApiKey.value = true;
+    // Anyone with the link can reach the API, so a key is mandatory: switch it
+    // on, generate one if needed and push it to a server that is already running.
+    sc.useApiKey.value = true;
+    await sc.saveSettings();
     if (!sc.isRunning.value) await sc.startServer();
+    if (!_want || gen != _gen) return; // stopped while starting
     await _keepProcessAlive(true);
-    unawaited(_loop());
+    final prev = _loopFuture;
+    _loopFuture = () async {
+      try {
+        await prev;
+      } catch (_) {}
+      if (_want && gen == _gen) await _loop(gen);
+    }();
   }
 
   Future<void> stop() async {
     _want = false;
+    _gen++;
     running.value = false;
     status.value = 'Off';
     url.value = '';
@@ -78,16 +92,17 @@ class TunnelService extends GetxService {
     } catch (_) {}
   }
 
-  Future<void> _loop() async {
+  Future<void> _loop(int gen) async {
     var wait = 2;
-    while (_want) {
+    while (_want && gen == _gen) {
       try {
         status.value = 'Connecting…';
-        await _connectOnce();
+        await _connectOnce(gen);
         wait = 2;
       } catch (e) {
-        status.value = 'Disconnected: ${'$e'.split('\n').first}';
+        if (gen == _gen) status.value = 'Disconnected: ${'$e'.split('\n').first}';
       }
+      if (gen != _gen) break;
       url.value = '';
       if (!_want) break;
       await Future.delayed(Duration(seconds: wait));
@@ -95,22 +110,42 @@ class TunnelService extends GetxService {
     }
   }
 
-  Future<void> _connectOnce() async {
-    final socket = await SSHSocket.connect('localhost.run', 22,
-        timeout: const Duration(seconds: 15));
-    final client = SSHClient(
-      socket,
-      username: 'nokey',
-      onPasswordRequest: () => '',
-      keepAliveInterval: const Duration(seconds: 20),
-    );
-    _client = client;
-    await client.authenticated;
+  Future<void> _connectOnce(int gen) async {
+    SSHClient? client;
+    SSHRemoteForward? fwd;
+    try {
+      final socket = await SSHSocket.connect('localhost.run', 22,
+          timeout: const Duration(seconds: 15));
+      client = SSHClient(
+        socket,
+        username: 'nokey',
+        onPasswordRequest: () => '',
+        keepAliveInterval: const Duration(seconds: 20),
+      );
+      _client = client;
+      await client.authenticated;
+      if (gen != _gen) throw Exception('stopped');
 
-    // Ask the server to listen on port 80 and send us every connection.
-    final fwd = await client.forwardRemote(port: 80);
-    if (fwd == null) throw Exception('localhost.run refused the tunnel');
-    _forward = fwd;
+      // Ask the server to listen on port 80 and send us every connection.
+      fwd = await client.forwardRemote(port: 80);
+      if (fwd == null) throw Exception('localhost.run refused the tunnel');
+      if (gen != _gen) throw Exception('stopped');
+      _forward = fwd;
+      await _serve(client, fwd, gen);
+    } finally {
+      // Never leave a half-open connection behind, whatever went wrong.
+      try {
+        fwd?.close();
+      } catch (_) {}
+      try {
+        client?.close();
+      } catch (_) {}
+      if (identical(_client, client)) _client = null;
+      if (identical(_forward, fwd)) _forward = null;
+    }
+  }
+
+  Future<void> _serve(SSHClient client, SSHRemoteForward fwd, int gen) async {
     final port = ServerController.port;
     fwd.connections.listen((conn) async {
       try {
