@@ -779,7 +779,8 @@ class ChatController extends GetxController {
         : visibleText;
     if (workspaceName != null && (!hasInline || truncated)) {
       final size = fileSize > 0 ? ' (${DownloadService.formatBytes(fileSize)})' : '';
-      final ext = (fileName.contains('.') ? fileName.split('.').last : '').toLowerCase();
+      final fnm = fileName ?? '';
+      final ext = (fnm.contains('.') ? fnm.split('.').last : '').toLowerCase();
       const audioExt = {'mp3', 'm4a', 'wav', 'aac', 'ogg', 'flac', 'mp4', 'mkv', 'webm', 'mov'};
       const imageExt = {'png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', 'bmp'};
       final hint = audioExt.contains(ext)
