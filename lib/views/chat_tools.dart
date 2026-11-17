@@ -11,6 +11,7 @@ import '../services/mcp_client.dart';
 import '../services/mcp_presets.dart';
 import '../services/user_files.dart';
 import '../utils/mcp_import.dart';
+import '../services/mcp_oauth.dart';
 
 /// Everything about what the chat AI may do: when it uses tools, what it
 /// remembers, which folders it can see, per-tool permissions and MCP
@@ -302,6 +303,32 @@ class _ChatToolsViewState extends State<ChatToolsView> {
                     child: const Text('Get a token')),
               ),
           ],
+          OutlinedButton.icon(
+            icon: const Icon(Icons.login_rounded),
+            label: const Text('Sign in with browser instead (no token)'),
+            onPressed: busy
+                ? null
+                : () async {
+                    final u = presetUrl(p, {for (final e in fields.entries) e.key: e.value.text});
+                    setS(() {
+                      busy = true;
+                      error = null;
+                    });
+                    try {
+                      await McpOAuth.signIn(u);
+                      final cfg = McpServerConfig(id: 'test', name: p.name, url: u, token: '');
+                      final tools = await _agent.testServer(cfg);
+                      await _agent.addServer(cfg.name, cfg.url, '');
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      showToast('Connected', '${p.name}: ${tools.length} tools', tone: ToastTone.success);
+                    } catch (e) {
+                      setS(() {
+                        busy = false;
+                        error = '$e';
+                      });
+                    }
+                  },
+          ),
           for (final f in p.fields) ...[
             const SizedBox(height: 8),
             TextField(
@@ -317,8 +344,10 @@ class _ChatToolsViewState extends State<ChatToolsView> {
             label: 'Connect',
             busy: busy,
             onPressed: () async {
-              if (p.tokenLabel != null && token.text.trim().isEmpty) {
-                setS(() => error = 'Paste a token first.');
+              if (p.tokenLabel != null &&
+                  token.text.trim().isEmpty &&
+                  !McpOAuth.hasTokens(presetUrl(p, {for (final e in fields.entries) e.key: e.value.text}))) {
+                setS(() => error = 'Paste a token, or use "Sign in with browser".');
                 return;
               }
               final cfg = McpServerConfig(
@@ -445,7 +474,48 @@ class _ChatToolsViewState extends State<ChatToolsView> {
               controller: token,
               obscureText: true,
               decoration: appInputDecoration(ctx, label: 'Bearer token (optional)')),
-          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              icon: const Icon(Icons.login_rounded, size: 18),
+              label: Text(McpOAuth.hasTokens(url.text.trim())
+                  ? 'Signed in · sign in again'
+                  : 'Sign in with browser (no token)'),
+              onPressed: busy
+                  ? null
+                  : () async {
+                      final u = url.text.trim();
+                      if (u.isEmpty) {
+                        setS(() {
+                          ok = false;
+                          result = 'Enter the server URL first.';
+                        });
+                        return;
+                      }
+                      setS(() {
+                        busy = true;
+                        ok = true;
+                        result = 'Opening your browser…';
+                      });
+                      try {
+                        await McpOAuth.signIn(u, onStatus: (m) => setS(() => result = m));
+                        final tools = await _agent.testServer(build());
+                        setS(() {
+                          ok = true;
+                          result = 'Signed in. ${tools.length} tools available.';
+                        });
+                      } catch (e) {
+                        setS(() {
+                          ok = false;
+                          result = '$e';
+                        });
+                      } finally {
+                        setS(() => busy = false);
+                      }
+                    },
+            ),
+          ),
+          const SizedBox(height: 4),
           TextField(
               controller: headers,
               minLines: 1,

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'mcp_oauth.dart';
 
 class McpException implements Exception {
   final String message;
@@ -139,7 +140,7 @@ class McpHttpException extends McpException {
 ///  * Streamable HTTP (current standard: POST, answer as JSON or an SSE body)
 ///  * legacy HTTP+SSE (GET a stream, then POST to the endpoint it announces)
 /// The transport is detected automatically. Custom headers and Bearer tokens
-/// are supported; servers that only offer browser sign-in (OAuth) are not.
+/// are supported, and so is browser sign-in (OAuth) through [McpOAuth].
 class McpClient {
   McpClient(this.config, {http.Client? client}) : _client = client ?? http.Client();
 
@@ -158,18 +159,33 @@ class McpClient {
 
   static const _timeout = Duration(seconds: 30);
 
+  /// Access token from the browser sign-in (OAuth), when the user signed in.
+  String? _oauthToken;
+
+  Future<void> _refreshOAuth() async {
+    if (config.token.isNotEmpty) return;
+    try {
+      _oauthToken = await McpOAuth.accessToken(config.url);
+    } catch (_) {
+      _oauthToken = null;
+    }
+  }
+
   Map<String, String> get _headers => {
         'Content-Type': 'application/json',
         'Accept': 'application/json, text/event-stream',
         'MCP-Protocol-Version': _protocol,
         ...config.headers,
         if (config.token.isNotEmpty && !config.headers.keys.any((k) => k.toLowerCase() == 'authorization'))
-          'Authorization': 'Bearer ${config.token}',
+          'Authorization': 'Bearer ${config.token}'
+        else if (_oauthToken != null && !config.headers.keys.any((k) => k.toLowerCase() == 'authorization'))
+          'Authorization': 'Bearer $_oauthToken',
         if (_sessionId != null) 'Mcp-Session-Id': _sessionId!,
       };
 
   Future<void> initialize() async {
     if (_initialized) return;
+    await _refreshOAuth();
     Map<String, dynamic> result;
     try {
       result = await _rpc('initialize', _initParams());
@@ -299,7 +315,7 @@ class McpClient {
       throw McpHttpException(
           res.statusCode,
           oauth
-              ? '${config.name} needs a sign-in or token (HTTP ${res.statusCode}). Add a token or header; browser sign-in (OAuth) is not supported.'
+              ? '${config.name} needs you to sign in (HTTP ${res.statusCode}). Tap "Sign in" on this server to log in with your browser, no token needed.'
               : '${config.name} rejected the credentials (HTTP ${res.statusCode}).');
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -364,7 +380,9 @@ class McpClient {
         'Accept': 'text/event-stream',
         ...config.headers,
         if (config.token.isNotEmpty && !config.headers.keys.any((k) => k.toLowerCase() == 'authorization'))
-          'Authorization': 'Bearer ${config.token}',
+          'Authorization': 'Bearer ${config.token}'
+        else if (_oauthToken != null)
+          'Authorization': 'Bearer $_oauthToken',
       });
     final http.StreamedResponse res;
     try {
