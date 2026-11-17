@@ -19,6 +19,7 @@ import 'services/user_files.dart';
 import 'services/toolbox_service.dart';
 import 'services/rag_service.dart';
 import 'services/favorites_service.dart';
+import 'services/memory_service.dart';
 import 'services/web_search_service.dart';
 import 'services/device_bridge.dart';
 import 'services/scheduler_service.dart';
@@ -109,6 +110,7 @@ void main() {
     Get.put(ToolboxService());
     Get.put(RagService());
     Get.put(FavoritesService(), permanent: true);
+    MemoryService.ensure();
     Get.put(WebSearchService());
     Get.put(DeviceBridge(), permanent: true);
     Get.put(SchedulerService(), permanent: true);

@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -14,6 +15,8 @@ import '../controllers/settings_controller.dart';
 import '../core/ui.dart';
 import '../services/agent_service.dart';
 import '../services/hive_service.dart';
+import '../services/model_transfer_service.dart';
+import 'model_transfer_view.dart';
 import '../widgets/agent_steps.dart';
 import '../widgets/tool_confirm.dart';
 import '../services/inference_service.dart';
@@ -98,6 +101,34 @@ class _VoiceModelsViewState extends State<VoiceModelsView> {
                 'Voice calls and the agent\'s audio tools run fully on your phone. '
                 'Download any models you like, then tap an installed one to make it the one that is used. '
                 'If no speaking voice is installed, the phone\'s built-in voice is used.'),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+            child: Wrap(spacing: 8, runSpacing: 8, children: [
+              OutlinedButton.icon(
+                icon: const Icon(Icons.file_open_rounded),
+                label: const Text('Import voice model (.zip)'),
+                onPressed: () async {
+                  final r = await FilePicker.pickFiles(
+                      type: FileType.custom, allowedExtensions: ['zip']);
+                  final path = r?.files.single.path;
+                  if (path == null) return;
+                  try {
+                    final m = await _store.importZip(path);
+                    await _store.scan();
+                    Get.snackbar('Imported', m.title);
+                    if (mounted) setState(() {});
+                  } catch (e) {
+                    Get.snackbar('Import failed', '$e');
+                  }
+                },
+              ),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.swap_horiz_rounded),
+                label: const Text('Send / receive on Wi-Fi'),
+                onPressed: () => Get.to(() => const ModelTransferView()),
+              ),
+            ]),
           ),
           const SectionHeader('Listening (speech to text)'),
           group(VoiceKind.stt),
@@ -216,6 +247,18 @@ class _VoiceModelsViewState extends State<VoiceModelsView> {
           : has
               ? Row(mainAxisSize: MainAxisSize.min, children: [
                   if (picked) const Icon(Icons.check_circle_rounded, size: 20),
+                  if (!m.clone && m.kind != VoiceKind.vad)
+                    IconButton(
+                        tooltip: 'Export as .zip (save or send)',
+                        icon: const Icon(Icons.ios_share_rounded),
+                        onPressed: () async {
+                          try {
+                            final msg = await store.exportZip(m);
+                            Get.snackbar('Export', msg);
+                          } catch (e) {
+                            Get.snackbar('Export failed', '$e');
+                          }
+                        }),
                   IconButton(
                       icon: const Icon(Icons.delete_outline),
                       onPressed: () {

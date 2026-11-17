@@ -706,9 +706,12 @@ class ChatController extends GetxController {
     try {
       final summary = (await inf.generate(
         prompt:
-            'Summarise this conversation so it can be continued later. Keep names, facts, decisions, '
-            'numbers, file names and open questions. Be compact (under 250 words). Write only the summary.\n\n$transcript',
-        systemPrompt: 'You write short, faithful conversation summaries.',
+            'Condense this conversation into a BULLET LIST of the important points, so the chat can continue '
+            'without the old messages. One short bullet per item ("- ..."): the user\'s goals and requests, facts and '
+            'numbers, decisions made, files created (with names), results of tools, preferences, and open tasks or '
+            'questions. If the text already starts with an earlier summary, merge its bullets with the new points and '
+            'drop anything outdated. At most 25 bullets, no introduction, no closing sentence — only the bullets.\n\n$transcript',
+        systemPrompt: 'You write faithful, compact bullet-point summaries of conversations.',
         conversationHistory: const [],
         source: 'summary',
         stopSequences: const [],
@@ -730,7 +733,7 @@ class ChatController extends GetxController {
   }
 
   List<Map<String, String>> _summaryPair(String summary) => [
-        {'role': 'user', 'content': '[Summary of our earlier conversation]\n$summary'},
+        {'role': 'user', 'content': '[Key points of our earlier conversation — the older messages were dropped, continue from these]\n$summary'},
         {'role': 'assistant', 'content': 'Understood. I will continue from that.'},
       ];
 

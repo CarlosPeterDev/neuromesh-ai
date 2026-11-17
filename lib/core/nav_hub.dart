@@ -7,6 +7,9 @@ import '../services/sandbox_service.dart';
 import '../views/chat_tools.dart';
 import '../views/cluster_view.dart';
 import '../views/log_view.dart';
+import '../views/memory_view.dart';
+import '../views/model_transfer_view.dart';
+import '../views/roles_view.dart';
 import '../views/perf_views.dart';
 import '../views/relay_view.dart';
 import '../views/scheduled_tasks_view.dart';
@@ -69,10 +72,10 @@ List<NavSection> buildNavSections() => [
             page: () => const ScheduledTasksView()),
         NavEntry('Memory', 'What the AI remembers about you',
             Icons.psychology_alt_rounded,
-            page: () => const ChatToolsView()),
-        NavEntry('Roles & prompts', 'Personas, prompt library, profiles',
+            page: () => const MemoryView()),
+        NavEntry('Roles', 'Your own personas for chats',
             Icons.theater_comedy_outlined,
-            page: () => const ToolboxView()),
+            page: () => const RolesView()),
         if (SandboxService.supported)
           NavEntry('Linux sandbox', 'Run real commands (Pro build)',
               Icons.terminal_rounded,
@@ -87,6 +90,9 @@ List<NavSection> buildNavSections() => [
         NavEntry('Voice models', 'Listening and speaking models',
             Icons.record_voice_over_outlined,
             page: () => const VoiceModelsView()),
+        NavEntry('Transfer models', 'Send models to another device',
+            Icons.swap_horiz_rounded,
+            page: () => const ModelTransferView()),
         NavEntry('Voice cloning', 'Speak in your own voice',
             Icons.mic_external_on_rounded,
             page: () => const VoiceCloneView()),
