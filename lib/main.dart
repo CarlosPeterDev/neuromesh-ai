@@ -24,6 +24,7 @@ import 'services/web_search_service.dart';
 import 'services/device_bridge.dart';
 import 'services/scheduler_service.dart';
 import 'services/relay_service.dart';
+import 'services/agent_extra_tools.dart';
 import 'services/sandbox_service.dart';
 import 'services/desktop_shell.dart';
 import 'services/download_queue.dart';
@@ -127,6 +128,7 @@ void main() {
     Get.put(DownloadService());
     if (UpdateService.isSupported) Get.put(UpdateService(), permanent: true);
     Get.put(LocalImageService());
+    registerExtraTools(Get.find<AgentService>());
     final crashReporting = await Get.putAsync(() => CrashReportingService().init().timeout(
           const Duration(seconds: 10),
           onTimeout: () {

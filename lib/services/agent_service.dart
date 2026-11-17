@@ -245,6 +245,10 @@ class AgentService extends GetxService {
     _extra.add(t);
   }
 
+  void removeTool(String name) => _extra.removeWhere((e) => e.name == name);
+
+  bool hasTool(String name) => _extra.any((e) => e.name == name) || _builtIns.any((e) => e.name == name);
+
   // ── built-in tools ───────────────────────────────────────────────────
 
   UserFilesService? get _user =>
@@ -863,19 +867,24 @@ class AgentService extends GetxService {
       caseSensitive: false);
   static final _askingAboutSelf =
       RegExp(r'\b(you|your|yourself|my|me|i)\b', caseSensitive: false);
+  // Only real fact questions trigger the (slow) automatic web research.
+  // "How do I…", "explain…", "why…", code and chit-chat are answered directly.
   static final _question = RegExp(
-      r'^\s*(what|who|whom|whose|when|where|which|why|how|is|are|was|were|does|do|did|can|could|tell me|give me|list|name|explain|compare)\b|[?؟]\s*$|^\s*(ما|ماذا|من|متى|اين|أين|كيف|لماذا|هل|كم|ايه|إيه|مين|فين|امتى)(\s|$)',
+      r'^\s*(what|who|whom|whose|when|where|which)\b|^\s*(ما|ماذا|من|متى|اين|أين|كم|إيه|ايه|مين|فين|امتى)(\s|$)',
+      caseSensitive: false);
+  static final _notFactual = RegExp(
+      r'\b(explain|how (do|to|can|does)|why|write|code|translate|define|difference|example|story|poem|joke|summari[sz]e|rewrite|fix|debug)\b|```|اشرح|ترجم|اكتب|لخص',
       caseSensitive: false);
 
   /// Questions that ask for information must be answered from the web, not
   /// from the model's (out of date) memory.
   bool needsResearch(String text) {
     final t = text.trim();
-    if (t.length < 8) return false;
+    if (t.length < 12 || t.length > 400) return false;
     final fresh = needsWebSearch(t);
     if (_actionOnly.hasMatch(t) && !fresh) return false;
     if (fresh) return true;
-    if (_askingAboutSelf.hasMatch(t)) return false;
+    if (_notFactual.hasMatch(t) || _askingAboutSelf.hasMatch(t)) return false;
     return _question.hasMatch(t);
   }
 
@@ -897,51 +906,140 @@ class AgentService extends GetxService {
     }
   }
 
-  /// Tool instructions appended to the chat's system prompt.
-  String toolPrompt() {
+  static const _coreTools = {
+    'web_search', 'fetch_url', 'list_files', 'read_file', 'write_file', 'edit_file',
+    'ask_user', 'calculator', 'current_time', 'tool_help',
+  };
+  static final _gVoice = RegExp(r'\b(speak|voice|audio|say|read aloud|aloud|transcri|mp3|wav|m4a|podcast|speech|tts|stt|subtitle)\b|صوت|انطق|فرغ|اقرا بصوت|سجل', caseSensitive: false);
+  static final _gImage = RegExp(r'\b(draw|image|picture|photo|logo|illustration|wallpaper|generate an? )\b|صورة|ارسم|رسم|لوجو', caseSensitive: false);
+  static final _gFiles = RegExp(r'\b(file|files|attached|attachment|zip|unzip|archive|download|copy|rename|append|delete|folder|csv|pdf|docx|json|save)\b|ملف|احفظ|حمل', caseSensitive: false);
+  static final _gMemory = RegExp(r'\b(remember|forget|memory|note)\b|تذكر|انسى|فاكر', caseSensitive: false);
+  static final _gSched = RegExp(r'\b(remind|schedule|every|daily|weekly|later|automat|timer|alarm)\b|ذكرني|جدول|كل يوم|بعد', caseSensitive: false);
+  static final _gDevice = RegExp(r'\b(battery|storage|ram|phone status|temperature|network|wifi)\b|بطارية|ذاكرة', caseSensitive: false);
+  static final _gHttp = RegExp(r'\b(api|http|request|webhook|endpoint|rest|post|curl)\b', caseSensitive: false);
+  static final _gSandbox = RegExp(r'\b(run|execute|command|shell|terminal|install|python|pip|node|npm|script|compile|build|apk|ffmpeg|convert|git|sandbox|linux|tool|program|bash|scrape|ocr|pandoc|imagemagick)\b|شغل|نفذ|ثبت|برنامج|سكربت', caseSensitive: false);
+  static final _gFolders = RegExp(r'\b(folder|directory|project|repo|shared)\b|مجلد|مشروع', caseSensitive: false);
+
+  static bool _isSandboxTool(String n) =>
+      n == 'run_shell' || n.startsWith('sandbox_') || n == 'install_packages' || n == 'run_script' ||
+      n == 'convert_file' || n == 'create_tool' || n == 'list_my_tools' || n == 'delete_my_tool' || n.startsWith('x_');
+
+  /// Which tools to describe for this request. Describing all of them costs a
+  /// small phone model a minute of reading, so only the likely ones are listed;
+  /// the rest stay callable and are named in a short "also available" line.
+  Set<String> _toolsFor(String request, {bool withFiles = false}) {
+    final r = request;
+    final on = <String>{..._coreTools};
+    if (_gVoice.hasMatch(r)) on.addAll(const {'text_to_speech', 'transcribe_audio', 'models_status'});
+    if (_gImage.hasMatch(r)) on.addAll(const {'generate_image', 'models_status'});
+    if (withFiles || _gFiles.hasMatch(r)) {
+      on.addAll(const {'append_file', 'delete_file', 'search_in_file', 'file_info', 'copy_file', 'rename_file', 'zip_files', 'unzip_file', 'download_file', 'search_workspace'});
+    }
+    if (_gMemory.hasMatch(r)) on.addAll(const {'remember', 'forget'});
+    if (_gSched.hasMatch(r)) on.addAll(const {'schedule_task', 'list_schedules', 'cancel_schedule'});
+    if (_gDevice.hasMatch(r)) on.add('device_status');
+    if (_gHttp.hasMatch(r)) on.add('http_request');
+    if (_gFolders.hasMatch(r)) on.addAll(const {'list_folder', 'read_user_file', 'write_user_file', 'edit_user_file'});
+    if (_gSandbox.hasMatch(r)) {
+      for (final t in _allBuiltIns) {
+        if (_isSandboxTool(t.name)) on.add(t.name);
+      }
+    }
+    return on;
+  }
+
+  static String _firstSentence(String d, int max) {
+    final one = d.replaceAll('\n', ' ').trim();
+    final m = RegExp(r'^.*?[.!?](\s|$)').firstMatch(one);
+    final s = m == null ? one : m.group(0)!.trim();
+    return s.length > max ? '${s.substring(0, max)}…' : s;
+  }
+
+  /// Tool instructions appended to the chat's system prompt. Kept short on
+  /// purpose: every character is read by the model before each answer.
+  String toolPrompt({String request = '', bool withFiles = false}) {
+    final on = _toolsFor(request, withFiles: withFiles);
     final b = StringBuffer()
-      ..writeln('You are an AGENT running inside the NeuroMesh AI app on the user\'s own device. Your tools really run and return real results — you can search the web, read pages, create and edit files, run commands (when a shell tool is listed), speak, transcribe, draw images, schedule tasks and use the user\'s shared folders. Work like a careful engineer: decide what the next step is, call ONE tool, read its result, then continue until the task is truly finished.')
-      ..writeln()
-      ..writeln('HOW TO CALL A TOOL: reply with ONLY this (no text before or after):')
-      ..writeln('<tool_call>{"name":"TOOL_NAME","arguments":{...}}</tool_call>')
-      ..writeln('You will receive the tool result, then you decide the next step. WHEN THE TASK IS FINISHED, reply with the final answer in normal text and call NO tool — that is how you end the loop.')
-      ..writeln()
-      ..writeln('RULES')
-      ..writeln('1. Never pretend. Do not say you created, ran, saved or found something unless a tool result confirms it. If asked to create a file, call write_file — never just print the content in the chat.')
-      ..writeln('2. If the user asks for information (facts, news, versions, prices, people, how something works today) you MUST search the web first: web_search, then fetch_url on the best results, and search again with different words if the answer is thin. Your own memory of recent events is out of date. Answer only from what you found, give specific names, dates and numbers, prefer the newest source, and cite sources like [1].')
-      ..writeln('3. Files: your workspace holds the user\'s attachments and every file you create. To show or hand over a file write [📎 name](nmfile:name); to show an image write ![description](nmfile:name). Shared folders: list_folder, read_user_file, edit_user_file, write_user_file. To change an existing file: read it, then edit_file / edit_user_file, then read it again to verify.')
-      ..writeln('4. Other models are your tools: text_to_speech makes an audio file, transcribe_audio turns audio/video into text, generate_image draws a picture (the app swaps the image model in by itself). Use them whenever the user asks for audio, a transcript or an image.')
-      ..writeln('5. If a tool returns an error, read it, fix the arguments and try something different. Never repeat an identical call. If you need a detail only the user has, call ask_user.')
-      ..writeln('6. Break big requests into steps and do them one after another. Do not stop after the first tool if more is needed; do not keep calling tools once you have what you need.')
-      ..writeln('7. Call tool_help if you are unsure what a tool does.')
-      ..writeln()
-      ..writeln('EXAMPLES')
-      ..writeln('User: create notes.txt that says hello  ->  <tool_call>{"name":"write_file","arguments":{"name":"notes.txt","content":"hello"}}</tool_call>  ->  (after the result) Done — I created notes.txt. [📎 notes.txt](nmfile:notes.txt)')
-      ..writeln('User: who won the latest world cup?  ->  <tool_call>{"name":"web_search","arguments":{"query":"latest world cup winner"}}</tool_call>  ->  then fetch_url the best result  ->  final answer with the facts and sources.')
-      ..writeln()
+      ..writeln('You are an AGENT inside the NeuroMesh AI app on the user\'s device. Your tools really run.')
+      ..writeln('To use a tool reply with ONLY: <tool_call>{"name":"TOOL","arguments":{...}}</tool_call>')
+      ..writeln('Then read the result and continue. When the task is done, answer in plain text with NO tool call.')
+      ..writeln('Rules: 1) Never claim you did something unless a tool result confirms it; to create a file call write_file, never just print it. '
+          '2) For facts, news, versions or prices search first (web_search, then fetch_url), answer only from what you found and cite [1]. '
+          '3) Show files with [📎 name](nmfile:name) and images with ![desc](nmfile:name). '
+          '4) After an error change the arguments; never repeat the same call; use ask_user if only the user knows. '
+          '5) Do big jobs step by step.')
+      ..writeln('Example: create notes.txt saying hi -> <tool_call>{"name":"write_file","arguments":{"name":"notes.txt","content":"hi"}}</tool_call>')
       ..writeln('Tools:');
+    final listed = <String>{};
     for (final t in _allBuiltIns) {
-      b.writeln('- ${t.name}: ${t.description} arguments: ${t.params}');
+      if (!on.contains(t.name)) continue;
+      listed.add(t.name);
+      final params = t.params.length > 160 ? '${t.params.substring(0, 160)}…' : t.params;
+      b.writeln('- ${t.name}: ${_firstSentence(t.description, 170)} ${t.params == '{}' ? '' : params}');
     }
-    for (final t in _enabledMcpTools) {
-      final d = t.description.replaceAll('\n', ' ');
-      b.writeln('- ${t.qualifiedName}: ${d.length > 220 ? '${d.substring(0, 220)}…' : d} arguments: ${t.signature}');
+    final mentioned = <String>{};
+    final lower = request.toLowerCase();
+    final mcp = _enabledMcpTools.toList();
+    for (final t in mcp) {
+      final srv = servers.where((s) => s.id == t.serverId);
+      final name = srv.isEmpty ? '' : srv.first.name.toLowerCase();
+      if (mode.value == AgentChatMode.always && mcp.length <= 8 || (name.isNotEmpty && lower.contains(name))) {
+        mentioned.add(t.qualifiedName);
+        final d = t.description.replaceAll('\n', ' ');
+        b.writeln('- ${t.qualifiedName}: ${d.length > 140 ? '${d.substring(0, 140)}…' : d} ${t.signature}');
+      }
     }
-    if (_hasFolders) {
-      b
-        ..writeln()
-        ..writeln('Shared folders: ${_user!.folders.map((f) => f.name).join(', ')}');
+    final others = [
+      for (final t in _allBuiltIns)
+        if (!listed.contains(t.name) && t.name != 'tool_help') t.name,
+      for (final t in mcp)
+        if (!mentioned.contains(t.qualifiedName)) t.qualifiedName,
+    ];
+    if (others.isNotEmpty) {
+      final shown = others.take(40).join(', ');
+      b.writeln('Also available (call tool_help with a name for details, or just call them): $shown${others.length > 40 ? ', …' : ''}');
+    }
+    if (_hasFolders) b.writeln('Shared folders: ${_user!.folders.map((f) => f.name).join(', ')}');
+    if (on.any(_isSandboxTool)) {
+      b.writeln('The sandbox is one shared Linux for all chats: install what you need (install_packages), run code with run_script, and save reusable tools with create_tool.');
     }
     return b.toString().trimRight();
   }
 
+  /// Trims [hist] and [prompt] so the whole request fits the model's context
+  /// with room left to answer; an overflow makes small models fail or go silent.
+  /// Returns the (possibly shortened) prompt.
+  String fitToContext(String system, List<Map<String, String>> hist, String prompt, int ctxTokens) {
+    if (ctxTokens <= 0) return prompt;
+    int est(String t) => (t.length / 2.8).ceil();
+    final budget = (ctxTokens * 0.68).floor() - 120;
+    int total() => est(system) + hist.fold<int>(0, (a, m) => a + est(m['content'] ?? ''));
+    // Drop the oldest turns first (keep the last message).
+    while (total() > budget && hist.length > 2) {
+      hist.removeAt(0);
+      if (hist.isNotEmpty && hist.first['role'] != 'user') hist.removeAt(0);
+    }
+    if (total() > budget && hist.isNotEmpty) {
+      final over = ((total() - budget) * 2.8).ceil();
+      final cur = hist.last['content'] ?? '';
+      final keep = (cur.length - over).clamp(400, cur.length);
+      if (keep < cur.length) {
+        final head = (keep * 0.55).floor();
+        final cut = '${cur.substring(0, head)}\n…(shortened to fit memory)…\n${cur.substring(cur.length - (keep - head))}';
+        if (hist.last['content'] == prompt) prompt = cut;
+        hist.last['content'] = cut;
+      }
+    }
+    return prompt;
+  }
+
   /// System prompt for a chat turn: the chat's own prompt, saved memory, and
   /// (when [withTools]) the tool instructions.
-  String composeSystem(String base, {required bool withTools}) {
+  String composeSystem(String base, {required bool withTools, String request = '', bool withFiles = false}) {
     final b = StringBuffer(base);
     final mem = memoryBlock();
     if (mem.isNotEmpty) b.write('\n\n$mem');
-    if (withTools) b.write('\n\n${toolPrompt()}');
+    if (withTools) b.write('\n\n${toolPrompt(request: request, withFiles: withFiles)}');
     return b.toString();
   }
 
@@ -1041,6 +1139,21 @@ class AgentService extends GetxService {
         if (!ranTool) {
           final fb = await _fallbackFile(request, last, confirm, trace, onTrace);
           if (fb != null) return fb;
+        }
+        if (last.trim().isEmpty && ranTool && nudges < 3) {
+          // The model ran its tools and then said nothing: ask once more.
+          nudges++;
+          onStatus('Writing the answer…');
+          hist.add({'role': 'assistant', 'content': '(no answer)'});
+          current = 'Write the final answer for the user now, in plain text, using the tool results above. Do not call a tool.';
+          hist.add({'role': 'user', 'content': current});
+          continue;
+        }
+        if (last.trim().isEmpty) {
+          return ToolLoopResult(
+              'The model produced no answer. This usually means the model ran out of memory or context. Try a smaller question, a new chat, or a lower context size in Settings.',
+              trace,
+              false);
         }
         return ToolLoopResult(
             _autoLinkFiles(_withSources(last, sources), trace), trace, false);
@@ -1174,7 +1287,7 @@ class AgentService extends GetxService {
     final web = Get.find<WebSearchService>();
     final fresh = web.freshnessFor(question);
     final all = <WebResult>[];
-    for (final q in web.researchQueries(question)) {
+    for (final q in web.researchQueries(question).take(2)) {
       if (cancelled()) return null;
       final args = {'query': q};
       final label = stepLabel('web_search', args);
@@ -1183,18 +1296,18 @@ class AgentService extends GetxService {
       final sw = Stopwatch()..start();
       trace.add(stepLine('web_search', args, label, null, running: true));
       onTrace?.call(List.of(trace));
-      final r = await web.search(q, max: 8, freshness: fresh);
+      final r = await web.search(q, max: 6, freshness: fresh);
       all.addAll(r);
       trace[idx] = stepLine('web_search', args, label,
           r.isEmpty ? 'No results.' : r.map((e) => '${e.title}\n${e.url}\n${e.snippet}').join('\n\n'),
           ms: sw.elapsedMilliseconds);
       onTrace?.call(List.of(trace));
     }
-    final results = dedupeByHost(all, (r) => r.url).take(6).toList();
+    final results = dedupeByHost(all, (r) => r.url).take(5).toList();
     if (results.isEmpty) return null;
     final query = searchQuery(question);
     final texts = <String>[];
-    for (final r in results.take(3)) {
+    for (final r in results.take(2)) {
       if (cancelled()) return null;
       final args = {'url': r.url};
       final label = stepLabel('fetch_url', args);
@@ -1203,7 +1316,7 @@ class AgentService extends GetxService {
       final sw = Stopwatch()..start();
       trace.add(stepLine('fetch_url', args, label, null, running: true));
       onTrace?.call(List.of(trace));
-      final t = await web.pageText(r.url, query, maxChars: 1800);
+      final t = await web.pageText(r.url, query, maxChars: 1300);
       texts.add(t);
       trace[idx] = stepLine('fetch_url', args, label, t.isEmpty ? '(could not read this page)' : t,
           ms: sw.elapsedMilliseconds);
@@ -1217,9 +1330,8 @@ class AgentService extends GetxService {
       final body = i < texts.length && texts[i].length > r.snippet.length ? texts[i] : r.snippet;
       b.writeln('\n[${i + 1}] ${r.title} (${r.url})\n$body');
     }
-    b.writeln('\nNow answer the user in their language: complete, specific and detailed (names, versions, dates, numbers taken from the sources) — never a one-word answer. '
-        'Prefer the NEWEST information by date and say so if sources disagree. Cite sources like [1]. '
-        'If these sources do not contain the answer, call web_search again with different wording or fetch_url a better page; do not guess.');
+    b.writeln('\nAnswer in the user\'s language, specific (names, versions, dates, numbers from the sources), newest information first, cite [1]. '
+        'If the sources lack the answer, search again with other words; do not guess.');
     return b.toString();
   }
 
@@ -1233,6 +1345,20 @@ class AgentService extends GetxService {
         return 'Reading ${q('url')}';
       case 'run_shell':
         return 'Running command: ${q('command')}';
+      case 'install_packages':
+        return 'Installing ${q('packages')}';
+      case 'run_script':
+        return 'Running a ${q('language')} script';
+      case 'create_tool':
+        return 'Creating my own tool: ${q('name')}';
+      case 'sandbox_setup':
+        return 'Setting up the Linux sandbox';
+      case 'convert_file':
+        return 'Converting ${q('name')} to ${q('output')}';
+      case 'download_file':
+        return 'Downloading ${q('url')}';
+      case 'http_request':
+        return '${q('method').isEmpty ? 'GET' : q('method')} ${q('url')}';
       case 'read_file':
       case 'read_user_file':
         return 'Reading ${q('name').isNotEmpty ? q('name') : q('path')}';

@@ -3,7 +3,7 @@ import 'package:get/get.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../services/hive_service.dart';
-import 'quick_start.dart';
+import 'setup_view.dart';
 
 const _kOnboarded = 'onboarding_seen';
 const _kWhatsNew = 'whats_new_version';
@@ -57,7 +57,7 @@ Future<void> runFirstRunFlow(BuildContext context) async {
     final info = await PackageInfo.fromPlatform();
     await hive.setSetting(_kWhatsNew, info.version);
   } catch (_) {}
-  if (context.mounted) await maybeShowQuickStart(context);
+  if (context.mounted) await maybeShowSetup();
 }
 
 Future<void> _showTour(BuildContext context) {

@@ -1024,15 +1024,19 @@ class ChatController extends GetxController {
           final useTools =
               agent.wantsTools(visibleText, hasFile: needsFileTools);
           final system = agent.composeSystem(_effectiveSystemPrompt,
-              withTools: useTools);
+              withTools: useTools, request: visibleText, withFiles: needsFileTools);
 
           // LiteRT models can consume image/audio attachments. GGUF currently
           // returns a clear unsupported message from the inference layer.
           Future<String> generateOnce(
                   String prompt,
                   List<Map<String, String>> hist,
-                  void Function(String) onTok) =>
-              inference.generate(
+                  void Function(String) onTok) {
+            // Never send more than the context can hold: an overflow makes
+            // small models fail or answer nothing.
+            prompt = agent.fitToContext(
+                system, hist, prompt, inference.contextTokensTotal.value);
+            return inference.generate(
                 prompt: prompt,
                 systemPrompt: system,
                 conversationHistory: hist,
@@ -1042,6 +1046,7 @@ class ChatController extends GetxController {
                 stopSequences: stops,
                 onToken: onTok,
               );
+          }
 
           await _compactHistory(history, system, finalPrompt, inference);
 

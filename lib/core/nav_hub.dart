@@ -13,6 +13,7 @@ import '../views/roles_view.dart';
 import '../views/perf_views.dart';
 import '../views/relay_view.dart';
 import '../views/scheduled_tasks_view.dart';
+import '../views/setup_view.dart';
 import '../views/storage_view.dart';
 import '../views/toolbox_view.dart';
 import '../views/voice_clone_view.dart';
@@ -61,6 +62,10 @@ class NavSection {
 /// To add a new screen, add one NavEntry below.
 List<NavSection> buildNavSections() => [
       NavSection('AI & agent', Icons.auto_awesome_rounded, [
+        NavEntry('Setup & recommended settings',
+            'Wi-Fi downloads, voice, small models, agent defaults',
+            Icons.auto_fix_high_rounded,
+            page: () => const SetupView()),
         NavEntry('Agent tools & permissions',
             'What the AI may do, per tool', Icons.handyman_outlined,
             page: () => const ChatToolsView()),
