@@ -40,6 +40,7 @@ class InferenceEngine {
     bool allowGgufGpu = false,
     String? mmprojPath,
     void Function(double)? onProgress,
+    Future<void> Function(String stage, String? previousError)? onLoadStage,
   }) async {
     return LoadResult(
       success: false,

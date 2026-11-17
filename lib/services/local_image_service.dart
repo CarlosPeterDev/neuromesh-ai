@@ -9,6 +9,7 @@ import '../core/ui.dart';
 import '../ffi/sd_ffi_bindings.dart';
 import 'app_log_service.dart';
 import 'hive_service.dart';
+import 'model_load_diagnostics.dart';
 import 'sd_isolate_processor.dart';
 
 class LocalImageService extends GetxService {
@@ -136,22 +137,23 @@ class LocalImageService extends GetxService {
     }
   }
 
-  Future<String> loadModel(String modelPath,
-      {String? modelName, String? taesdPath}) async {
+  Future<String> loadModel(
+    String modelPath, {
+    String? modelName,
+    String? taesdPath,
+    ModelLoadDiagnostics? diagnostics,
+  }) async {
     if (isLoadingModel.value) return 'ERROR: Model is already loading.';
     if (_nativeJobRunning) {
       return 'ERROR: An image is still generating. Wait for it to finish, '
           'then load the model.';
     }
 
+    isLoadingModel.value = true;
+    loadingModelName.value = modelName ?? modelPath.split('/').last;
+    progress.value = 0.0;
     try {
-      if (isModelLoaded.value) {
-        await unloadModel();
-      }
-
-      loadingModelName.value = modelName ?? modelPath.split('/').last;
-      isLoadingModel.value = true;
-      progress.value = 0.0;
+      if (isModelLoaded.value) await unloadModel();
 
       print('[LocalImageService] loadModel called with path: $modelPath');
       if (taesdPath != null) {
@@ -180,31 +182,33 @@ class LocalImageService extends GetxService {
         if (isCoreML) {
           print('[LocalImageService] Using Apple CoreML backend...');
           const coreMlChannel = MethodChannel('coreml_stable_diffusion');
-          final result = await coreMlChannel
-              .invokeMethod('initModel', {'path': modelPath});
+          final result = await coreMlChannel.invokeMethod('initModel', {
+            'path': modelPath,
+          });
 
           if (result is String && result.contains('loaded successfully')) {
             currentBackend.value = Backend.metal; // Show NPU on iOS UI
             isUsingGpu.value = true;
             isModelLoaded.value = true;
-            isLoadingModel.value = false;
             loadedModelName.value = modelName ?? modelPath.split('/').last;
             await _hive.setSetting(AppConstants.keyImageModelPath, modelPath);
             await _hive.setSetting(
-                AppConstants.keyImageModelName, loadedModelName.value);
+              AppConstants.keyImageModelName,
+              loadedModelName.value,
+            );
             return 'Image model loaded successfully.';
           } else {
             isModelLoaded.value = false;
-            isLoadingModel.value = false;
             return 'Failed to load CoreML model.';
           }
         } else {
           print('[LocalImageService] Using standard Metal C++ backend...');
-          final modelLoaded =
-              await SdFlutterAndroid.initModel(modelPath, useGpu: true);
+          final modelLoaded = await SdFlutterAndroid.initModel(
+            modelPath,
+            useGpu: true,
+          );
           if (!modelLoaded) {
             isModelLoaded.value = false;
-            isLoadingModel.value = false;
             Get.find<AppLogService>().error(
               'Image model load failed on iOS',
               details: 'path=$modelPath',
@@ -215,11 +219,12 @@ class LocalImageService extends GetxService {
           currentBackend.value = Backend.vulkan; // Standard GPU rendering
           isUsingGpu.value = true;
           isModelLoaded.value = true;
-          isLoadingModel.value = false;
           loadedModelName.value = modelName ?? modelPath.split('/').last;
           await _hive.setSetting(AppConstants.keyImageModelPath, modelPath);
           await _hive.setSetting(
-              AppConstants.keyImageModelName, loadedModelName.value);
+            AppConstants.keyImageModelName,
+            loadedModelName.value,
+          );
           return 'Image model loaded successfully.';
         }
       }
@@ -236,8 +241,10 @@ class LocalImageService extends GetxService {
         }
       }
 
-      final forceCpu = _hive.getSetting<bool>(AppConstants.keyImageGenForceCpu,
-              defaultValue: AppConstants.defaultImageGenForceCpu) ??
+      final forceCpu = _hive.getSetting<bool>(
+            AppConstants.keyImageGenForceCpu,
+            defaultValue: AppConstants.defaultImageGenForceCpu,
+          ) ??
           AppConstants.defaultImageGenForceCpu;
       if (forceCpu) {
         useGpu = false;
@@ -245,25 +252,29 @@ class LocalImageService extends GetxService {
       }
 
       final gpuGuardMb = _hive.getSetting<int>(
-              AppConstants.keyImageGenGpuGuardMb,
-              defaultValue: AppConstants.defaultImageGenGpuGuardMb) ??
+            AppConstants.keyImageGenGpuGuardMb,
+            defaultValue: AppConstants.defaultImageGenGpuGuardMb,
+          ) ??
           AppConstants.defaultImageGenGpuGuardMb;
       if (useGpu && gpuGuardMb > 0 && modelSizeMb >= gpuGuardMb) {
         useGpu = false;
         print(
-            '[LocalImageService] Model ${modelSizeMb}MB exceeds GPU safety ${gpuGuardMb}MB; using CPU for mobile stability');
+          '[LocalImageService] Model ${modelSizeMb}MB exceeds GPU safety ${gpuGuardMb}MB; using CPU for mobile stability',
+        );
       }
 
       final requestedBackend = currentBackend.value;
       if (!useGpu && requestedBackend != Backend.cpu) {
         print(
-            '[LocalImageService] Ignoring saved GPU backend ${requestedBackend.displayName} for this model/device');
+          '[LocalImageService] Ignoring saved GPU backend ${requestedBackend.displayName} for this model/device',
+        );
       }
       final candidateBackends = requestedBackend == Backend.cpu || !useGpu
           ? _availableBackendsFor(vendor, useGpu)
           : <Backend>[requestedBackend, Backend.cpu];
       print(
-          '[LocalImageService] Backend candidates for $vendor: ${candidateBackends.map((b) => b.displayName).join(' -> ')}');
+        '[LocalImageService] Backend candidates for $vendor: ${candidateBackends.map((b) => b.displayName).join(' -> ')}',
+      );
 
       int totalRamMb = 4096;
       if (Platform.isAndroid) {
@@ -278,9 +289,19 @@ class LocalImageService extends GetxService {
           ? 0.0
           : (totalRamMb / 1024 * 0.22).clamp(0.75, 1.75);
       print(
-          '[LocalImageService] Max graph VRAM limit: ${maxVramGb.toStringAsFixed(2)}GB');
+        '[LocalImageService] Max graph VRAM limit: ${maxVramGb.toStringAsFixed(2)}GB',
+      );
 
+      diagnostics
+        ?..set('imageGpuVendor', vendor)
+        ..set(
+          'imageBackendCandidates',
+          candidateBackends.map((b) => b.displayName).join(', '),
+        );
       for (final backend in candidateBackends) {
+        await diagnostics?.checkpoint(
+          'initialize image backend: ${backend.displayName}',
+        );
         print('[LocalImageService] Trying backend: ${backend.displayName}');
         final modelLoaded = await _tryLoadWithBackend(
           backend: backend,
@@ -290,27 +311,32 @@ class LocalImageService extends GetxService {
         );
         if (!modelLoaded) {
           print(
-              '[LocalImageService] Backend failed: ${backend.displayName}; trying fallback');
+            '[LocalImageService] Backend failed: ${backend.displayName}; trying fallback',
+          );
           continue;
         }
 
         currentBackend.value = backend;
         isUsingGpu.value = backend != Backend.cpu;
         isModelLoaded.value = true;
-        isLoadingModel.value = false;
         loadedModelName.value = modelName ?? modelPath.split('/').last;
         await _hive.setSetting(AppConstants.keyImageModelPath, modelPath);
         await _hive.setSetting(
-            AppConstants.keyImageModelName, loadedModelName.value);
+          AppConstants.keyImageModelName,
+          loadedModelName.value,
+        );
         await _hive.setSetting(
-            AppConstants.keyImageGenBackend, currentBackend.value.index);
-        await _hive.setSetting(AppConstants.keyImageGenQuantization,
-            currentQuantization.value.index);
+          AppConstants.keyImageGenBackend,
+          currentBackend.value.index,
+        );
+        await _hive.setSetting(
+          AppConstants.keyImageGenQuantization,
+          currentQuantization.value.index,
+        );
         return 'Image model loaded successfully.';
       }
 
       isModelLoaded.value = false;
-      isLoadingModel.value = false;
       Get.find<AppLogService>().error(
         'Image model load failed',
         details:
@@ -319,10 +345,14 @@ class LocalImageService extends GetxService {
       return 'Could not load this model. Try CyberRealistic, Realistic Vision, or AbsoluteReality - these work reliably on most devices.\n\nTechnical detail: All backend candidates failed.';
     } catch (e) {
       isModelLoaded.value = false;
-      isLoadingModel.value = false;
-      Get.find<AppLogService>().error('Image model load exception',
-          details: 'model=${modelName ?? modelPath.split('/').last}, error=$e');
+      Get.find<AppLogService>().error(
+        'Image model load exception',
+        details: 'model=${modelName ?? modelPath.split('/').last}, error=$e',
+      );
       return 'Could not load this model. Try CyberRealistic, Realistic Vision, or AbsoluteReality - these work reliably on most devices.\n\nTechnical detail: $e';
+    } finally {
+      isLoadingModel.value = false;
+      loadingModelName.value = '';
     }
   }
 

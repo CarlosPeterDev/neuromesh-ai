@@ -12,7 +12,10 @@ import '../services/local_image_service.dart';
 import '../services/hive_service.dart';
 import '../services/app_log_service.dart';
 import '../services/device_info_service.dart';
+import '../services/model_load_diagnostics.dart';
+import '../views/diagnostics_view.dart';
 import '../models/ai_model.dart';
+import '../ffi/sd_ffi_bindings.dart';
 import '../core/constants.dart';
 import '../core/ui.dart';
 import '../services/cluster_service.dart';
@@ -50,6 +53,7 @@ class ModelController extends GetxController {
   /// list but tell us whether a vision model can read images yet.
   final visionFiles = <String>{}.obs;
   final isImporting = false.obs;
+  final isPreparingModel = false.obs;
   final customModels = <AiModel>[].obs;
   final fileSizes = <String, int>{}.obs;
   final modelScope = 'local'.obs;
@@ -589,13 +593,7 @@ class ModelController extends GetxController {
   /// Removes a custom model entry added from a URL in an earlier version,
   /// cancelling any download and deleting any partial or complete file.
   Future<void> removeCustomModel(AiModel model) async {
-    if (_download.activeDownloads.containsKey(model.filename)) {
-      _download.pauseDownload(model.filename);
-    }
-    if (_inference.loadedModelName.value == model.filename) {
-      await _inference.unloadModel();
-    }
-    await _download.deleteModel(model.filename);
+    if (!await _tryDeleteModel(model.filename)) return;
     customModels.removeWhere((m) => m.filename == model.filename);
     availableModels
         .removeWhere((m) => m.isCustom && m.filename == model.filename);
@@ -604,84 +602,150 @@ class ModelController extends GetxController {
   }
 
   Future<void> deleteModel(String filename) async {
-    final model =
-        availableModels.firstWhereOrNull((m) => m.filename == filename);
-    if (model != null && model.hasVisionProjector) {
-      try {
-        await _download.deleteModel(model.mmprojFilename);
-      } catch (_) {}
+    if (await _tryDeleteModel(filename)) await refreshDownloaded();
+  }
+
+  Future<bool> _tryDeleteModel(String filename) async {
+    if (_modelOperationInProgress || _localImage.isGenerating.value) {
+      showToast('Model in use', 'Wait for the current model operation to finish.',
+          tone: ToastTone.warning);
+      return false;
     }
-    await _download.deleteModel(filename);
-    await refreshDownloaded();
-    // Unload if this was the active model
-    if (_inference.loadedModelName.value == filename) {
-      await _inference.unloadModel();
+    isPreparingModel.value = true;
+    try {
+      if (_download.activeDownloads.containsKey(filename)) {
+        _download.pauseDownload(filename);
+      }
+      if (_inference.loadedModelName.value == filename) {
+        await _inference.unloadModel();
+      }
+      if (_localImage.loadedModelName.value == filename) {
+        await _localImage.unloadModel();
+        if (_localImage.isModelLoaded.value) return false;
+      }
+      await _download.deleteModel(filename);
+      final model =
+          availableModels.firstWhereOrNull((m) => m.filename == filename);
+      if (model != null && model.hasVisionProjector &&
+          !availableModels.any((other) =>
+              other.filename != filename &&
+              other.mmprojFilename == model.mmprojFilename)) {
+        await _download.deleteModel(model.mmprojFilename);
+      }
+      return true;
+    } catch (error) {
+      Get.find<AppLogService>().error('Could not delete model',
+          details: diagnosticText('$error'));
+      showToast('Could not delete model', 'Check the log for details.',
+          tone: ToastTone.error);
+      return false;
+    } finally {
+      isPreparingModel.value = false;
     }
   }
 
+  bool get _modelOperationInProgress =>
+      isPreparingModel.value ||
+      _inference.isLoadingModel.value ||
+      _localImage.isLoadingModel.value;
+
   Future<void> loadModel(String filename) async {
-    if (_inference.isLoadingModel.value) {
-      showToast('Model Loading', 'Another model is already loading.',
+    if (_modelOperationInProgress) {
+      showToast('Model loading', 'Wait for the current model load.',
           tone: ToastTone.warning);
       return;
     }
-    final path = await _download.modelPath(filename);
+    if (_isAuxiliaryImageFile(filename)) {
+      showToast('Helper file', 'Load the model that uses this helper file.',
+          tone: ToastTone.info);
+      return;
+    }
+
+    isPreparingModel.value = true;
+    final report = ModelLoadDiagnostics()
+      ..set('file', filename)
+      ..set('stage', 'file check');
+    try {
+      await _loadModel(filename, report);
+    } catch (error) {
+      await _reportLoadFailure(filename, report, diagnosticText('$error'));
+    } finally {
+      await report.finish();
+      isPreparingModel.value = false;
+    }
+  }
+
+  Future<void> _loadModel(String filename, ModelLoadDiagnostics report) async {
     final model =
         availableModels.firstWhereOrNull((m) => m.filename == filename);
-    if (_isAuxiliaryImageFile(filename)) {
-      showToast(
-        'Helper File',
-        '$filename is a helper file used by another model and cannot be loaded on its own.',
-        tone: ToastTone.info,
-      );
-      return;
-    }
-    final isLiteRt = filename.toLowerCase().endsWith('.litertlm') ||
+    final name = model?.name ?? filename;
+    final parameters = ModelLoadDiagnostics.parameterLabel('$name $filename');
+    final lower = filename.toLowerCase();
+    final isLiteRt = lower.endsWith('.litertlm') ||
         model?.runtime == AiModel.runtimeLiteRt;
-    // Switching runtimes (LiteRT <-> GGUF) only needs the current engine
-    // unloaded first; the load sheet below offers "Unload & continue".
-    final fileBytes = await _modelFileBytes(filename, path, model);
-    if (model != null && _isIncompleteCatalogFile(model, fileBytes)) {
-      final actual = DownloadService.formatBytes(fileBytes);
-      Get.find<AppLogService>().error(
-        'Incomplete model file blocked',
-        details: '$filename is $actual, expected about ${model.size}',
-      );
-      showToast(
-        'Incomplete Model File',
-        '$filename is only $actual. Delete it and download again.',
-        tone: ToastTone.error,
-        duration: const Duration(seconds: 6),
-      );
-      return;
+    final isImage = isImageModel(model ??
+        AiModel(name: filename, filename: filename, url: '', size: '',
+            description: '', template: ''));
+    report
+      ..set('model', name)
+      ..set('runtime', isImage ? 'image' : isLiteRt ? 'LiteRT-LM' : 'llama.cpp')
+      ..set('parametersFromName', parameters ?? 'unknown')
+      ..set('imageForceCpu', isImage ? _settings.imageGenForceCpu.value : null)
+      ..set('contextRequested', isImage ? null : _settings.contextSize.value)
+      ..set('performanceMode', isImage
+          ? _settings.imageGenBackend.value.displayName
+          : _settings.liteRtPerformanceMode.value);
+    final path = await _download.modelPath(filename);
+    final type = await FileSystemEntity.type(path);
+    if (type == FileSystemEntityType.notFound) {
+      return _reportLoadFailure(filename, report,
+          'The model file was not found. Download it or import it again.');
     }
-    if (filename.toLowerCase().endsWith('.safetensors') &&
+    if (type != FileSystemEntityType.file && !isImage) {
+      return _reportLoadFailure(filename, report,
+          'Expected a model file. Select a GGUF or LiteRT-LM file.');
+    }
+    final fileBytes = type == FileSystemEntityType.file
+        ? await File(path).length()
+        : 0;
+    if (type == FileSystemEntityType.file) {
+      report.set('fileBytes', fileBytes);
+      fileSizes[filename] = fileBytes;
+      if (fileBytes == 0) {
+        return _reportLoadFailure(filename, report,
+            'The model file is empty. Download it again.');
+      }
+      if (model != null && _isIncompleteCatalogFile(model, fileBytes)) {
+        final actual = DownloadService.formatBytes(fileBytes);
+        return _reportLoadFailure(filename, report,
+            'The model download is incomplete ($actual, expected about ${model.size}). '
+            'Download it again.');
+      }
+    }
+    if (lower.endsWith('.gguf') && !await hasGgufSignature(path)) {
+      return _reportLoadFailure(filename, report,
+          'Invalid GGUF header. Download all matching model files again.');
+    }
+    if (lower.endsWith('.safetensors') &&
         !await _hasValidSafetensorsHeader(path)) {
-      Get.find<AppLogService>().error(
-        'Corrupt safetensors file blocked',
-        details: '$filename failed safetensors header validation',
-      );
-      showToast(
-        'Corrupt Model File',
-        '$filename did not download correctly. Delete it and download again.',
-        tone: ToastTone.error,
-        duration: const Duration(seconds: 6),
-      );
-      return;
+      return _reportLoadFailure(filename, report,
+          'Invalid safetensors header. Download the image model again.');
     }
-    if (isLiteRt && !await _hasLikelyValidLiteRtFile(path, fileBytes)) {
-      Get.find<AppLogService>().error(
-        'Corrupt LiteRT model file blocked',
-        details: '$filename failed LiteRT file validation; size=$fileBytes',
-      );
-      showToast(
-        'Corrupt Model File',
-        '$filename is not a valid LiteRT-LM file. Delete it and download again.',
-        tone: ToastTone.error,
-        duration: const Duration(seconds: 6),
-      );
-      return;
+    if (isLiteRt && !await _hasLikelyValidLiteRtFile(path)) {
+      return _reportLoadFailure(filename, report,
+          'Invalid LiteRT-LM file. Download the model again.');
     }
+    final gguf = lower.endsWith('.gguf') ? await readGgufInfo(path) : null;
+    if (gguf != null) {
+      report
+        ..set('ggufArchitecture', gguf.architecture)
+        ..set('ggufName', gguf.name)
+        ..set('ggufSizeLabel', gguf.sizeLabel)
+        ..set('ggufFileType', gguf.fileType)
+        ..set('ggufLayers', gguf.layers)
+        ..set('ggufTrainingContext', gguf.trainedContext);
+    }
+    report.set('stage', 'load confirmation');
     // The phone cluster splits GGUF models only (llama.cpp); a LiteRT model
     // always runs on this phone, so say so instead of silently ignoring the
     // workers.
@@ -692,25 +756,19 @@ class ModelController extends GetxController {
     }
     final loadAction = await _confirmModelLoadSafety(
       filename: filename,
-      path: path,
       fileBytes: fileBytes,
       isLiteRt: isLiteRt,
+      gguf: gguf,
     );
     if (loadAction == _ModelLoadAction.cancel) return;
-    if (loadAction == _ModelLoadAction.unloadAndContinue) {
-      await unloadModel();
-    }
     if (isLiteRt && !await _confirmLiteRtGpuWarning()) return;
+    if (loadAction == _ModelLoadAction.unloadAndContinue) {
+      await report.checkpoint('unload previous model');
+      await _unloadModels();
+    }
 
-    if (isImageModel(model ??
-        AiModel(
-          name: filename,
-          filename: filename,
-          url: '',
-          size: '',
-          description: '',
-          template: '',
-        ))) {
+    if (isImage) {
+      report.set('stage', 'prepare image backend');
       // Auto-download TAESD for fast VAE decode if not present
       String? taesdPath;
       try {
@@ -739,17 +797,17 @@ class ModelController extends GetxController {
       }
 
       // Progress shows inline on the model's card, like text models.
+      await report.checkpoint('initialize image backend');
       final result = await _localImage.loadModel(path,
-          modelName: filename, taesdPath: taesdPath);
-
-      final isError = !_localImage.isModelLoaded.value;
-      showToast(
-        isError ? 'Model Not Loaded' : 'Image Model',
-        result,
-        tone: isError ? ToastTone.warning : ToastTone.success,
-        duration:
-            isError ? const Duration(seconds: 6) : const Duration(seconds: 2),
-      );
+          modelName: filename, taesdPath: taesdPath,
+          diagnostics: report);
+      if (!_localImage.isModelLoaded.value ||
+          _localImage.loadedModelName.value != filename ||
+          result.startsWith('ERROR:')) {
+        await _reportLoadFailure(filename, report, result);
+        return;
+      }
+      showToast('Image model loaded', result, tone: ToastTone.success);
     } else {
       // GGUF vision: pass the projector if it's on disk; otherwise fetch it
       // and load text-only for now.
@@ -767,33 +825,49 @@ class ModelController extends GetxController {
           }
         }
       }
+      report.set('visionProjectorAvailable', mmprojPath != null);
       final result = await _inference.loadModel(
         path,
+        diagnostics: report,
         modelName: filename,
         modelRuntime: model?.runtime,
         enableLiteRtVision: model != null && isLiteRt && isVisionModel(model),
         mmprojPath: mmprojPath,
       );
-      if (_inference.isModelLoaded.value) {
+      if (_inference.isModelLoaded.value &&
+          _inference.loadedModelName.value == filename &&
+          !result.startsWith('ERROR:')) {
         final fallbackToText = result.toLowerCase().contains('text-only');
         _inference.isVisionLoaded.value = isLiteRt
             ? (!fallbackToText && model != null && isVisionModel(model))
             : _inference.ggufVisionLoaded;
-        if (visionNote.isNotEmpty) {
-          showToast('Model Loaded', '$result$visionNote',
-              tone: ToastTone.info, duration: const Duration(seconds: 5));
+        try {
           await _settings.setInferenceMode('local');
-          return;
+        } catch (error) {
+          Get.find<AppLogService>().warning('Could not save inference mode',
+              details: diagnosticText('$error'));
         }
-        await _settings.setInferenceMode('local');
-        showToast('Model Loaded', result, tone: ToastTone.success);
+        showToast('Model loaded', '$result$visionNote',
+            tone: visionNote.isEmpty ? ToastTone.success : ToastTone.info);
       } else {
-        final diag = await _diagnoseLoad(filename, path, result, isLiteRt: isLiteRt);
-        Get.find<AppLogService>().error('Model load failed: $filename',
-            details: '$result\n\n${diag.details}');
-        _showLoadFailedSheet(filename, result, diagnosis: diag);
+        final diag = await _diagnoseLoad(filename, path, result, gguf: gguf);
+        await _reportLoadFailure(filename, report, result, diagnosis: diag);
       }
     }
+  }
+
+  Future<void> _reportLoadFailure(
+    String filename,
+    ModelLoadDiagnostics report,
+    String error, {
+    ({String? likely, String details})? diagnosis,
+  }) async {
+    final details = diagnosticText(diagnosis?.details ?? error);
+    await report.finish(error: error, details: diagnosis == null ? null : details);
+    final safeError = diagnosticText(error);
+    Get.find<AppLogService>().error('Model load failed', details: safeError);
+    _showLoadFailedSheet(filename, safeError,
+        diagnosis: (likely: diagnosis?.likely, details: details));
   }
 
   /// Looks at the file, the model's header and the phone to explain WHY a
@@ -801,7 +875,7 @@ class ModelController extends GetxController {
   /// [details] lists everything that was checked.
   Future<({String? likely, String details})> _diagnoseLoad(
       String filename, String path, String error,
-      {required bool isLiteRt}) async {
+      {required GgufInfo? gguf}) async {
     final d = StringBuffer();
     String? likely;
     void line(String s) => d.writeln(s);
@@ -814,7 +888,7 @@ class ModelController extends GetxController {
       if (!exists || bytes == 0) {
         likely = 'The model file is missing or empty. Download it again.';
       }
-      if (exists && bytes > 0 && !isLiteRt && filename.toLowerCase().endsWith('.gguf')) {
+      if (exists && bytes > 0 && filename.toLowerCase().endsWith('.gguf')) {
         final raf = await f.open();
         List<int> head;
         try {
@@ -827,10 +901,10 @@ class ModelController extends GetxController {
         if (magic != 'GGUF') {
           likely ??= 'This file is not a valid GGUF model (wrong header). The download is probably corrupt or it is an HTML error page: delete it and download again.';
         } else {
-          final info = await readGgufInfo(path);
+          final info = gguf;
           if (info == null) {
             line('Header details: could not be read (file may be cut short).');
-            likely ??= 'The GGUF header could not be read, so the file is probably incomplete. Delete it and download again.';
+            // Metadata used for estimates is optional for some architectures.
           } else {
             line('Architecture: ${info.architecture}${info.name != null ? ' (${info.name})' : ''}');
             line('Layers: ${info.layers}, trained context: ${info.trainedContext}');
@@ -848,7 +922,9 @@ class ModelController extends GetxController {
               final total = dev.totalRamGB.value;
               final avail = dev.availableRamGB.value;
               line('Phone RAM: ${total.toStringAsFixed(1)} GB total, ${avail.toStringAsFixed(1)} GB free now');
-              if (avail > 0 && need / (1024 * 1024 * 1024) > avail) {
+              if ((error.toLowerCase().contains('memory') ||
+                      error.toLowerCase().contains('alloc')) &&
+                  avail > 0 && need / (1024 * 1024 * 1024) > avail) {
                 likely ??= 'Not enough free memory: it needs about ${(need / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB but only ${avail.toStringAsFixed(1)} GB is free. Close other apps, lower the context size in Settings, or choose a smaller quantisation.';
               }
             }
@@ -873,24 +949,6 @@ class ModelController extends GetxController {
     line('');
     line('Engine said: $error');
     return (likely: likely, details: d.toString().trimRight());
-  }
-
-  Future<int> _modelFileBytes(
-    String filename,
-    String path,
-    AiModel? model,
-  ) async {
-    try {
-      final file = File(path);
-      if (await file.exists()) {
-        final bytes = await file.length();
-        fileSizes[filename] = bytes;
-        return bytes;
-      }
-    } catch (_) {}
-    final cached = fileSizes[filename] ?? 0;
-    if (cached > 0) return cached;
-    return model == null ? 0 : _knownModelBytes(model);
   }
 
   Future<bool> _hasValidSafetensorsHeader(String path) async {
@@ -918,7 +976,7 @@ class ModelController extends GetxController {
     }
   }
 
-  Future<bool> _hasLikelyValidLiteRtFile(String path, int fileBytes) async {
+  Future<bool> _hasLikelyValidLiteRtFile(String path) async {
     RandomAccessFile? raf;
     try {
       final file = File(path);
@@ -958,9 +1016,9 @@ class ModelController extends GetxController {
 
   Future<_ModelLoadAction> _confirmModelLoadSafety({
     required String filename,
-    required String path,
     required int fileBytes,
     required bool isLiteRt,
+    required GgufInfo? gguf,
   }) async {
     // Phone cluster: the model is split across phones, so this phone's free
     // memory alone says little. ClusterService checks the whole cluster's
@@ -1000,7 +1058,6 @@ class ModelController extends GetxController {
 
     // For GGUF, estimate real usage from the file's header: weights plus the
     // KV cache for the configured context, which file size alone ignores.
-    final gguf = lower.endsWith('.gguf') ? await readGgufInfo(path) : null;
     final contextTokens = _settings.contextSize.value;
     final estimatedBytes = gguf?.estimateBytes(contextTokens);
     final fits = estimatedBytes == null ||
@@ -1224,6 +1281,11 @@ class ModelController extends GetxController {
   }
 
   Future<void> unloadModel() async {
+    if (_modelOperationInProgress) return;
+    await _unloadModels();
+  }
+
+  Future<void> _unloadModels() async {
     await _inference.unloadModel();
     await _localImage.unloadModel();
   }
@@ -1562,6 +1624,11 @@ class ModelController extends GetxController {
       final at = rawError.lastIndexOf('Exception: ');
       return at >= 0 ? rawError.substring(at + 'Exception: '.length) : rawError;
     }
+    if (lower.contains('not found') || lower.contains('is empty') || lower.contains('expected a model file') ||
+        lower.contains('download is incomplete') ||
+        lower.contains('invalid gguf header') || lower.contains('invalid safetensors') || lower.contains('invalid litert')) {
+      return rawError;
+    }
     if (lower.contains('unknown model architecture') ||
         lower.contains('unsupported model architecture')) {
       return 'This GGUF uses a model architecture that is not supported by the bundled llama.cpp runtime. Update the app runtime or try a GGUF exported for a supported architecture.';
@@ -1599,7 +1666,7 @@ class ModelController extends GetxController {
       {({String? likely, String details})? diagnosis}) {
     final friendlyMsg = diagnosis?.likely ?? _getFriendlyErrorMessage(result);
     final context = Get.context;
-    if (context == null) {
+    if (context == null || !context.mounted) {
       showToast('Model load failed', friendlyMsg,
           tone: ToastTone.error, duration: const Duration(seconds: 6));
       return;
@@ -1618,18 +1685,11 @@ class ModelController extends GetxController {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SectionHeader('Troubleshooting tips',
-                  padding: EdgeInsets.fromLTRB(0, 0, 0, 10)),
               if (isCluster) ...[
                 _buildTipRow(ctx, Icons.hub_outlined,
                     'On each worker, open NeuroMesh AI > Phone cluster and check that Worker is on and shows its QR code.'),
                 _buildTipRow(ctx, Icons.wifi_rounded,
                     'Keep every device on the same Wi-Fi. iPads must keep NeuroMesh AI open.'),
-              ] else ...[
-                _buildTipRow(ctx, Icons.delete_outline_rounded,
-                    'Delete the model and try redownloading it completely.'),
-                _buildTipRow(ctx, Icons.memory_rounded,
-                    'Ensure your device has at least 2-3 GB of free RAM.'),
               ],
               if (showLiteRtTip)
                 _buildTipRow(ctx, Icons.tune_rounded,
@@ -1692,6 +1752,14 @@ class ModelController extends GetxController {
                     : const SizedBox(width: double.infinity),
               ),
               const SizedBox(height: 20),
+              FilledButton.icon(
+                icon: const Icon(Icons.bug_report_outlined),
+                label: const Text('Report an error'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  Get.to(() => const DiagnosticsView());
+                },
+              ),
               TonalButton.neutral(ctx,
                   label: 'Close', onTap: () => Navigator.pop(ctx)),
             ],

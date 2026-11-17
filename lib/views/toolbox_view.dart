@@ -5,6 +5,7 @@ import '../controllers/chat_controller.dart';
 import '../core/ui.dart';
 import '../services/device_bridge.dart';
 import '../services/diagnostics_service.dart';
+import 'diagnostics_view.dart';
 import '../services/toolbox_service.dart';
 import '../services/voice_service.dart';
 import 'storage_view.dart';
@@ -379,19 +380,24 @@ class ToolboxView extends StatelessWidget {
           ),
           AppRow(
             icon: Icons.bug_report_outlined,
-            title: 'Export diagnostics',
-            subtitle: 'Version, device and recent log. Secrets are removed.',
-            onTap: () => DiagnosticsService.shareReport(),
+            title: 'Report an error',
+            subtitle: 'Review and share a diagnostic ZIP.',
+            chevron: true,
+            onTap: () => Get.to(() => const DiagnosticsView()),
           ),
           AppRow(
             icon: Icons.feedback_outlined,
             title: 'Send feedback',
-            subtitle: 'Prepares a GitHub issue draft. No account needed to write it.',
+            subtitle: 'Opens a draft for the public GitHub issue tracker.',
             onTap: () async {
               final text = await _ask(context, 'What happened?', 'Describe the problem or idea', lines: 4);
               if (text == null || text.isEmpty) return;
-              final ok = await DiagnosticsService.openIssueDraft(text);
-              if (!ok) _toast('Could not open the browser.');
+              try {
+                final ok = await DiagnosticsService.openIssueDraft(text);
+                if (!ok) _toast('Could not open the browser.');
+              } catch (_) {
+                _toast('Could not open the browser.');
+              }
             },
           ),
         ]),

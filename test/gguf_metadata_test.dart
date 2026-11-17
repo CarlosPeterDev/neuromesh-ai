@@ -82,6 +82,8 @@ void main() {
     final g = _GgufBuilder()
       ..string('general.architecture', 'qwen2')
       ..string('general.name', 'Qwen2.5 1.5B Instruct')
+      ..string('general.size_label', '1.5B')
+      ..u32('general.file_type', 15)
       // Large vocab arrays before the arch keys: the reader must skip them.
       ..stringArray('tokenizer.ggml.tokens', 150000)
       ..floatArray('tokenizer.ggml.scores', 150000)
@@ -98,6 +100,8 @@ void main() {
     expect(info, isNotNull);
     expect(info!.architecture, 'qwen2');
     expect(info.name, 'Qwen2.5 1.5B Instruct');
+    expect(info.sizeLabel, '1.5B');
+    expect(info.fileType, 15);
     expect(info.layers, 28);
     expect(info.trainedContext, 32768);
     expect(info.headCountKv, 2);
@@ -118,11 +122,20 @@ void main() {
     expect(fit, isNotNull);
     expect(fit! % 512, 0);
     expect(fit, lessThan(32768));
-    expect(info.estimateBytes(fit), lessThanOrEqualTo(at32k - 200 * 1024 * 1024));
+    expect(
+        info.estimateBytes(fit), lessThanOrEqualTo(at32k - 200 * 1024 * 1024));
+  });
+
+  test('fixed header rejects a download cut short after the magic', () async {
+    final truncated = await write(Uint8List.fromList(ascii.encode('GGUF')));
+    expect(await hasGgufSignature(truncated), isFalse);
+    expect(await hasGgufSignature(await write(qwenLike())), isTrue);
   });
 
   test('returns null for non-GGUF or incomplete files', () async {
-    expect(await readGgufInfo(await write(Uint8List.fromList(utf8.encode('nope')))),
+    expect(
+        await readGgufInfo(
+            await write(Uint8List.fromList(utf8.encode('nope')))),
         isNull);
     final truncated = qwenLike().sublist(0, 2000);
     expect(await readGgufInfo(await write(truncated)), isNull);

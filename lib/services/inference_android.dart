@@ -73,6 +73,7 @@ class InferenceEngine {
     bool allowGgufGpu = true,
     String? mmprojPath,
     void Function(double)? onProgress,
+    Future<void> Function(String stage, String? previousError)? onLoadStage,
   }) async {
     if (_desk != null) {
       return _desk.loadModel(
@@ -189,6 +190,10 @@ class InferenceEngine {
 
     // ── Load ──
     String? visionError;
+    await onLoadStage?.call(
+      gpuLayers > 0 ? 'llama.cpp Vulkan model load' : 'llama.cpp CPU model load',
+      null,
+    );
     try {
       visionError = await _controller!.loadModel(
         modelPath: modelPath,
@@ -202,6 +207,7 @@ class InferenceEngine {
       // before giving up.
       if (gpuLayers == 0) rethrow;
       print('[Inference] GPU load failed ($e) - retrying on CPU');
+      await onLoadStage?.call('retry llama.cpp on CPU', '$e');
       gpuLayers = 0;
       gpuNameStr = '';
       threads = deviceTier == 'ultra'

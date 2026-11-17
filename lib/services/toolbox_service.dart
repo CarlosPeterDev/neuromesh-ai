@@ -207,7 +207,7 @@ class ToolboxService extends GetxService {
         await _hive.saveMessage('${m['id']}', m);
       }
       for (final e in b.settings.entries) {
-        if (!isSecretSettingKey(e.key)) await _hive.setSetting(e.key, e.value);
+        if (canTransferSetting(e.key)) await _hive.setSetting(e.key, e.value);
       }
       Get.find<ChatController>().loadSessions();
       return 'Restored ${b.sessions.length} chats. Restart the app to apply settings.';
