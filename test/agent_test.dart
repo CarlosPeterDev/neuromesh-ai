@@ -1,11 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:neuromesh_ai/services/agent_service.dart';
 import 'package:neuromesh_ai/services/agent_tools.dart';
 import 'package:neuromesh_ai/services/mcp_client.dart';
+import 'package:neuromesh_ai/services/hive_service.dart';
 
 void main() {
   group('local chat context fitting', () {
@@ -35,6 +37,42 @@ void main() {
       expect(fitted.length, lessThan(prompt.length));
       expect(history.single['content'], fitted);
     });
+  });
+
+  test('routes literal speech and leaves voice overrides to the model', () {
+    expect(
+      literalSpeechText('Create audio file that says hello Carlos using tts tool'),
+      'hello Carlos',
+    );
+    expect(literalSpeechText('Make a WAV file saying "Hello!" using the TTS tool'), 'Hello!');
+    expect(literalSpeechText('Create audio file that says hello Carlos using tts tool with voice af_heart'), isNull);
+    expect(literalSpeechText('Can you create a file'), isNull);
+  });
+
+  test('explicit TTS runs the tool, exposes progress and returns the audio link',
+      () async {
+    Get.put(HiveService());
+    addTearDown(Get.reset);
+    final agent = _SpeechTestAgent();
+    final traceUpdates = <List<String>>[];
+    const prompt = 'Create audio file that says hello Carlos using tts tool';
+    final result = await agent.runToolLoop(
+      generate: (_, __, ___) async => throw StateError('LLM should not be called'),
+      prompt: prompt,
+      history: [{'role': 'user', 'content': prompt}],
+      confirm: (_, __, ___) async => true,
+      onVisible: (_) {},
+      onStatus: (_) {},
+      onTrace: traceUpdates.add,
+      cancelled: () => false,
+    );
+
+    expect(agent.call?.name, 'text_to_speech');
+    expect(agent.call?.arguments['text'], 'hello Carlos');
+    expect(agent.call?.arguments['name'], endsWith('.wav'));
+    expect(result.answer, contains('(nmfile:speech.wav)'));
+    expect(traceUpdates.first.single, contains('"run":true'));
+    expect(traceUpdates.last.single, contains('"run":false'));
   });
 
   group('parseToolCall', () {
@@ -127,4 +165,14 @@ void main() {
       expect(client.listTools(), throwsA(isA<McpException>()));
     });
   });
+}
+
+class _SpeechTestAgent extends AgentService {
+  ParsedToolCall? call;
+
+  @override
+  Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm) async {
+    this.call = call;
+    return 'Saved speech.wav. Show it with [📎 speech.wav](nmfile:speech.wav).';
+  }
 }

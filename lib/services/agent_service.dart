@@ -910,7 +910,7 @@ class AgentService extends GetxService {
         return true;
       case AgentChatMode.auto:
         if (hasFile) return true;
-        if (_intent.hasMatch(text)) return true;
+        if (_intent.hasMatch(text) || _gVoiceAction.hasMatch(text)) return true;
         if (needsResearch(text)) return true;
         for (final s in servers.where((s) => s.enabled)) {
           if (text.toLowerCase().contains(s.name.toLowerCase())) return true;
@@ -923,7 +923,11 @@ class AgentService extends GetxService {
     'web_search', 'fetch_url', 'list_files', 'read_file', 'write_file', 'edit_file',
     'ask_user', 'calculator', 'current_time', 'tool_help',
   };
-  static final _gVoice = RegExp(r'\b(speak|voice|audio|say|read aloud|aloud|transcri|mp3|wav|m4a|podcast|speech|tts|stt|subtitle)\b|صوت|انطق|فرغ|اقرا بصوت|سجل', caseSensitive: false);
+  static final _gVoice = RegExp(r'\b(speak|voice|audio|say|read aloud|aloud|transcrib(?:e|ing)|transcription|mp3|wav|m4a|podcast|speech|tts|stt|subtitle)\b|صوت|انطق|فرغ|اقرا بصوت|سجل', caseSensitive: false);
+  static final _gVoiceAction = RegExp(
+    r'\b(?:tts|stt|transcrib(?:e|ing)|text.to.speech|speech.to.text|read aloud)\b|انطق|فرغ الصوت',
+    caseSensitive: false,
+  );
   static final _gImage = RegExp(r'\b(draw|image|picture|photo|logo|illustration|wallpaper|generate an? )\b|صورة|ارسم|رسم|لوجو', caseSensitive: false);
   static final _gFiles = RegExp(r'\b(file|files|attached|attachment|zip|unzip|archive|download|copy|rename|append|delete|folder|csv|pdf|docx|json|save)\b|ملف|احفظ|حمل', caseSensitive: false);
   static final _gMemory = RegExp(r'\b(remember|forget|memory|note)\b|تذكر|انسى|فاكر', caseSensitive: false);
@@ -1096,6 +1100,25 @@ class AgentService extends GetxService {
     var ranTool = false;
     var nudges = 0;
     final request = userText ?? prompt;
+    final speech = literalSpeechText(request);
+    if (speech != null && !cancelled()) {
+      final args = <String, dynamic>{
+        'text': speech,
+        'name': 'speech-${DateTime.now().microsecondsSinceEpoch}.wav',
+      };
+      const tool = 'text_to_speech';
+      const label = 'Creating an audio file';
+      final timer = Stopwatch()..start();
+      onTrace?.call([stepLine(tool, args, label, null, running: true)]);
+      final result = await executeTool(ParsedToolCall(tool, args, ''), confirm);
+      final steps = [stepLine(tool, args, label, result, ms: timer.elapsedMilliseconds)];
+      onTrace?.call(steps);
+      return ToolLoopResult(
+        result.replaceFirst('Show it with ', ''),
+        steps,
+        false,
+      );
+    }
     if (researchQuestion != null && !cancelled() && !_cancel) {
       final msg = await _autoResearch(
           researchQuestion, trace, onTrace, onStatus, sources, cancelled);
@@ -1208,6 +1231,10 @@ class AgentService extends GetxService {
   static final _wantsFile = RegExp(
       r'(create|make|write|save|generate|put|store)\b[^\n]{0,80}(\bfile\b|\.[a-z0-9]{1,5}\b)|(اكتب|انشئ|أنشئ|اعمل|احفظ)[^\n]{0,60}(ملف|\.[a-z0-9]{2,5})',
       caseSensitive: false);
+  static final _wantsAudioFile = RegExp(
+    r'\b(create|make|generate|save)\b[^\n]{0,80}\b(audio file|wav file|voice recording|speech file)\b|(?:اعمل|انشئ|احفظ)[^\n]{0,60}ملف صوت',
+    caseSensitive: false,
+  );
   static final _wantsCmd = RegExp(
       r'\b(run|execute)\b[^\n]{0,60}\b(command|shell|terminal|script)\b|\b(ls|pip|npm|git|python|cat|mkdir|curl)\s',
       caseSensitive: false);
@@ -1217,6 +1244,10 @@ class AgentService extends GetxService {
 
   String? _nudgeFor(String request) {
     final names = {for (final t in _allBuiltIns) t.name};
+    if (_wantsAudioFile.hasMatch(request)) {
+      return 'Use text_to_speech to create the audio file. Pass the requested text and a WAV name. '
+          'Use models_status first if asked to choose a voice.';
+    }
     if (_wantsFile.hasMatch(request) && names.contains('write_file')) {
       final fn = _fileName.firstMatch(request)?.group(1) ?? 'notes.txt';
       return 'You did not call a tool, so NO file was created — printing text in the chat saves nothing. '
@@ -1234,7 +1265,7 @@ class AgentService extends GetxService {
   /// printed its content, so save that content ourselves.
   Future<ToolLoopResult?> _fallbackFile(String request, String reply,
       ToolConfirm confirm, List<String> trace, void Function(List<String>)? onTrace) async {
-    if (!_wantsFile.hasMatch(request)) return null;
+    if (!_wantsFile.hasMatch(request) || _wantsAudioFile.hasMatch(request)) return null;
     final fn = _fileName.firstMatch(request)?.group(1);
     if (fn == null) return null;
     var content = reply;

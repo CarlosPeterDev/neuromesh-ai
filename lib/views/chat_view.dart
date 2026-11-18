@@ -15,6 +15,7 @@ import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
 import '../ffi/sd_ffi_bindings.dart';
 import '../utils/thought_parser.dart';
+import '../widgets/agent_steps.dart';
 import '../widgets/attachment_preview.dart';
 import '../widgets/chat_bubble.dart';
 import '../widgets/chat_drawer.dart';
@@ -492,7 +493,8 @@ class ChatView extends GetView<ChatController> {
     final attType = controller.streamingAttachmentType.value;
     final isImageGen = controller.imageGenTotal.value > 0;
     final clean = _cleanStream(text).trimLeft();
-    final parts = splitThoughtTags(clean);
+    final (steps, response) = splitSteps(clean);
+    final parts = splitThoughtTags(response);
     final answer = parts.answer.trimLeft();
     final hasText = parts.hasThought || _hasPrintable(answer);
 
@@ -532,6 +534,12 @@ class ChatView extends GetView<ChatController> {
               _BlinkingCursor(color: Theme.of(context).hintColor),
             ]),
         ],
+        if (steps.isNotEmpty)
+          AgentStepsView(
+            steps: steps,
+            messageId: 'live-${controller.messages.lastOrNull?.id}',
+            live: true,
+          ),
         if (hasText && !isImageGen)
           Obx(() {
             final inf = Get.find<InferenceService>();
