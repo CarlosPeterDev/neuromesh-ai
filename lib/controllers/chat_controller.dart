@@ -116,7 +116,6 @@ class ChatController extends GetxController {
             defaultValue: false) ??
         false;
     loadSessions();
-    _initSpeech();
   }
 
   Future<void> _initSpeech() async {
@@ -141,14 +140,11 @@ class ChatController extends GetxController {
         isListening.value = false;
         return;
       }
+      if (!sttAvailable.value) await _initSpeech();
       if (!sttAvailable.value) {
-        try {
-          final ok = await _speech.initialize();
-          sttAvailable.value = ok;
-        } catch (_) {
-          sttAvailable.value = false;
-        }
-        if (!sttAvailable.value) return;
+        showToast('Dictation unavailable', 'Check microphone permission and speech recognition on this device.',
+            tone: ToastTone.warning);
+        return;
       }
       await _speech.listen(
         onResult: (result) {
@@ -157,16 +153,17 @@ class ChatController extends GetxController {
         },
         listenFor: const Duration(seconds: 60),
         pauseFor: const Duration(seconds: 4),
-        localeId: 'en_US',
       );
-      isListening.value = true;
+      isListening.value = _speech.isListening;
     } catch (_) {
       isListening.value = false;
+      showToast('Dictation could not start', 'Try again.', tone: ToastTone.warning);
     }
   }
 
   @override
   void onClose() {
+    if (_speech.isListening) unawaited(_speech.cancel());
     _scrollTimer?.cancel();
     if (_scrollListenerAttached) {
       scrollController.removeListener(_handleUserScroll);
@@ -201,7 +198,9 @@ class ChatController extends GetxController {
   void _resetInferenceContext() {
     final inference = Get.find<InferenceService>();
     if (inference.isModelLoaded.value) {
-      unawaited(inference.resetConversation());
+      unawaited(inference.resetConversation().catchError((Object error) {
+        Get.find<AppLogService>().warning('Could not reset chat context', details: error);
+      }));
     }
   }
 
@@ -256,33 +255,23 @@ class ChatController extends GetxController {
   ChatSession? get currentSession =>
       sessions.firstWhereOrNull((s) => s.id == currentSessionId.value);
 
-  /// Removes the last user+assistant exchange and sends [text] again.
-  /// Used by "Regenerate" and "Edit & resend". Attachments are not re-sent.
-  Future<void> resendLast(String text) async {
-    if (isLoading.value || isStreaming.value) return;
-    final t = text.trim();
-    if (t.isEmpty) return;
-    // Drop everything from the last user message onward.
-    final lastUser = messages.lastIndexWhere((m) => m.role == 'user');
-    if (lastUser < 0) return;
-    final removed = messages.sublist(lastUser);
-    for (final m in removed) {
-      await _hive.messagesBox.delete(m.id);
+  ChatMessage? get _lastUserMessage {
+    final index = messages.lastIndexWhere((message) => message.role == 'user');
+    return index < 0 ? null : messages[index];
+  }
+
+  Future<void> resendLast(String text, {String? messageId}) async {
+    final lastUser = _lastUserMessage;
+    if (lastUser == null || (messageId != null && lastUser.id != messageId)) {
+      return;
     }
-    messages.removeRange(lastUser, messages.length);
-    _resetInferenceContext();
-    textController.text = t;
-    await sendMessage();
+    if (text.trim().isEmpty) return;
+    await _submitMessage(previous: lastUser, editedText: text.trim());
   }
 
   Future<void> regenerate() async {
-    final lastUser = messages.lastIndexWhere((m) => m.role == 'user');
-    if (lastUser < 0) return;
-    final m = messages[lastUser];
-    final visible = m.fileName == null
-        ? m.content
-        : m.content.split('\n\nAttached file:').first;
-    await resendLast(visible);
+    final lastUser = _lastUserMessage;
+    if (lastUser != null) await _submitMessage(previous: lastUser);
   }
 
   Future<void> _autoTitle(int generationId) async {
@@ -298,9 +287,15 @@ class ChatController extends GetxController {
       if (session == null || session.title != _autoTitleFor[session.id]) return;
       final firstUser =
           messages.firstWhereOrNull((m) => m.role == 'user')?.content ?? '';
-      final firstAi =
-          messages.firstWhereOrNull((m) => m.role == 'assistant')?.content ?? '';
-      if (firstUser.isEmpty || firstAi.isEmpty) return;
+      final firstAi = stripToolTrace(
+        messages.firstWhereOrNull((m) => m.role == 'assistant')?.content ?? '',
+      );
+      if (firstUser.isEmpty ||
+          firstAi.isEmpty ||
+          firstAi.startsWith('ERROR:') ||
+          firstAi.startsWith('❌')) {
+        return;
+      }
       final raw = await inf.generate(
         prompt:
             'Write a title of at most 5 words for this conversation. Reply with the title only.\n\nUser: ${firstUser.length > 300 ? firstUser.substring(0, 300) : firstUser}\nAssistant: ${firstAi.length > 300 ? firstAi.substring(0, 300) : firstAi}',
@@ -308,7 +303,7 @@ class ChatController extends GetxController {
         source: 'title',
         maxTokens: 20,
       );
-      await inf.resetConversation();
+      if (generationId != _generationSerial || isLoading.value) return;
       final title = raw
           .replaceAll(RegExp(r'<think>[\s\S]*?</think>'), '')
           .replaceAll(RegExp('["*#\\n]'), ' ')
@@ -318,15 +313,18 @@ class ChatController extends GetxController {
         return;
       }
       final cur = currentSession;
-      if (cur != null && cur.id == session.id) {
-        _updateSession(ChatSession(
+      if (cur != null && cur.id == session.id && cur.title == session.title) {
+        _updateSession(
+          ChatSession(
             id: cur.id,
             title: title,
             createdAt: cur.createdAt,
             updatedAt: cur.updatedAt,
             lastMessage: cur.lastMessage,
             pinned: cur.pinned,
-            systemPrompt: cur.systemPrompt));
+            systemPrompt: cur.systemPrompt,
+          ),
+        );
       }
     } catch (_) {}
   }
@@ -339,6 +337,7 @@ class ChatController extends GetxController {
     if (currentSessionId.value == sessionId && isLoading.value) {
       stopGenerating();
     }
+    _autoTitleFor.remove(sessionId);
     _hive.deleteSession(sessionId);
     sessions.removeWhere((s) => s.id == sessionId);
     if (currentSessionId.value == sessionId) {
@@ -446,10 +445,6 @@ class ChatController extends GetxController {
   /// text-only local models (e.g. GGUF) that can't take images or audio.
   Future<void> pickFile({bool documentsOnly = false}) async {
     try {
-      const mediaExtensions = {
-        'png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', //
-        'mp3', 'm4a', 'wav', 'aac', 'ogg', 'flac',
-      };
       // Any file type is allowed: images, audio, PDF, DOCX and text are read
       // directly; everything else is placed in the agent workspace so the AI
       // can inspect it with its file tools.
@@ -671,7 +666,7 @@ class ChatController extends GetxController {
   /// limit, older messages are replaced by a short model-written summary (kept
   /// on disk, so it is built once and reused). The visible chat is untouched.
   Future<void> _compactHistory(List<Map<String, String>> history, String system,
-      String prompt, InferenceService inf) async {
+      String prompt, InferenceService inf, int generationId) async {
     final ctx = inf.contextTokensTotal.value;
     if (ctx <= 0 || history.isEmpty) return;
     int est(String t) => (t.length / 2.8).ceil(); // conservative (Arabic, code)
@@ -696,7 +691,7 @@ class ChatController extends GetxController {
         400;
     if (total() < ctx * 0.7 || history.length <= 6) return;
 
-    final keep = 4;
+    const keep = 4;
     final old = history.sublist(0, history.length - keep);
     final tail = history.sublist(history.length - keep);
     var transcript = old
@@ -722,7 +717,10 @@ class ChatController extends GetxController {
         onToken: (_) {},
       ))
           .trim();
-      if (summary.isEmpty || summary.startsWith('ERROR')) return;
+      if (generationId != _generationSerial ||
+          summary.isEmpty || summary.startsWith('ERROR')) {
+        return;
+      }
       final newCovered = covered + (old.length - prefix);
       _hive.setSetting(key, {'text': summary, 'count': newCovered});
       history
@@ -732,7 +730,7 @@ class ChatController extends GetxController {
     } catch (_) {
       // Keep the full history; the engine will trim if it must.
     } finally {
-      streamingResponse.value = '';
+      if (generationId == _generationSerial) streamingResponse.value = '';
     }
   }
 
@@ -741,165 +739,238 @@ class ChatController extends GetxController {
         {'role': 'assistant', 'content': 'Understood. I will continue from that.'},
       ];
 
-  Future<void> sendMessage() async {
+  Future<void> sendMessage() => _submitMessage();
+
+  Future<void> _submitMessage({
+    ChatMessage? previous,
+    String? editedText,
+  }) async {
     if (isLoading.value || isStreaming.value) return;
 
-    final text = textController.text.trim();
-    final hasAttachment =
-        selectedImagePath.value != null || selectedFileName.value != null;
-    if (text.isEmpty && !hasAttachment) return;
-    final fileName = selectedFileName.value;
-    final fileContent = selectedFileContent.value;
-    final filePath = selectedFilePath.value;
-    final fileType = selectedFileType.value;
-    final fileSize = selectedFileSize.value;
-    final imagePath = selectedImagePath.value;
-    final imageBase64 = selectedImageBase64.value;
-    final visibleText =
-        text.isEmpty ? _defaultAttachmentPrompt(fileType) : text;
+    final draftText = textController.text;
+    final text = previous == null
+        ? draftText.trim()
+        : editedText ?? previous.visibleUserText;
+    final fileName = previous == null
+        ? selectedFileName.value
+        : previous.fileName;
+    final fileContent = previous == null
+        ? selectedFileContent.value
+        : previous.fileContent;
+    final filePath = previous == null
+        ? selectedFilePath.value
+        : previous.filePath;
+    final fileType = previous == null
+        ? selectedFileType.value
+        : previous.fileType;
+    final fileSize =
+        (previous == null ? selectedFileSize.value : previous.fileSize) ?? 0;
+    final imagePath = previous == null
+        ? selectedImagePath.value
+        : previous.imagePath;
+    final imageBase64 = previous == null
+        ? selectedImageBase64.value
+        : previous.imageBase64;
+    if (text.isEmpty &&
+        imagePath == null &&
+        imageBase64 == null &&
+        fileName == null)
+      return;
+    final visibleText = text.isEmpty
+        ? _defaultAttachmentPrompt(fileType)
+        : text;
 
-    // Copy non-media attachments into the agent workspace so the AI's file
-    // tools can read the whole file (not just what fits in the prompt).
-    String? workspaceName;
-    if (!kIsWeb &&
-        filePath != null &&
-        fileName != null &&
-        fileType != 'image' &&
-        fileType != 'audio' &&
-        Get.isRegistered<AgentService>()) {
-      try {
-        workspaceName =
-            await Get.find<AgentService>().importToWorkspace(filePath, fileName);
-      } catch (_) {}
-    }
-    final hasInline = fileContent != null && fileContent.trim().isNotEmpty;
-    final truncated = hasInline && fileContent.contains('[File truncated');
-    var effectiveText = hasInline
-        ? '$visibleText\n\nAttached file: $fileName\n```text\n$fileContent\n```'
-        : visibleText;
-    if (workspaceName != null && (!hasInline || truncated)) {
-      final size = fileSize > 0 ? ' (${DownloadService.formatBytes(fileSize)})' : '';
-      final fnm = fileName ?? '';
-      final ext = (fnm.contains('.') ? fnm.split('.').last : '').toLowerCase();
-      const audioExt = {'mp3', 'm4a', 'wav', 'aac', 'ogg', 'flac', 'mp4', 'mkv', 'webm', 'mov'};
-      const imageExt = {'png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', 'bmp'};
-      final hint = audioExt.contains(ext)
-          ? 'It is audio/video: use transcribe_audio to get the text.'
-          : imageExt.contains(ext)
-              ? 'It is a picture: you cannot see it, but you can read text in it with the sandbox (tesseract OCR) when available, or convert it with convert_file.'
-              : 'Use file_info, read_file and search_in_file to look inside it; for archives, spreadsheets or other formats use unzip_file, convert_file or the sandbox.';
-      final note = 'The attached file "$fileName"$size is saved in your workspace as '
-          '"$workspaceName". $hint';
-      effectiveText = hasInline
-          ? '$effectiveText\n\n(Only the start is shown. $note)'
-          : '$visibleText\n\nAttached file: $fileName\n$note';
-    }
-    final needsFileTools = workspaceName != null && (!hasInline || truncated);
-
-    // Create a session if none selected
-    if (currentSessionId.value.isEmpty) {
-      createNewChat();
-    }
-
-    // Mark busy before the first await (reading an attached image), so a
-    // double tap can't pass the guard above twice and send duplicates.
-    // Done after createNewChat(), which stops any in-flight generation.
-    isLoading.value = true;
-
-    // Encode image to base64 if it's not already pre-encoded, so the message
-    // saved in history contains the image bytes and is 100% stable.
-    String? imgBase64 = imageBase64;
-    if (imgBase64 == null && imagePath != null && !kIsWeb) {
-      try {
-        imgBase64 = base64Encode(await File(imagePath).readAsBytes());
-      } catch (_) {}
-    }
-
-    // Add user message
-    final userMsg = ChatMessage(
-      id: _uuid.v4(),
-      chatId: currentSessionId.value,
-      role: 'user',
-      content: effectiveText,
-      imageBase64: imgBase64, // Always save the encoded base64 string
-      imagePath: imagePath,
-      fileName: fileName,
-      fileContent: fileContent,
-      filePath: filePath,
-      fileType: fileType,
-      fileSize: fileSize > 0 ? fileSize : null,
-    );
-    messages.add(userMsg);
-    _hive.saveMessage(userMsg.id, userMsg.toMap());
-
-    // Clear input preview UI state — but KEEP the physical file on disk
-    // because the native inference engine needs to read it during generation.
-    textController.clear();
-    inputText.value = '';
-    clearImage(deleteFile: false); // Reset visual fields, do NOT delete file!
-    clearFile();
-    _scrollToBottom(force: true);
-
-    // Update session title (use first message as title)
-    if (messages.where((m) => m.role == 'user').length == 1) {
-      final title = visibleText.length > 40
-          ? '${visibleText.substring(0, 40)}...'
-          : visibleText;
-      final session =
-          sessions.firstWhere((s) => s.id == currentSessionId.value);
-      final updated = session.copyWith(title: title, lastMessage: visibleText);
-      _autoTitleFor[updated.id] = title;
-      _hive.saveSession(updated.id, updated.toMap());
-      final idx = sessions.indexWhere((s) => s.id == updated.id);
-      if (idx >= 0) sessions[idx] = updated;
-    }
-
-    // Add the best-matching passages from the user's documents (if enabled).
-    final genPrompt = Get.isRegistered<RagService>()
-        ? await Get.find<RagService>().augment(effectiveText, visibleText)
-        : effectiveText;
-
-    // Start generating
+    if (currentSessionId.value.isEmpty) createNewChat();
+    final sessionId = currentSessionId.value;
+    if (previous != null && previous.chatId != sessionId) return;
     final generationId = ++_generationSerial;
     isLoading.value = true;
-    isStreaming.value = true;
-    streamingAttachmentType.value =
-        (imagePath != null || fileType == 'audio') ? fileType : null;
-    streamingResponse.value = '';
-    _followStreaming = true;
-    _scrollToBottom(force: true);
-
-    // Optional web search (off by default; auto/always in Toolbox).
-    var finalPrompt = genPrompt;
-    WebContext? webCtx;
-    // When the agent will research by itself (local models), skip this simpler
-    // pre-search so the web is not searched twice.
-    final agentResearches = Get.find<SettingsController>().inferenceMode.value == 'local' &&
-        Get.find<AgentService>().wantsTools(visibleText) &&
-        Get.find<AgentService>().needsResearch(visibleText);
-    if (!agentResearches &&
-        Get.isRegistered<WebSearchService>() &&
-        Get.find<WebSearchService>().shouldSearch(visibleText)) {
-      streamingResponse.value = '🔍 Searching the web…';
-      try {
-        final prevUser = messages
-            .where((m) => m.role == 'user')
-            .toList()
-            .reversed
-            .skip(1)
-            .map((m) => m.content.split('\n\nAttached file:').first)
-            .firstOrNull;
-        webCtx = await Get.find<WebSearchService>()
-            .buildContext(visibleText, previous: prevUser);
-      } catch (_) {}
-      if (generationId != _generationSerial) return;
-      streamingResponse.value = '';
-      if (webCtx != null) {
-        finalPrompt = '${webCtx.block}\n\n$genPrompt';
-      }
-    }
+    var posted = false;
 
     try {
+      // Copy non-media attachments into the agent workspace so the AI's file
+      // tools can read the whole file (not just what fits in the prompt).
+      String? workspaceName;
+      if (previous == null &&
+          !kIsWeb &&
+          filePath != null &&
+          fileName != null &&
+          fileType != 'image' &&
+          fileType != 'audio' &&
+          Get.isRegistered<AgentService>()) {
+        try {
+          workspaceName = await Get.find<AgentService>().importToWorkspace(
+            filePath,
+            fileName,
+          );
+        } on FileSystemException {
+          if (fileContent == null || fileContent.trim().isEmpty) rethrow;
+        }
+      }
+      final hasInline = fileContent != null && fileContent.trim().isNotEmpty;
+      final truncated = hasInline && fileContent.contains('[File truncated');
+      var effectiveText = hasInline
+          ? '$visibleText\n\nAttached file: $fileName\n```text\n$fileContent\n```'
+          : visibleText;
+      if (workspaceName != null && (!hasInline || truncated)) {
+        final size = fileSize > 0
+            ? ' (${DownloadService.formatBytes(fileSize)})'
+            : '';
+        final fnm = fileName ?? '';
+        final ext = (fnm.contains('.') ? fnm.split('.').last : '')
+            .toLowerCase();
+        const audioExt = {
+          'mp3',
+          'm4a',
+          'wav',
+          'aac',
+          'ogg',
+          'flac',
+          'mp4',
+          'mkv',
+          'webm',
+          'mov',
+        };
+        const imageExt = {'png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', 'bmp'};
+        final hint = audioExt.contains(ext)
+            ? 'It is audio/video: use transcribe_audio to get the text.'
+            : imageExt.contains(ext)
+            ? 'It is a picture: you cannot see it, but you can read text in it with the sandbox (tesseract OCR) when available, or convert it with convert_file.'
+            : 'Use file_info, read_file and search_in_file to look inside it; for archives, spreadsheets or other formats use unzip_file, convert_file or the sandbox.';
+        final note =
+            'The attached file "$fileName"$size is saved in your workspace as '
+            '"$workspaceName". $hint';
+        effectiveText = hasInline
+            ? '$effectiveText\n\n(Only the start is shown. $note)'
+            : '$visibleText\n\nAttached file: $fileName\n$note';
+      }
+      if (previous != null) {
+        effectiveText = previous.withUserText(visibleText).content;
+      }
+      final needsFileTools = previous == null
+          ? workspaceName != null && (!hasInline || truncated)
+          : fileName != null &&
+                fileType != 'image' &&
+                fileType != 'audio' &&
+                (!hasInline || truncated) &&
+                effectiveText.contains('saved in your workspace');
+      if (generationId != _generationSerial) return;
+
+      // Encode image to base64 if it's not already pre-encoded, so the message
+      // saved in history contains the image bytes and is 100% stable.
+      String? imgBase64 = imageBase64;
+      if (imgBase64 == null && imagePath != null && !kIsWeb) {
+        imgBase64 = base64Encode(await File(imagePath).readAsBytes());
+      }
+
+      if (generationId != _generationSerial) return;
+      final userMsg =
+          previous?.withUserText(visibleText) ??
+          ChatMessage(
+            id: _uuid.v4(),
+            chatId: sessionId,
+            role: 'user',
+            content: effectiveText,
+            imageBase64: imgBase64, // Always save the encoded base64 string
+            imagePath: imagePath,
+            fileName: fileName,
+            fileContent: fileContent,
+            filePath: filePath,
+            fileType: fileType,
+            fileSize: fileSize > 0 ? fileSize : null,
+          );
+      if (previous == null) {
+        messages.add(userMsg);
+        // Keep the physical attachment for inference and future retries.
+        if (textController.text == draftText) {
+          textController.clear();
+          inputText.value = '';
+        }
+        if (selectedImagePath.value == imagePath &&
+            selectedImageBase64.value == imageBase64 &&
+            selectedFilePath.value == filePath &&
+            selectedFileName.value == fileName &&
+            selectedFileContent.value == fileContent) {
+          clearImage(deleteFile: false);
+          clearFile();
+        }
+      } else {
+        final index = messages.indexWhere((m) => m.id == previous.id);
+        final obsolete = messages.skip(index + 1).map((m) => m.id).toList();
+        messages.replaceRange(index, messages.length, [userMsg]);
+        await Future.wait([
+          _hive.saveMessage(userMsg.id, userMsg.toMap()),
+          _hive.messagesBox.deleteAll(obsolete),
+        ]);
+      }
+      posted = true;
+      if (previous == null)
+        await _hive.saveMessage(userMsg.id, userMsg.toMap());
+      if (generationId != _generationSerial) return;
+      _scrollToBottom(force: true);
+
+      final sendingSession = currentSession;
+      if (sendingSession != null) {
+        if (previous == null && messages.length == 1) {
+          final title = visibleText.length > 40
+              ? '${visibleText.substring(0, 40)}...'
+              : visibleText;
+          _autoTitleFor[sendingSession.id] = title;
+          _updateSession(
+            sendingSession.copyWith(title: title, lastMessage: visibleText),
+          );
+        } else {
+          _updateSession(sendingSession.copyWith(lastMessage: visibleText));
+        }
+      }
+
+      // Add the best-matching passages from the user's documents (if enabled).
+      final genPrompt = Get.isRegistered<RagService>()
+          ? await Get.find<RagService>().augment(effectiveText, visibleText)
+          : effectiveText;
+
+      if (generationId != _generationSerial) return;
+      isStreaming.value = true;
+      streamingAttachmentType.value = (imagePath != null || fileType == 'audio')
+          ? fileType
+          : null;
+      streamingResponse.value = '';
+      _followStreaming = true;
+      _scrollToBottom(force: true);
+
+      // Optional web search (off by default; auto/always in Toolbox).
+      var finalPrompt = genPrompt;
+      WebContext? webCtx;
+      // When the agent will research by itself (local models), skip this simpler
+      // pre-search so the web is not searched twice.
+      final agentResearches =
+          Get.find<SettingsController>().inferenceMode.value == 'local' &&
+          Get.find<AgentService>().wantsTools(visibleText) &&
+          Get.find<AgentService>().needsResearch(visibleText);
+      if (!agentResearches &&
+          Get.isRegistered<WebSearchService>() &&
+          Get.find<WebSearchService>().shouldSearch(visibleText)) {
+        streamingResponse.value = '🔍 Searching the web…';
+        try {
+          final prevUser = messages
+              .where((m) => m.role == 'user')
+              .toList()
+              .reversed
+              .skip(1)
+              .map((m) => m.content.split('\n\nAttached file:').first)
+              .firstOrNull;
+          webCtx = await Get.find<WebSearchService>().buildContext(
+            visibleText,
+            previous: prevUser,
+          );
+        } catch (_) {}
+        if (generationId != _generationSerial) return;
+        streamingResponse.value = '';
+        if (webCtx != null) {
+          finalPrompt = '${webCtx.block}\n\n$genPrompt';
+        }
+      }
+
       DateTime? thoughtStartedAt;
       int? thoughtDurationSeconds;
 
@@ -1034,6 +1105,7 @@ class ChatController extends GetxController {
 
           // Explicit "remember that …" is handled directly, without the model.
           final saved = await agent.rememberDirect(visibleText);
+          if (generationId != _generationSerial) return;
           final useTools =
               agent.wantsTools(visibleText, hasFile: needsFileTools);
           final system = agent.composeSystem(_effectiveSystemPrompt,
@@ -1061,7 +1133,8 @@ class ChatController extends GetxController {
               );
           }
 
-          await _compactHistory(history, system, finalPrompt, inference);
+          await _compactHistory(history, system, finalPrompt, inference, generationId);
+          if (generationId != _generationSerial) return;
 
           if (!useTools) {
             rawResponse = await generateOnce(finalPrompt, history, (token) {
@@ -1210,15 +1283,24 @@ class ChatController extends GetxController {
       imageGenStep.value = 0;
       imageGenTotal.value = 0;
       imageGenDecoding.value = false;
-      if (imageGenStartTime.value != null) {
-        await Get.find<ImageGenerationNotificationService>().failed();
-      }
+      final hadImageJob = imageGenStartTime.value != null;
       imageGenStartTime.value = null;
+      if (hadImageJob)
+        await Get.find<ImageGenerationNotificationService>().failed();
+      if (generationId != _generationSerial) return;
       final frames = stack.toString().trimRight().split('\n').take(8);
       Get.find<AppLogService>().error(
         'Chat response failed',
         details: '$e\n${frames.join('\n')}',
       );
+      if (!posted) {
+        isLoading.value = false;
+        final message = e is FileSystemException
+            ? 'The attachment could not be read. Reattach the file and try again.'
+            : 'Try again.';
+        showToast('Message could not be sent', message, tone: ToastTone.error);
+        return;
+      }
       final errorMsg = ChatMessage(
         id: _uuid.v4(),
         chatId: currentSessionId.value,

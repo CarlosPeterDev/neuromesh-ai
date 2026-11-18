@@ -1,0 +1,166 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
+import 'package:hive/hive.dart';
+import 'package:neuromesh_ai/controllers/chat_controller.dart';
+import 'package:neuromesh_ai/controllers/settings_controller.dart';
+import 'package:neuromesh_ai/core/constants.dart';
+import 'package:neuromesh_ai/models/chat_message.dart';
+import 'package:neuromesh_ai/models/chat_session.dart';
+import 'package:neuromesh_ai/services/agent_service.dart';
+import 'package:neuromesh_ai/services/app_log_service.dart';
+import 'package:neuromesh_ai/services/cloud_service.dart';
+import 'package:neuromesh_ai/services/hive_service.dart';
+import 'package:neuromesh_ai/services/image_generation_notification_service.dart';
+import 'package:neuromesh_ai/services/inference_service.dart';
+import 'package:neuromesh_ai/services/local_image_service.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  late Directory dir;
+  late HiveService hive;
+  late ChatController chat;
+  late _WorkspaceAgent agent;
+  late _TestCloud cloud;
+
+  setUp(() async {
+    dir = await Directory.systemTemp.createTemp('chat_submission');
+    Hive.init(dir.path);
+    hive = Get.put(await HiveService().init());
+    await hive.setSetting(AppConstants.keyInferenceMode, 'cloud');
+    Get.put(SettingsController());
+    Get.put(InferenceService());
+    Get.put(AppLogService());
+    Get.put(ImageGenerationNotificationService());
+    Get.put(LocalImageService());
+    cloud = Get.put<CloudService>(_TestCloud()) as _TestCloud;
+    agent = Get.put<AgentService>(_WorkspaceAgent()) as _WorkspaceAgent;
+    chat = Get.put(ChatController());
+  });
+
+  tearDown(() async {
+    await Get.delete<ChatController>();
+    Get.reset();
+    await Hive.close();
+    await dir.delete(recursive: true);
+  });
+
+  void attachDocument() {
+    chat.selectedFileName.value = 'notes.txt';
+    chat.selectedFilePath.value = '${dir.path}/notes.txt';
+    chat.selectedFileContent.value = 'Document contents';
+    chat.selectedFileType.value = 'text';
+    chat.textController.text = 'Read this';
+  }
+
+  test('a second send during attachment import cannot duplicate the request',
+      () async {
+    attachDocument();
+    final first = chat.sendMessage();
+    await chat.sendMessage();
+    expect(agent.imports, 1);
+    agent.imported.complete('notes.txt');
+    await first;
+    expect(cloud.calls, 1);
+    expect(chat.messages.map((m) => m.role), ['user', 'assistant']);
+    expect(hive.getMessagesForChat(chat.currentSessionId.value), hasLength(2));
+  });
+
+  test('a new draft typed during attachment import is preserved', () async {
+    attachDocument();
+    final first = chat.sendMessage();
+    chat.textController.text = 'The next message';
+    agent.imported.complete('notes.txt');
+    await first;
+    expect(chat.messages.first.visibleUserText, 'Read this');
+    expect(chat.textController.text, 'The next message');
+  });
+
+  test('switching chats during attachment import discards the stale send',
+      () async {
+    attachDocument();
+    final first = chat.sendMessage();
+    final original = chat.currentSessionId.value;
+    chat.createNewChat();
+    agent.imported.complete('notes.txt');
+    await first;
+    expect(chat.currentSessionId.value, isNot(original));
+    expect(chat.messages, isEmpty);
+    expect(hive.getMessagesForChat(original), isEmpty);
+    expect(cloud.calls, 0);
+  });
+
+  test('editing and regenerating preserve the attached document and draft',
+      () async {
+    final session = ChatSession(id: 'session', title: 'My custom title');
+    final original = ChatMessage(
+      id: 'message',
+      chatId: session.id,
+      role: 'user',
+      content: 'Read this\n\nAttached file: notes.txt\nDocument contents',
+      fileName: 'notes.txt',
+      fileContent: 'Document contents',
+      fileType: 'text',
+    );
+    await hive.saveSession(session.id, session.toMap());
+    await hive.saveMessage(original.id, original.toMap());
+    chat.loadSessions();
+    chat.openChat(session.id);
+    chat.textController.text = 'Draft I am still writing';
+    await chat.resendLast('Summarize this', messageId: original.id);
+    await chat.regenerate();
+
+    expect(chat.currentSession?.title, 'My custom title');
+    expect(chat.textController.text, 'Draft I am still writing');
+    expect(chat.messages.first.id, original.id);
+    expect(chat.messages.first.fileName, 'notes.txt');
+    expect(chat.messages.first.content,
+        startsWith('Summarize this\n\nAttached file'));
+    expect(cloud.lastInput, contains('Document contents'));
+    expect(cloud.calls, 2);
+    expect(hive.getMessagesForChat(session.id), hasLength(2));
+  });
+
+  test('a damaged saved image leaves the rest of the message readable', () {
+    final message = ChatMessage(
+      id: 'broken',
+      chatId: 'session',
+      role: 'assistant',
+      content: 'Saved reply',
+      imageBase64: 'invalid!',
+    );
+    expect(message.decodedImageBytes, isNull);
+    expect(message.content, 'Saved reply');
+  });
+}
+
+class _WorkspaceAgent extends AgentService {
+  final imported = Completer<String>();
+  int imports = 0;
+
+  @override
+  Future<String> importToWorkspace(String sourcePath, String name) {
+    imports++;
+    return imported.future;
+  }
+}
+
+class _TestCloud extends CloudService {
+  int calls = 0;
+  String? lastInput;
+
+  @override
+  Future<String> sendMessage({
+    required List<Map<String, String>> messages,
+    String? imageBase64,
+    double? temperature,
+    int? maxTokens,
+    void Function(String token)? onToken,
+  }) async {
+    calls++;
+    lastInput = messages.last['content'];
+    return 'Reply';
+  }
+}

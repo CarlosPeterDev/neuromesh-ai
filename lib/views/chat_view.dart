@@ -81,7 +81,8 @@ class ChatView extends GetView<ChatController> {
                   if (i == n && streaming) {
                     return _streamBubble(context, text, isDark);
                   }
-                  return ChatBubble(message: controller.messages[i]);
+                  final message = controller.messages[i];
+                  return ChatBubble(key: ValueKey(message.id), message: message);
                 },
               ),
             );
@@ -238,6 +239,7 @@ class ChatView extends GetView<ChatController> {
     await showAppSheet<void>(
       context,
       title: result.role == 'user' ? 'Your message' : 'Assistant message',
+      subtitle: result.fileName,
       builder: (_) => SelectableText(_ChatMessageSearch.textOf(result)),
     );
   }
@@ -1730,8 +1732,9 @@ class _ChatMessageSearch extends SearchDelegate<ChatMessage?> {
 
   _ChatMessageSearch(this.messages) : super(searchFieldLabel: 'Search this chat');
 
-  static String textOf(ChatMessage message) =>
-      stripToolTrace(splitThoughtTags(message.content).answer).trim();
+  static String textOf(ChatMessage message) => message.role == 'user'
+      ? message.visibleUserText.trim()
+      : stripToolTrace(splitThoughtTags(message.content).answer).trim();
 
   @override
   Widget buildLeading(BuildContext context) => BackButton(
@@ -1761,7 +1764,13 @@ class _ChatMessageSearch extends SearchDelegate<ChatMessage?> {
     for (final message in messages.reversed) {
       final text = textOf(message);
       final offset = text.toLowerCase().indexOf(term);
-      if (offset < 0) continue;
+      if (offset < 0) {
+        final fileName = message.fileName;
+        if (fileName != null && fileName.toLowerCase().contains(term)) {
+          matches.add((message, fileName));
+        }
+        continue;
+      }
       final start = math.max(0, offset - 36);
       final end = math.min(text.length, offset + term.length + 100);
       final excerpt = '${start > 0 ? '…' : ''}${text.substring(start, end)}${end < text.length ? '…' : ''}';
