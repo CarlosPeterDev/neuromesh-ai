@@ -44,7 +44,7 @@ class MemoryView extends StatelessWidget {
         final next = mem.nextRun;
         return ListView(padding: kPagePadding, children: [
           const AppNotice(
-              'These notes are added to every chat so the AI knows you. You can edit or delete any of them. '
+              'Save facts and preferences that help in future chats. Requests to do work stay in their chat. '
               'Memory stays on this device.'),
           const SectionHeader('Automatic updates'),
           AppGroup(children: [

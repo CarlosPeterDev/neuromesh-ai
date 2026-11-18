@@ -17,12 +17,62 @@ import 'log_view.dart';
 import 'toolbox_view.dart';
 import '../core/haptics.dart';
 import 'diagnostics_view.dart';
+import 'memory_view.dart';
 import 'workload_placement_view.dart';
 
 const _tabular = [FontFeature.tabularFigures()];
 
-class SettingsView extends GetView<SettingsController> {
+class SettingsView extends StatefulWidget {
   const SettingsView({super.key});
+
+  @override
+  State<SettingsView> createState() => _SettingsViewState();
+}
+
+class _SettingsViewState extends State<SettingsView> {
+  final _search = TextEditingController();
+  String _query = '';
+  SettingsController get controller => Get.find<SettingsController>();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  static const _keywords = <String, String>{
+    'Appearance': 'theme dark light font text size',
+    'Inference mode': 'local cloud ollama provider',
+    'Model parameters': 'temperature context size max tokens seed stop sequences top p top k',
+    'GGUF & LiteRT': 'performance cpu gpu vulkan threads hardware acceleration ram',
+    'Image generation': 'image size resolution diffusion steps backend',
+    'Memory': 'preferences facts remember automatic learning personal',
+    'Workload placement': 'voice tts stt speech audio transcribe image device cluster',
+    'Phone cluster': 'pair devices master worker server',
+    'Report an error': 'diagnostics zip crash bug upload report delivery',
+    'Toolbox': 'backup export import files profiles roles prompts',
+    'Device': 'free ram storage battery hardware',
+    'App updates': 'version release upgrade',
+  };
+
+  List<Widget> _filter(List<Widget> sections) {
+    if (_query.isEmpty) return sections;
+    final terms = _query.split(RegExp(r'\s+'));
+    final matches = <Widget>[];
+    for (var i = 0; i < sections.length; i += 2) {
+      final header = sections[i] as SectionHeader;
+      final group = sections[i + 1] as AppGroup;
+      final rows = group.children.whereType<AppRow>().where((row) {
+        final text = '${header.title} ${row.title} ${row.subtitle ?? ''} '
+            '${_keywords[row.title] ?? ''}';
+        return terms.every(text.toLowerCase().contains);
+      }).toList();
+      if (rows.isNotEmpty) {
+        matches.addAll([header, AppGroup(dividerIndent: group.dividerIndent, children: rows)]);
+      }
+    }
+    return matches;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -34,9 +84,7 @@ class SettingsView extends GetView<SettingsController> {
         final device = Get.find<DeviceInfoService>();
         final showUpdates =
             UpdateService.isSupported && Get.isRegistered<UpdateService>();
-        return ListView(
-          padding: kPagePadding,
-          children: [
+        final sections = _filter([
             const SectionHeader('Appearance & feedback',
                 padding: EdgeInsets.fromLTRB(4, 8, 4, 8)),
             AppGroup(dividerIndent: 60, children: [
@@ -60,6 +108,13 @@ class SettingsView extends GetView<SettingsController> {
             ]),
             const SectionHeader('Chat & model defaults'),
             AppGroup(dividerIndent: 60, children: [
+              AppRow(
+                icon: Icons.psychology_alt_outlined,
+                title: 'Memory',
+                subtitle: 'Review saved facts and preferences',
+                chevron: true,
+                onTap: () => Get.to(() => const MemoryView()),
+              ),
               _navRow(
                 context,
                 icon: Icons.memory_rounded,
@@ -185,6 +240,32 @@ class SettingsView extends GetView<SettingsController> {
                     : 'Version ${controller.appVersion.value}',
               ),
             ]),
+        ]);
+        return ListView(
+          padding: kPagePadding,
+          children: [
+            TextField(
+              controller: _search,
+              onChanged: (value) => setState(() => _query = value.trim().toLowerCase()),
+              textInputAction: TextInputAction.search,
+              decoration: appInputDecoration(context, hint: 'Search settings').copyWith(
+                prefixIcon: const Icon(Icons.search_rounded),
+                suffixIcon: _query.isEmpty ? null : IconButton(
+                  tooltip: 'Clear search',
+                  onPressed: () {
+                    _search.clear();
+                    setState(() => _query = '');
+                  },
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ),
+            ),
+            if (sections.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 36),
+                child: Center(child: Text('No settings match your search.')),
+              ),
+            ...sections,
           ],
         );
       }),

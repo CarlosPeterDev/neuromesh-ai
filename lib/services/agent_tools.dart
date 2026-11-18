@@ -26,6 +26,14 @@ String? literalSpeechText(String request) {
   return text.isEmpty ? null : text;
 }
 
+final _namedWorkspaceFile = RegExp(
+  r'^\s*(?:please\s+)?(?:create|make)\s+(?:an?\s+)?(?:empty\s+)?(?:text\s+)?file\s+'
+  r'(?:(?:in\s+(?:the\s+)?workspace)\s+)(?:named|called)\s+([\w-]+\.txt)[.!]?\s*$',
+  caseSensitive: false,
+);
+
+String? namedWorkspaceFile(String request) => _namedWorkspaceFile.firstMatch(request)?.group(1);
+
 /// Finds the first tool call in [reply]. Tolerates a missing closing tag
 /// and surrounding prose; returns null when there is no valid call.
 ParsedToolCall? parseToolCall(String reply) {

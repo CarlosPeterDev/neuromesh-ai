@@ -10,6 +10,8 @@ import '../controllers/chat_controller.dart';
 import '../controllers/settings_controller.dart';
 import '../controllers/model_controller.dart';
 import '../controllers/home_controller.dart';
+import '../models/chat_message.dart';
+import '../services/agent_service.dart' show stripToolTrace;
 import '../services/cluster_service.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
@@ -186,25 +188,10 @@ class ChatView extends GetView<ChatController> {
       actions: [
         Obx(() {
           if (controller.messages.isEmpty) return const SizedBox.shrink();
-          final usage = _contextUsage();
-          if (usage == null) return const SizedBox.shrink();
-          final warn = usage.pct >= 0.75;
           return IconButton(
-            tooltip: 'Context ${(usage.pct * 100).round()}% used',
-            onPressed: () => _showModelSheet(context),
-            icon: SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(
-                value: usage.pct < 0.02 ? 0.02 : usage.pct,
-                strokeWidth: 2.4,
-                strokeCap: StrokeCap.round,
-                backgroundColor: _sep(context),
-                color: warn
-                    ? const Color(0xFFFF9500)
-                    : Theme.of(context).hintColor,
-              ),
-            ),
+            tooltip: 'Find in this chat',
+            icon: const Icon(Icons.search_rounded, size: 20),
+            onPressed: () => _findInThisChat(context),
           );
         }),
         Obx(() {
@@ -239,6 +226,19 @@ class ChatView extends GetView<ChatController> {
         }),
         const SizedBox(width: 4),
       ],
+    );
+  }
+
+  Future<void> _findInThisChat(BuildContext context) async {
+    final result = await showSearch<ChatMessage?>(
+      context: context,
+      delegate: _ChatMessageSearch(controller.messages.toList()),
+    );
+    if (result == null || !context.mounted) return;
+    await showAppSheet<void>(
+      context,
+      title: result.role == 'user' ? 'Your message' : 'Assistant message',
+      builder: (_) => SelectableText(_ChatMessageSearch.textOf(result)),
     );
   }
 
@@ -1721,5 +1721,63 @@ class _BlinkingCursorState extends State<_BlinkingCursor>
                 decoration: BoxDecoration(
                     color: widget.color,
                     borderRadius: BorderRadius.circular(1)))));
+  }
+}
+
+
+class _ChatMessageSearch extends SearchDelegate<ChatMessage?> {
+  final List<ChatMessage> messages;
+
+  _ChatMessageSearch(this.messages) : super(searchFieldLabel: 'Search this chat');
+
+  static String textOf(ChatMessage message) =>
+      stripToolTrace(splitThoughtTags(message.content).answer).trim();
+
+  @override
+  Widget buildLeading(BuildContext context) => BackButton(
+        onPressed: () => close(context, null),
+      );
+
+  @override
+  List<Widget> buildActions(BuildContext context) => [
+        if (query.isNotEmpty)
+          IconButton(
+            tooltip: 'Clear search',
+            icon: const Icon(Icons.close_rounded),
+            onPressed: () => query = '',
+          ),
+      ];
+
+  @override
+  Widget buildResults(BuildContext context) => _matches(context);
+
+  @override
+  Widget buildSuggestions(BuildContext context) => _matches(context);
+
+  Widget _matches(BuildContext context) {
+    final term = query.trim().toLowerCase();
+    if (term.isEmpty) return const Center(child: Text('Search messages in this chat.'));
+    final matches = <(ChatMessage, String)>[];
+    for (final message in messages.reversed) {
+      final text = textOf(message);
+      final offset = text.toLowerCase().indexOf(term);
+      if (offset < 0) continue;
+      final start = math.max(0, offset - 36);
+      final end = math.min(text.length, offset + term.length + 100);
+      final excerpt = '${start > 0 ? '…' : ''}${text.substring(start, end)}${end < text.length ? '…' : ''}';
+      matches.add((message, excerpt));
+    }
+    if (matches.isEmpty) return const Center(child: Text('No matching messages.'));
+    return ListView.builder(
+      itemCount: matches.length,
+      itemBuilder: (context, index) {
+        final (message, excerpt) = matches[index];
+        return ListTile(
+          title: Text(excerpt, maxLines: 3, overflow: TextOverflow.ellipsis),
+          subtitle: Text(message.role == 'user' ? 'You' : 'Assistant'),
+          onTap: () => close(context, message),
+        );
+      },
+    );
   }
 }

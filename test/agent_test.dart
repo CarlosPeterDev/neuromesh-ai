@@ -61,6 +61,12 @@ void main() {
     expect(literalSpeechText('Can you create a file'), isNull);
   });
 
+  test('recognizes an explicitly named empty workspace file', () {
+    expect(namedWorkspaceFile('Create a file in the workspace named hello.txt'), 'hello.txt');
+    expect(namedWorkspaceFile('Create a file in the workspace named hello.txt with my notes'), isNull);
+    expect(namedWorkspaceFile('Can you create a file'), isNull);
+  });
+
   test('explicit TTS runs the tool, exposes progress and returns the audio link',
       () async {
     Get.put(HiveService());
