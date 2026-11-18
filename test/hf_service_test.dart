@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:neuromesh_ai/services/hf_service.dart';
+import 'package:neuromesh_ai/utils/llama_archs.dart';
 
 void main() {
   test('searchModels asks for gguf repos sorted by downloads', () async {
@@ -56,6 +57,7 @@ void main() {
               {'type': 'file', 'path': 'm-Q4_K_M.gguf', 'size': 400},
               {'type': 'file', 'path': 'big-00001-of-00002.gguf', 'size': 9000},
               {'type': 'file', 'path': 'mmproj-F16.gguf', 'size': 100},
+              {'type': 'file', 'path': 'Qwen3.8-27B-FastMTP-32K.gguf', 'size': 903453952},
               {'type': 'file', 'path': 'README.md', 'size': 1},
               {'type': 'directory', 'path': 'sub'},
             ]),
@@ -65,6 +67,13 @@ void main() {
     final files = await svc.listGgufFiles('a/b');
     expect(files.map((f) => f.filename).toList(), ['m-Q4_K_M.gguf', 'm-Q8_0.gguf']);
     expect(files.first.quant, 'Q4_K_M');
+  });
+
+  test('FastMTP draft names are distinguished from complete MTP models', () {
+    const draft = 'Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-FastMTP-32K';
+    expect(isFastMtpDraft('$draft.gguf'), isTrue);
+    expect(isFastMtpDraft(draft), isTrue);
+    expect(isFastMtpDraft('Qwen3.8-27B-MTP-Q4_K_M.gguf'), isFalse);
   });
 
   test('errors become readable messages', () async {

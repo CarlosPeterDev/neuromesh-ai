@@ -217,7 +217,10 @@ class HfService {
       final lfs = item['lfs'];
       final size = (lfs is Map ? lfs['size'] : null) ?? item['size'];
       final file = HfGgufFile(path: path, size: (size as num?)?.toInt() ?? 0);
-      if (!images && (file.isSplit || file.isProjector)) continue;
+      if (!images &&
+          (file.isSplit || file.isProjector || isFastMtpDraft(file.filename))) {
+        continue;
+      }
       // Phones can't hold huge image checkpoints.
       if (images && (file.size > 6 * 1024 * 1024 * 1024)) continue;
       files.add(file);

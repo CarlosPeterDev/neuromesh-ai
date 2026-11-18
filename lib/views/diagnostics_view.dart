@@ -149,6 +149,8 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
               final ready = snapshot.connectionState == ConnectionState.done;
               final report = ready ? snapshot.data : null;
               final note = diagnosticText(_description.trim());
+              final needsDelivery =
+                  _direct == null && !DiagnosticsService.canSendReport;
               final preview = report == null || note.isEmpty
                   ? report
                   : 'Problem description\n$note\n\n$report';
@@ -161,8 +163,8 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
                         const Padding(
                           padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
                           child: Text(
-                            'Your report goes to NeuroMesh support via Telegram '
-                            'when you tap Send report. Review the preview first.',
+                            'Review the diagnostic report before sending. '
+                            'Send report uploads the preview as a ZIP.',
                           ),
                         ),
                         Padding(
@@ -174,7 +176,7 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
                             maxLines: 4,
                             maxLength: 1500,
                             decoration: const InputDecoration(
-                              labelText: 'What happened?',
+                              labelText: 'What happened? (optional)',
                               hintText:
                                   'What did you try, and what did you expect?',
                             ),
@@ -225,27 +227,26 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
                                 style: TextStyle(
                                     color:
                                         Theme.of(context).colorScheme.error)),
-                          if (_direct == null &&
-                              !DiagnosticsService.canSendReport)
-                            const Text(
-                                'Open Telegram delivery settings to connect your bot.'),
-                          FilledButton.icon(
-                            icon: Icon(_sent
-                                ? Icons.check_rounded
-                                : Icons.send_outlined),
-                            label: Text(_sent
-                                ? 'Report sent'
-                                : _sending
-                                    ? 'Sending…'
-                                    : 'Send report'),
-                            onPressed: _sending ||
-                                    _sent ||
-                                    note.isEmpty ||
-                                    (_direct == null &&
-                                        !DiagnosticsService.canSendReport)
-                                ? null
-                                : () => _send(preview),
-                          ),
+                          if (needsDelivery && !_loadingDelivery)
+                            FilledButton.icon(
+                              icon: const Icon(Icons.settings_outlined),
+                              label: const Text('Set up direct delivery'),
+                              onPressed: _editDelivery,
+                            )
+                          else
+                            FilledButton.icon(
+                              icon: Icon(_sent
+                                  ? Icons.check_rounded
+                                  : Icons.send_outlined),
+                              label: Text(_sent
+                                  ? 'Report sent'
+                                  : _sending
+                                      ? 'Sending…'
+                                      : 'Send report'),
+                              onPressed: _loadingDelivery || _sending || _sent
+                                  ? null
+                                  : () => _send(preview),
+                            ),
                         ],
                       ),
                     ),
