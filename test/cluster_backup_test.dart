@@ -17,6 +17,15 @@ void main() {
     expect(() => ClusterBackup.open(key, packet), throwsA(anything));
   });
 
+  test('a valid packet cannot restore a different backup category', () async {
+    final key = ClusterBackup.randomBytes(32);
+    final packet = ClusterBackup.seal(
+        key, Uint8List.fromList(utf8.encode('{"kind":"memory"}')));
+    await expectLater(
+        ClusterBackup.restore(ClusterBackupPart.chats, key, packet),
+        throwsFormatException);
+  });
+
   test('backup codes are scoped to private LAN addresses', () {
     final key =
         base64Url.encode(ClusterBackup.randomBytes(32)).split('=').first;

@@ -24,6 +24,11 @@ enum ClusterBackupPart {
 
   const ClusterBackupPart(this.label);
   final String label;
+
+  String get transferId => 'backup-$name';
+
+  static ClusterBackupPart? fromTransferId(String id) =>
+      values.firstWhereOrNull((part) => part.transferId == id);
 }
 
 class ClusterBackup {
@@ -161,11 +166,16 @@ class ClusterBackup {
     return seal(key, Uint8List.fromList(utf8.encode(jsonEncode(data))));
   }
 
-  static Future<void> restore(Uint8List key, Uint8List packet) async {
+  static Future<void> restore(
+      ClusterBackupPart part, Uint8List key, Uint8List packet) async {
     final data =
         jsonDecode(utf8.decode(open(key, packet))) as Map<String, dynamic>;
+    if (data['kind'] != part.name) {
+      throw const FormatException(
+          'This backup does not match the selected category.');
+    }
     final hive = Get.find<HiveService>();
-    switch (ClusterBackupPart.values.byName(data['kind'] as String)) {
+    switch (part) {
       case ClusterBackupPart.chats:
         final backup = parseBackup(data['backup'] as String);
         final ids = <String, String>{};

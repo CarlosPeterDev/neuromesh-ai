@@ -331,7 +331,7 @@ class ModelTransferServer {
       final id = fid++;
       table[id] = item.value;
       out.add(TransferItem(
-        id: 'backup-${item.key.name}',
+        id: item.key.transferId,
         kind: 'backup',
         name: item.key.label,
         voiceId: null,
@@ -537,10 +537,16 @@ class ModelTransferClient {
       if (j is! Map || j['app'] != 'neuromesh') {
         throw Exception('That is not a NeuroMesh AI device.');
       }
-      return [
+      final items = [
         for (final i in (j['items'] as List? ?? const []))
           TransferItem.fromJson(Map<String, dynamic>.from(i as Map)),
       ];
+      if (items.map((item) => item.id).toSet().length != items.length) {
+        throw const FormatException('The sender listed duplicate items.');
+      }
+      return items.where((item) => item.kind != 'backup' ||
+          (_backupKey != null &&
+              ClusterBackupPart.fromTransferId(item.id) != null)).toList();
     } finally {
       c.close();
     }
@@ -630,7 +636,8 @@ class ModelTransferClient {
   Future<void> _receive(TransferItem it) async {
     if (it.kind == 'backup') {
       final key = _backupKey;
-      if (key == null || it.files.length != 1 ||
+      final part = ClusterBackupPart.fromTransferId(it.id);
+      if (key == null || part == null || it.files.length != 1 ||
           it.size < 28 || it.size > ClusterBackup.maxBytes + 28) {
         throw const FormatException('Invalid backup or missing backup key.');
       }
@@ -639,7 +646,7 @@ class ModelTransferClient {
       try {
         final file = File('${dir.path}/backup.bin');
         await _getFile(it.files.single, file);
-        await ClusterBackup.restore(key, await file.readAsBytes());
+        await ClusterBackup.restore(part, key, await file.readAsBytes());
       } finally {
         await dir.delete(recursive: true);
       }

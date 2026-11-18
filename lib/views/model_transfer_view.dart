@@ -287,7 +287,9 @@ class _ReceiveTabState extends State<_ReceiveTab> {
             onChanged: busy || _have.contains(it.id)
                 ? null
                 : (v) => setState(() => v == true ? _picked.add(it.id) : _picked.remove(it.id)),
-            title: Text(it.name),
+            title: Text(it.kind == 'backup'
+                ? ClusterBackupPart.fromTransferId(it.id)!.label
+                : it.name),
             subtitle: Text(
                 '${_kind(it.kind)} · ${formatTransferBytes(it.size)}${_have.contains(it.id) ? ' · already here' : ''}'),
           ),
