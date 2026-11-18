@@ -34,15 +34,29 @@ const _kTtsId = 'voice_tts_id';
 const _kSid = 'voice_sid';
 const _kSpeed = 'voice_speed';
 
-/// Download / delete voice models, pick which ones to use, choose the voice.
-class VoiceModelsView extends StatefulWidget {
+class VoiceModelsView extends StatelessWidget {
   const VoiceModelsView({super.key});
 
   @override
-  State<VoiceModelsView> createState() => _VoiceModelsViewState();
+  Widget build(BuildContext context) => Scaffold(
+        backgroundColor: AppTokens.of(context).bg,
+        appBar: appScreenBar(context, title: 'Voice models'),
+        body: ListView(
+          padding: kPagePadding,
+          children: const [VoiceModelCatalog()],
+        ),
+      );
 }
 
-class _VoiceModelsViewState extends State<VoiceModelsView> {
+/// Downloads, model selection, and voice options shared by both entry points.
+class VoiceModelCatalog extends StatefulWidget {
+  const VoiceModelCatalog({super.key});
+
+  @override
+  State<VoiceModelCatalog> createState() => _VoiceModelCatalogState();
+}
+
+class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
   final _hive = Get.find<HiveService>();
   final _store = Get.find<VoiceModelStore>();
   bool _previewing = false;
@@ -84,67 +98,60 @@ class _VoiceModelsViewState extends State<VoiceModelsView> {
 
   @override
   Widget build(BuildContext context) {
-    final t = AppTokens.of(context);
-    return Scaffold(
-      backgroundColor: t.bg,
-      appBar: appScreenBar(context, title: 'Voice models'),
-      body: Obx(() {
-        _store.installed.length; // rebuild when downloads finish / are removed
-        _store.progress.length;
-        Widget group(VoiceKind k) => AppGroup(children: [
-              for (final m in kVoiceModels.where((m) => m.kind == k))
-                _row(context, m),
-            ]);
-        final tts = _effective(VoiceKind.tts, _ttsId);
-        return ListView(padding: kPagePadding, children: [
-          const Padding(
-            padding: EdgeInsets.all(8),
-            child: Text(
-                'Voice calls and the agent\'s audio tools run fully on your phone. '
-                'Download any models you like, then tap an installed one to make it the one that is used. '
-                'If no speaking voice is installed, the phone\'s built-in voice is used.'),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-            child: Wrap(spacing: 8, runSpacing: 8, children: [
-              OutlinedButton.icon(
-                icon: const Icon(Icons.file_open_rounded),
-                label: const Text('Import voice model (.zip)'),
-                onPressed: () async {
-                  final r = await FilePicker.pickFiles(
-                      type: FileType.custom, allowedExtensions: ['zip']);
-                  final path = r?.files.single.path;
-                  if (path == null) return;
-                  try {
-                    final m = await _store.importZip(path);
-                    await _store.scan();
-                    Get.snackbar('Imported', m.title);
-                    if (mounted) setState(() {});
-                  } catch (e) {
-                    Get.snackbar('Import failed', '$e');
-                  }
-                },
-              ),
-              OutlinedButton.icon(
-                icon: const Icon(Icons.swap_horiz_rounded),
-                label: const Text('Send / receive on Wi-Fi'),
-                onPressed: () => Get.to(() => const ModelTransferView()),
-              ),
-            ]),
-          ),
-          const SectionHeader('Listening (speech to text)'),
-          group(VoiceKind.stt),
-          const SectionHeader('Speaking (text to speech)'),
-          group(VoiceKind.tts),
-          if (tts != null) ...[
-            const SectionHeader('Voice options'),
-            _voiceOptions(tts),
-          ],
-          const SectionHeader('Better turn-taking (recommended)'),
-          group(VoiceKind.vad),
-        ]);
-      }),
-    );
+    return Obx(() {
+      _store.installed.length; // rebuild when downloads finish / are removed
+      _store.progress.length;
+      Widget group(VoiceKind k) => AppGroup(children: [
+            for (final m in kVoiceModels.where((m) => m.kind == k))
+              _row(context, m),
+          ]);
+      final tts = _effective(VoiceKind.tts, _ttsId);
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Padding(
+          padding: EdgeInsets.all(8),
+          child: Text(
+              'Download a listening or speaking model, then tap it to select it.'),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+          child: Wrap(spacing: 8, runSpacing: 8, children: [
+            OutlinedButton.icon(
+              icon: const Icon(Icons.file_open_rounded),
+              label: const Text('Import voice model (.zip)'),
+              onPressed: () async {
+                final r = await FilePicker.pickFiles(
+                    type: FileType.custom, allowedExtensions: ['zip']);
+                final path = r?.files.single.path;
+                if (path == null) return;
+                try {
+                  final m = await _store.importZip(path);
+                  await _store.scan();
+                  Get.snackbar('Imported', m.title);
+                  if (mounted) setState(() {});
+                } catch (e) {
+                  Get.snackbar('Import failed', '$e');
+                }
+              },
+            ),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.swap_horiz_rounded),
+              label: const Text('Send / receive on Wi-Fi'),
+              onPressed: () => Get.to(() => const ModelTransferView()),
+            ),
+          ]),
+        ),
+        const SectionHeader('Listening (speech to text)'),
+        group(VoiceKind.stt),
+        const SectionHeader('Speaking (text to speech)'),
+        group(VoiceKind.tts),
+        if (tts != null) ...[
+          const SectionHeader('Voice options'),
+          _voiceOptions(tts),
+        ],
+        const SectionHeader('Better turn-taking (recommended)'),
+        group(VoiceKind.vad),
+      ]);
+    });
   }
 
   Widget _voiceOptions(VoiceModelInfo tts) {

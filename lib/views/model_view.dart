@@ -11,6 +11,8 @@ import '../services/download_service.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
 import 'hf_browser.dart';
+import 'voice_views.dart';
+import '../services/voice_models.dart';
 import '../services/favorites_service.dart';
 import '../utils/model_fit.dart';
 
@@ -47,7 +49,8 @@ class ModelView extends GetView<ModelController> {
         title: 'Models',
         actions: [
           Obx(() {
-            if (controller.modelScope.value == 'online') {
+            final scope = controller.modelScope.value;
+            if (scope == 'online' || scope == 'voice') {
               return const SizedBox.shrink();
             }
             return _TextAction(
@@ -63,7 +66,10 @@ class ModelView extends GetView<ModelController> {
       ),
       body: RefreshIndicator(
         onRefresh: () async {
-          if (controller.modelScope.value != 'online') {
+          final scope = controller.modelScope.value;
+          if (scope == 'voice') {
+            await Get.find<VoiceModelStore>().scan();
+          } else if (scope != 'online') {
             await controller.refreshDownloaded();
           }
         },
@@ -73,10 +79,12 @@ class ModelView extends GetView<ModelController> {
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
             children: [
-              _buildScopeToggle(context),
+              _buildScopeToggle(),
               const SizedBox(height: 16),
-              _buildActiveModelBanner(context),
-              _buildActiveDownloadsBanner(context),
+              if (scope != 'voice') ...[
+                _buildActiveModelBanner(context),
+                _buildActiveDownloadsBanner(context),
+              ],
               if (scope == 'local') ...[
                 _buildImportingProgress(context),
                 ..._buildLibrary(context),
@@ -84,7 +92,9 @@ class ModelView extends GetView<ModelController> {
                 const HfBrowser(key: ValueKey('hf-gguf')),
               ] else if (scope == 'images') ...[
                 const HfBrowser(key: ValueKey('hf-images'), images: true),
-              ] else
+              ] else if (scope == 'voice')
+                const VoiceModelCatalog()
+              else
                 _buildOnlineProviders(context),
             ],
           );
@@ -93,17 +103,25 @@ class ModelView extends GetView<ModelController> {
     );
   }
 
-  Widget _buildScopeToggle(BuildContext context) {
-    return Obx(() => AppSegmented<String>(
-          items: const [
-            ('local', 'My models'),
-            ('browse', 'Browse'),
-            ('images', 'Images'),
-            ('online', 'Cloud'),
-          ],
-          selected: controller.modelScope.value,
-          onChanged: (value) => controller.modelScope.value = value,
-        ));
+  Widget _buildScopeToggle() {
+    const scopes = [
+      ('local', 'My models'),
+      ('browse', 'Browse'),
+      ('images', 'Images'),
+      ('voice', 'Voice'),
+      ('online', 'Cloud'),
+    ];
+    return LayoutBuilder(builder: (context, constraints) {
+      final useChips =
+          constraints.maxWidth < MediaQuery.textScalerOf(context).scale(315);
+      return Obx(() {
+        final selected = controller.modelScope.value;
+        void select(String scope) => controller.modelScope.value = scope;
+        return useChips
+            ? AppChips(items: scopes, selected: selected, onSelected: select)
+            : AppSegmented(items: scopes, selected: selected, onChanged: select);
+      });
+    });
   }
 
   Widget _buildLocalActions(BuildContext context) {
