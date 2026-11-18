@@ -267,7 +267,7 @@ class LocalImageService extends GetxService {
       }
 
       String vendor = 'unknown';
-      bool useGpu = true;
+      bool useGpu = Platform.isAndroid;
       if (Platform.isAndroid) {
         try {
           vendor = await SdFlutterAndroid.detectGpuVendor();
@@ -546,7 +546,7 @@ class LocalImageService extends GetxService {
           : selectedImageSize.clamp(256, 512).toInt();
 
       print(
-          '[LocalImageService] generateImage start: prompt="$prompt", backend=${currentBackend.value.displayName}, size=${imageSize}x$imageSize, steps=$effectiveSteps, availableRam=${availableRamMb}MB, sizeMode=${selectedImageSize == 0 ? "auto" : "fixed"}');
+          '[LocalImageService] generateImage start: backend=${currentBackend.value.displayName}, size=${imageSize}x$imageSize, steps=$effectiveSteps, availableRam=${availableRamMb}MB, sizeMode=${selectedImageSize == 0 ? "auto" : "fixed"}');
 
       GenerationResult? result;
 

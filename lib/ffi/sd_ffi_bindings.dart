@@ -316,16 +316,7 @@ void _staticLogCallback(int level, Pointer<Utf8> text) {
 class SdFfiBindings {
   static DynamicLibrary? _lib;
   static String _currentBackendLib = '';
-
-  /// Returns the backend whose library is currently loaded,
-  /// or [Backend.cpu] if nothing is loaded yet.
-  static Backend get loadedBackend {
-    if (_currentBackendLib.isEmpty) return Backend.cpu;
-    return Backend.values.firstWhere(
-      (b) => b.libraryName == _currentBackendLib,
-      orElse: () => Backend.cpu,
-    );
-  }
+  static Backend loadedBackend = Backend.cpu;
 
   static late SdFfiSetProgressCallback setProgressCallback;
   static late SdFfiSetLogCallback setLogCallback;
@@ -334,30 +325,33 @@ class SdFfiBindings {
   static late SdFfiSetExtraPaths setExtraPaths;
   static late SdFfiFree freeCtx;
   static late SdFfiGenerate generate;
+  static late void Function(Pointer<Uint8>) releaseImage;
   static late SdFfiGetCores getCores;
 
+  static NativeCallable<ProgressCallbackNative>? _desktopProgress;
   static Pointer<NativeFunction<ProgressCallbackNative>>? _progressPtr;
   static Pointer<NativeFunction<LogCallbackNative>>? _logPtr;
 
   /// Initialize FFI bindings for a specific backend.
   /// Call this before using any other functions.
   static void initialize([Backend backend = Backend.cpu]) {
+    final String library;
     if (Platform.isAndroid) {
-      final libName = backend.libraryName;
-      if (_lib != null && _currentBackendLib == libName) return;
-
-      print('[SdFfiBindings] Loading backend library: $libName');
-      try {
-        _lib = DynamicLibrary.open(libName);
-        _currentBackendLib = libName;
-        print('[SdFfiBindings] Loaded: $libName');
-      } catch (e) {
-        print('[SdFfiBindings] Failed to load $libName: $e');
-        rethrow;
+      library = backend.libraryName;
+    } else if (Platform.isWindows || Platform.isLinux) {
+      if (backend != Backend.cpu) {
+        throw UnsupportedError('Desktop image generation uses the CPU backend.');
       }
+      final folder = File(Platform.resolvedExecutable).parent.path;
+      final name = Platform.isWindows ? 'neuromesh_sd.dll' : 'libneuromesh_sd.so';
+      library = '$folder/native/$name';
     } else {
-      throw UnsupportedError('SdFfiBindings only supports Android');
+      throw UnsupportedError('No native image runtime for this platform.');
     }
+    if (_lib != null && _currentBackendLib == library) return;
+    _lib = DynamicLibrary.open(library);
+    _currentBackendLib = library;
+    loadedBackend = backend;
 
     _lookupFunctions();
   }
@@ -379,17 +373,13 @@ class SdFfiBindings {
         _lib!.lookupFunction<SdFfiInitExNative, SdFfiInitEx>('sd_ffi_init_ex');
     setExtraPaths = _lib!.lookupFunction<SdFfiSetExtraPathsNative,
         SdFfiSetExtraPaths>('sd_ffi_set_extra_paths');
-    // Ensure the backend library is actually available; if not, mark it unavailable
-    if (_currentBackendLib != Backend.cpu.libraryName) {
-      final backend =
-          Backend.values.firstWhere((b) => b.libraryName == _currentBackendLib);
-      print('[SdFfiBindings] Backend ${backend.displayName} loaded');
-    }
-
     freeCtx = _lib!.lookupFunction<SdFfiFreeNative, SdFfiFree>('sd_ffi_free');
 
     generate = _lib!
         .lookupFunction<SdFfiGenerateNative, SdFfiGenerate>('sd_ffi_generate');
+
+    releaseImage = _lib!.lookupFunction<Void Function(Pointer<Uint8>),
+        void Function(Pointer<Uint8>)>('sd_ffi_release_image');
 
     getCores = _lib!
         .lookupFunction<SdFfiGetCoresNative, SdFfiGetCores>('sd_ffi_get_cores');
@@ -397,6 +387,12 @@ class SdFfiBindings {
 
   static void setupCallbacks(SendPort sendPort) {
     _globalSendPort = sendPort;
+    if (Platform.isLinux || Platform.isWindows) {
+      _desktopProgress ??= NativeCallable<ProgressCallbackNative>.listener(
+          _staticProgressCallback);
+      setProgressCallback(_desktopProgress!.nativeFunction);
+      return;
+    }
 
     _progressPtr ??=
         Pointer.fromFunction<ProgressCallbackNative>(_staticProgressCallback);
@@ -409,6 +405,8 @@ class SdFfiBindings {
   static void clearCallbacks() {
     setProgressCallback(Pointer.fromAddress(0));
     setLogCallback(Pointer.fromAddress(0));
+    _desktopProgress?.close();
+    _desktopProgress = null;
     _globalSendPort = null;
   }
 }

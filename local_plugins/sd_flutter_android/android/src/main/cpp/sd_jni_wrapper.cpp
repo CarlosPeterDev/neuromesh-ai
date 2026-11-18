@@ -1,15 +1,19 @@
-#include <jni.h>
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
-#include <algorithm>
+#include "stable-diffusion.h"
+
+#ifdef __ANDROID__
+#include <jni.h>
 #include <android/log.h>
 #ifdef SD_JNI_HAVE_VULKAN
 #include <vulkan/vulkan.h>
 #endif
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
-#include <stdlib.h>
-#include "stable-diffusion.h"
 
 #define TAG "SD_JNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -372,6 +376,11 @@ Java_com_example_sd_1flutter_1android_SdFlutterAndroidPlugin_unloadModel(
     }
 }
 
+#else
+#define LOGI(...) do {} while (0)
+#define LOGE(...) do { std::fprintf(stderr, __VA_ARGS__); std::fputc('\n', stderr); } while (0)
+#endif
+
 // ============================================================================
 // C FFI exports for Dart FFI (no JNI / no MethodChannel)
 // ============================================================================
@@ -401,7 +410,9 @@ static void sd_ffi_log_trampoline(enum sd_log_level_t level, const char* text, v
 }
 
 // Visibility macro to force-export symbols from the shared library
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(_WIN32)
+    #define SD_FFI_API __declspec(dllexport)
+#elif defined(__GNUC__) || defined(__clang__)
     #define SD_FFI_API __attribute__((visibility("default")))
 #else
     #define SD_FFI_API
@@ -635,6 +646,11 @@ SD_FFI_API uint8_t* sd_ffi_generate(void* ctx,
     free(result);
     LOGI("[FFI] [PHASE] Returning buffer to Dart");
     return buf;
+}
+
+// Free image data with the allocator that created it (including Windows CRT).
+SD_FFI_API void sd_ffi_release_image(uint8_t* data) {
+    free(data);
 }
 
 // Get number of physical CPU cores.

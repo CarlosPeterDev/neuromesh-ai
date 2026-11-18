@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:llama_flutter_android/llama_flutter_android.dart';
 
+import 'desktop_diagnostics.dart';
+
 /// Detected SoC family.
 enum SocFamily {
   apple,
@@ -161,6 +163,14 @@ Future<Map<String, dynamic>> getDeviceInfo() async {
             '';
         socFamily = _detectSocFamily(cpuinfo, hardware);
       } catch (_) {}
+    } else if (Platform.isWindows) {
+      final status = await desktopDiagnostics();
+      if (status['ramTotal'] case final int bytes) {
+        totalRam = bytes / (1024 * 1024 * 1024);
+      }
+      if (status['ramFree'] case final int bytes) {
+        availableRam = bytes / (1024 * 1024 * 1024);
+      }
     } else if (Platform.isIOS) {
       final plugin = LlamaHostApi();
       final gpuInfo = await plugin.detectGpu();

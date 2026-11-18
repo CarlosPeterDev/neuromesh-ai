@@ -65,8 +65,8 @@ class DiagnosticsService {
         ('ramTotal', 'Total RAM (MiB)'),
         ('ramFree', 'Available RAM (MiB)'),
         ('ramLowThreshold', 'Low memory threshold (MiB)'),
-        ('storageFree', 'Available internal storage (MiB)'),
-        ('storageTotal', 'Internal storage (MiB)'),
+        ('storageFree', 'Available storage on app cache volume (MiB)'),
+        ('storageTotal', 'App cache volume total (MiB)'),
         ('level', 'Battery (%)'),
         ('thermal', 'Thermal status'),
       ]) {

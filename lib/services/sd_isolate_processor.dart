@@ -459,6 +459,7 @@ class SdIsolateProcessor {
       print('[Isolate] outSize=$outSize');
 
       if (resultPtr.address == 0 || outSize == 0) {
+        if (resultPtr != nullptr) SdFfiBindings.releaseImage(resultPtr);
         print('[Isolate] ERROR: null result or zero size');
         mainSendPort.send({
           'type': 'result',
@@ -475,7 +476,7 @@ class SdIsolateProcessor {
       print('[Isolate] Copied ${rgbBytes.length} bytes');
 
       // Free native buffer
-      calloc.free(resultPtr);
+      SdFfiBindings.releaseImage(resultPtr);
 
       print('[Isolate] Sending result to main isolate');
       mainSendPort.send({
