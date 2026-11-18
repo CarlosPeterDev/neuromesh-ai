@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../utils/llama_archs.dart';
+import '../utils/model_file_role.dart';
 
 class HfException implements Exception {
   final String message;
@@ -112,6 +113,7 @@ class HfGgufFile {
   const HfGgufFile({required this.path, required this.size});
 
   String get filename => path.split('/').last;
+  ModelFileRole get role => modelFileRole(path);
 
   /// Multi-part models ("-00001-of-00003") are not supported by the
   /// single-file downloader.
@@ -195,7 +197,7 @@ class HfService {
 
   /// Downloadable single-file .gguf models in [repoId], smallest first.
   Future<List<HfGgufFile>> listGgufFiles(String repoId,
-      {bool images = false}) async {
+      {bool images = false, bool includeHelpers = false}) async {
     final data = await _getJson(
       Uri.https(_host, '/api/models/$repoId/tree/main',
           {if (!images) 'recursive': 'true'}),
@@ -218,7 +220,7 @@ class HfService {
       final size = (lfs is Map ? lfs['size'] : null) ?? item['size'];
       final file = HfGgufFile(path: path, size: (size as num?)?.toInt() ?? 0);
       if (!images &&
-          (file.isSplit || file.isProjector || isFastMtpDraft(file.filename))) {
+          (file.isSplit || (!includeHelpers && file.role.isHelper))) {
         continue;
       }
       // Phones can't hold huge image checkpoints.

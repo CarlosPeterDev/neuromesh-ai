@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import '../controllers/model_controller.dart';
 import '../utils/page_text.dart';
+import '../utils/model_file_role.dart';
 import 'agent_service.dart';
 import 'local_image_service.dart';
 import 'voice_models.dart';
@@ -33,6 +34,9 @@ void registerExtraTools(AgentService agent) {
       final b = StringBuffer();
       b.writeln('Chat model loaded now: ${mc.lastLoadedModelName.isEmpty ? '(none)' : mc.lastLoadedModelName}');
       final files = mc.downloadedFiles.toList();
+      for (final file in files.take(30)) {
+        b.writeln('$file — ${modelFileRole(file).label}');
+      }
       b.writeln('Downloaded models (${files.length}): ${files.isEmpty ? 'none' : files.take(30).join(', ')}');
       final voiceModels = kVoiceModels
           .where((m) => !m.clone && vs.installed.contains(m.id)).toList();

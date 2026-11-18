@@ -23,6 +23,10 @@ Anything not listed here is not implemented yet.
 ## Install
 
 Download the APK from the [Releases](../../releases) page.
+
+The full Pro APK and Pro AAB include the native Linux launcher. Alpine Linux downloads when you choose **Install Alpine Linux** in Chat tools or the terminal. The standard Play AAB uses the restricted Play configuration. Google Play distribution of the full Linux build requires policy review.
+
+In **Models**, filter **Main models** or **Helpers**. Open a model and choose **Find model helpers** to inspect its original repository. Downloaded vision helpers can be linked to a matching installed model. Reload the main model after the helper download completes. File-role detection uses names, and each helper shows its runtime and compatibility requirements.
 Builds without production signing secrets are **development builds** and are labeled as pre-releases. They are not production-ready.
 
 ## Build

@@ -25,7 +25,8 @@ String _compact(int n) {
 class HfBrowser extends StatefulWidget {
   /// True to search image (Stable Diffusion) models instead of GGUF chat models.
   final bool images;
-  const HfBrowser({super.key, this.images = false});
+  final String initialQuery;
+  const HfBrowser({super.key, this.images = false, this.initialQuery = ''});
 
   @override
   State<HfBrowser> createState() => _HfBrowserState();
@@ -119,6 +120,8 @@ class _HfBrowserState extends State<HfBrowser> {
   @override
   void initState() {
     super.initState();
+    _query = widget.initialQuery;
+    _search.text = _query;
     _run();
   }
 
@@ -492,15 +495,16 @@ class _RepoFiles extends StatefulWidget {
 
 class _RepoFilesState extends State<_RepoFiles> {
   late final Future<List<HfGgufFile>> _files;
+  String _role = 'models';
 
   @override
   void initState() {
     super.initState();
-    _files = widget.hf.listGgufFiles(widget.repo.id, images: widget.images);
+    _files = widget.hf.listGgufFiles(widget.repo.id, images: widget.images, includeHelpers: true);
   }
 
   AiModel _asModel(HfGgufFile f) => AiModel(
-        name: widget.repo.name,
+        name: f.role.isHelper ? f.filename : widget.repo.name,
         filename: f.filename,
         url: HfService.downloadUrl(widget.repo.id, f.path),
         size: DownloadService.formatBytes(f.size),
@@ -525,6 +529,8 @@ class _RepoFilesState extends State<_RepoFiles> {
             title: 'File size',
             trailing: Text(DownloadService.formatBytes(f.size)),
           ),
+          const SizedBox(height: 12),
+          Text(f.role.help),
           const SizedBox(height: 12),
           AppNotice(
             widget.images
@@ -593,7 +599,11 @@ class _RepoFilesState extends State<_RepoFiles> {
             message: snap.error.toString(),
           );
         }
-        final all = snap.data ?? const <HfGgufFile>[];
+        final offered = snap.data ?? const <HfGgufFile>[];
+        final all = widget.images || _role == 'all'
+            ? offered
+            : offered.where((f) => _role == 'helpers'
+                ? f.role.isHelper : !f.role.isHelper).toList();
         final filtered = (widget.images || widget.quant == 'any')
             ? all
             : all.where((f) => _quantMatches(f.quant, widget.quant)).toList();
@@ -602,7 +612,7 @@ class _RepoFilesState extends State<_RepoFiles> {
         if (files.isEmpty && widget.images) {
           return _BundlePicker(repo: widget.repo, hf: widget.hf);
         }
-        if (files.isEmpty) {
+        if (files.isEmpty && offered.isEmpty) {
           return EmptyState(
             icon: Icons.search_off_rounded,
             title: widget.images
@@ -615,18 +625,27 @@ class _RepoFilesState extends State<_RepoFiles> {
         }
         final controller = Get.find<ModelController>();
         return Obx(() => Column(children: [
+            if (!widget.images)
+              Wrap(spacing: 8, children: [
+                for (final entry in const [('all', 'All'), ('models', 'Main models'), ('helpers', 'Helpers')])
+                  ChoiceChip(label: Text(entry.$2), selected: _role == entry.$1,
+                      onSelected: (_) => setState(() => _role = entry.$1)),
+              ]),
+            if (files.isEmpty) const Padding(padding: EdgeInsets.all(12),
+                child: Text('No files match this filter.')),
             AppGroup(children: [
               for (final f in files)
                 AppRow(
                   icon: Icons.insert_drive_file_outlined,
-                  title: f.quant.isEmpty ? f.filename : f.quant,
+                  title: f.role.isHelper ? f.role.label : f.quant.isEmpty ? f.filename : f.quant,
                   subtitle:
                       '${DownloadService.formatBytes(f.size)} · ${f.filename}'
-                      '${widget.images ? '' : '\nEst. RAM at ${Get.find<SettingsController>().contextSize.value} tokens: ${(needGBForBytes(f.size) + contextHeadroomGB(needGBForBytes(f.size))).toStringAsFixed(1)} GiB'}',
+                      '${widget.images || f.role.isHelper ? '' : '\nEst. RAM at ${Get.find<SettingsController>().contextSize.value} tokens: ${(needGBForBytes(f.size) + contextHeadroomGB(needGBForBytes(f.size))).toStringAsFixed(1)} GiB'}',
                   trailing: controller.downloadedFiles.contains(f.filename)
                       ? Text('On phone', style: t.small)
                       : controller.isDownloadingModel(f.filename)
                           ? Text('Downloading', style: t.small)
+                          : f.role.isHelper ? const Icon(Icons.extension_outlined)
                           : FitBadge(fitFor(needGBForBytes(f.size))),
                   chevron: !controller.downloadedFiles.contains(f.filename),
                   onTap: controller.downloadedFiles.contains(f.filename) ||
