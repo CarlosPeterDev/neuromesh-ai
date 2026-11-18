@@ -18,6 +18,7 @@ import 'voice_clone_view.dart';
 import 'chat_tools.dart';
 import '../core/ui.dart';
 import '../services/agent_service.dart';
+import '../services/skills_service.dart';
 import '../services/hive_service.dart';
 import '../services/model_transfer_service.dart';
 import 'model_transfer_view.dart';
@@ -73,7 +74,8 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
   /// installed, otherwise the first installed one.
   VoiceModelInfo? _effective(VoiceKind kind, String picked) {
     final list = kVoiceModels
-        .where((m) => m.kind == kind && !m.clone && _store.installed.contains(m.id))
+        .where((m) =>
+            m.kind == kind && !m.clone && _store.installed.contains(m.id))
         .toList();
     for (final m in list) {
       if (m.id == picked) return m;
@@ -87,10 +89,12 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
       final v = Get.find<VoiceService>();
       v.speed = _speed;
       if (!v.ttsLoadedFor(m)) await v.loadTts(m);
-      await v.speak(m.lang == 'ar'
-          ? 'مرحباً، هذا صوتي. كيف يبدو؟'
-          : 'Hello, this is how I sound. Do you like this voice?',
-          localModel: m, preferLocal: true);
+      await v.speak(
+          m.lang == 'ar'
+              ? 'مرحباً، هذا صوتي. كيف يبدو؟'
+              : 'Hello, this is how I sound. Do you like this voice?',
+          localModel: m,
+          preferLocal: true);
     } catch (e) {
       Get.snackbar('Could not play the voice', '$e');
     } finally {
@@ -163,7 +167,8 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
       Padding(
         padding: const EdgeInsets.all(12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Using: ${tts.title}', style: const TextStyle(fontWeight: FontWeight.w600)),
+          Text('Using: ${tts.title}',
+              style: const TextStyle(fontWeight: FontWeight.w600)),
           if (sp.isNotEmpty) ...[
             const SizedBox(height: 8),
             DropdownButton<int>(
@@ -204,7 +209,9 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
               onPressed: _previewing ? null : () => _preview(tts),
               icon: _previewing
                   ? const SizedBox(
-                      width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.play_arrow_rounded),
               label: const Text('Try this voice'),
             ),
@@ -227,7 +234,9 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
                 ? _effective(VoiceKind.tts, _ttsId)?.id == m.id
                 : false);
     return AppRow(
-      icon: m.kind == VoiceKind.stt ? Icons.hearing_rounded : Icons.record_voice_over_rounded,
+      icon: m.kind == VoiceKind.stt
+          ? Icons.hearing_rounded
+          : Icons.record_voice_over_rounded,
       title: m.title,
       subtitle: err ??
           (p == null
@@ -237,7 +246,8 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
                   : 'Downloading ${(p * 100).round()}%'),
       onTap: has && !m.clone && m.kind != VoiceKind.vad
           ? () {
-              _hive.setSetting(m.kind == VoiceKind.stt ? _kSttId : _kTtsId, m.id);
+              _hive.setSetting(
+                  m.kind == VoiceKind.stt ? _kSttId : _kTtsId, m.id);
               setState(() {});
             }
           : null,
@@ -261,26 +271,35 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
                     IconButton(
                         tooltip: 'Export as .zip (save or send)',
                         icon: _exportingModel == m.id
-                            ? const SizedBox(width: 18, height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2))
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2))
                             : const Icon(Icons.ios_share_rounded),
-                        onPressed: _exportingModel != null ? null : () async {
-                          setState(() => _exportingModel = m.id);
-                          try {
-                            final msg = await store.exportZip(m);
-                            if (mounted) Get.snackbar('Export', msg);
-                          } catch (e) {
-                            if (mounted) Get.snackbar('Export failed', '$e');
-                          } finally {
-                            if (mounted) setState(() => _exportingModel = null);
-                          }
-                        }),
+                        onPressed: _exportingModel != null
+                            ? null
+                            : () async {
+                                setState(() => _exportingModel = m.id);
+                                try {
+                                  final msg = await store.exportZip(m);
+                                  if (mounted) Get.snackbar('Export', msg);
+                                } catch (e) {
+                                  if (mounted)
+                                    Get.snackbar('Export failed', '$e');
+                                } finally {
+                                  if (mounted)
+                                    setState(() => _exportingModel = null);
+                                }
+                              }),
                   IconButton(
                       icon: const Icon(Icons.delete_outline),
-                      onPressed: _exportingModel == m.id ? null : () {
-                        store.remove(m);
-                        setState(() {});
-                      }),
+                      onPressed: _exportingModel == m.id
+                          ? null
+                          : () {
+                              store.remove(m);
+                              setState(() {});
+                            }),
                 ])
               : IconButton(
                   icon: const Icon(Icons.download_rounded),
@@ -344,9 +363,11 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     try {
       final cams = await availableCameras();
       if (cams.isEmpty) throw Exception('No camera found.');
-      final cam = cams.firstWhere((c) => c.lensDirection == CameraLensDirection.front,
+      final cam = cams.firstWhere(
+          (c) => c.lensDirection == CameraLensDirection.front,
           orElse: () => cams.first);
-      final ctl = CameraController(cam, ResolutionPreset.low, enableAudio: false);
+      final ctl =
+          CameraController(cam, ResolutionPreset.low, enableAudio: false);
       await ctl.initialize();
       if (!mounted) {
         await ctl.dispose();
@@ -369,6 +390,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       return null;
     }
   }
+
   bool _ended = false;
   bool _bargeIn = false;
   String _wake = '';
@@ -398,10 +420,16 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   void initState() {
     super.initState();
     _sessionId = _chat.currentSessionId.value;
-    _history.addAll(_chat.messages.where((m) => m.role == 'user' || m.role == 'assistant').map(
-      (m) => {'role': m.role, 'content': m.role == 'assistant'
-          ? stripToolTrace(splitThoughtTags(m.content).answer) : m.content},
-    ));
+    _history.addAll(_chat.messages
+        .where((m) => m.role == 'user' || m.role == 'assistant')
+        .map(
+          (m) => {
+            'role': m.role,
+            'content': m.role == 'assistant'
+                ? stripToolTrace(splitThoughtTags(m.content).answer)
+                : m.content
+          },
+        ));
     _lang = _hive.getSetting<String>(_kLang) ?? 'en';
     if (widget.useSelectedClone) {
       _lang = 'en';
@@ -447,7 +475,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   }
 
   VoiceModelInfo? _installed(VoiceKind k, {String? lang}) {
-    final picked = _hive.getSetting<String>(k == VoiceKind.stt ? _kSttId : _kTtsId) ?? '';
+    final picked =
+        _hive.getSetting<String>(k == VoiceKind.stt ? _kSttId : _kTtsId) ?? '';
     if (picked.isNotEmpty && (k == VoiceKind.stt || k == VoiceKind.tts)) {
       final m = voiceModelById(picked);
       if (m != null &&
@@ -469,7 +498,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   /// The cloning voice when you picked one (English only), else a normal voice.
   VoiceModelInfo? _ttsChoice(String lang) {
     final chosen = _callVoice;
-    if (chosen != null && _store.installed.contains(chosen.id) &&
+    if (chosen != null &&
+        _store.installed.contains(chosen.id) &&
         (chosen.lang == lang || chosen.lang == 'multi')) return chosen;
     final clones = Get.find<VoiceCloneStore>();
     if (lang == 'en' && clones.active.value.isNotEmpty) {
@@ -487,9 +517,11 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     }
     _voice.speed = _hive.getSetting<double>(_kSpeed) ?? 1.0;
     final stt = _installed(VoiceKind.stt);
-    final remoteStt = WorkloadPlacement.forWorkload(PhoneWorkload.transcription);
+    final remoteStt =
+        WorkloadPlacement.forWorkload(PhoneWorkload.transcription);
     if (stt == null && remoteStt == null) {
-      _set(_CallState.error, 'Download a listening model or assign a phone worker.');
+      _set(_CallState.error,
+          'Download a listening model or assign a phone worker.');
       return;
     }
     if (!await Permission.microphone.request().isGranted) {
@@ -498,7 +530,9 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     }
     try {
       _set(_CallState.starting, 'Loading voice…');
-      if (remoteStt == null && stt != null && !_voice.sttLoadedFor(stt, _lang)) {
+      if (remoteStt == null &&
+          stt != null &&
+          !_voice.sttLoadedFor(stt, _lang)) {
         await _voice.loadStt(stt, language: _lang);
       }
       final tts = _ttsChoice(_lang);
@@ -528,7 +562,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     }
   }
 
-  String _listeningText() => _wake.isEmpty ? 'Listening…' : 'Say "$_wake" to talk';
+  String _listeningText() =>
+      _wake.isEmpty ? 'Listening…' : 'Say "$_wake" to talk';
 
   Float64List _toFloat(Uint8List bytes) {
     final n = bytes.length ~/ 2;
@@ -582,7 +617,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         } else {
           vad.reset();
           for (var i = 0; i + 512 <= _bargeAudio.length; i += 512) {
-            vad.acceptWaveform(Float32List.fromList(_bargeAudio.sublist(i, i + 512)));
+            vad.acceptWaveform(
+                Float32List.fromList(_bargeAudio.sublist(i, i + 512)));
           }
           if (vad.isDetected() || !vad.isEmpty()) _interrupt();
           vad.reset();
@@ -660,7 +696,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     } else {
       _preRoll.addAll(chunk);
       final keep = (_rate * 0.3).round();
-      if (_preRoll.length > keep) _preRoll.removeRange(0, _preRoll.length - keep);
+      if (_preRoll.length > keep)
+        _preRoll.removeRange(0, _preRoll.length - keep);
     }
   }
 
@@ -685,7 +722,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       .where((l) => !l.startsWith('>'))
       .join('\n')
       .replaceAll(RegExp(r'!\[[^\]]*\]\([^)]*\)'), '')
-      .replaceAllMapped(RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m.group(1) ?? '')
+      .replaceAllMapped(
+          RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m.group(1) ?? '')
       .replaceAll(RegExp(r'[*_`#]+'), '')
       .trim();
 
@@ -708,7 +746,9 @@ class _VoiceCallViewState extends State<VoiceCallView> {
           _afterTurn();
           return;
         }
-        heard = heard.substring(at + _wake.length).replaceFirst(RegExp(r'^[\s,.!?]+'), '');
+        heard = heard
+            .substring(at + _wake.length)
+            .replaceFirst(RegExp(r'^[\s,.!?]+'), '');
       }
       if (heard.isEmpty) {
         _afterTurn();
@@ -725,7 +765,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   Future<void> _attachFile() async {
     if (_addingFile || _busy) return;
     if (Get.find<AgentService>().mode.value == AgentChatMode.off) {
-      showToast('Agent tools are off', 'Enable tools to use workspace files in the call.');
+      showToast('Agent tools are off',
+          'Enable tools to use workspace files in the call.');
       return;
     }
     setState(() => _addingFile = true);
@@ -739,14 +780,16 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       }
       final agent = Get.find<AgentService>();
       final project = agent.projectForChat(_sessionId);
-      final name = await agent.inProject(project,
-          () => agent.importToWorkspace(file!.path!, file.name));
-      if (mounted) setState(() {
-        _attachedFile = name;
-        _attachmentProject = project;
-      });
+      final name = await agent.inProject(
+          project, () => agent.importToWorkspace(file!.path!, file.name));
+      if (mounted)
+        setState(() {
+          _attachedFile = name;
+          _attachmentProject = project;
+        });
     } catch (_) {
-      if (mounted) showToast('Could not attach this file', 'Choose the file again.');
+      if (mounted)
+        showToast('Could not attach this file', 'Choose the file again.');
     } finally {
       if (mounted) setState(() => _addingFile = false);
     }
@@ -793,9 +836,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     final settings = Get.find<SettingsController>();
     final canSpeakRemotely =
         WorkloadPlacement.forWorkload(PhoneWorkload.speech) != null ||
-        (_voice.workerUrl.isNotEmpty && _lang == 'en');
-    final sys =
-        ((_ttsChoice(_lang) == null && !canSpeakRemotely) ||
+            (_voice.workerUrl.isNotEmpty && _lang == 'en');
+    final sys = ((_ttsChoice(_lang) == null && !canSpeakRemotely) ||
             _hive.getSetting<bool>(_kSystemTts, defaultValue: false)!)
         ? (_lang == 'ar' ? 'ar' : 'en-US')
         : null;
@@ -823,15 +865,15 @@ class _VoiceCallViewState extends State<VoiceCallView> {
 
       final speakingDone = _speakQueue(ctl.stream, sys, onSpoken: caption)
           .catchError((Object error) {
-            if (mounted && !_interrupted) {
-              setState(
-                () => _lines.add((
-                  me: false,
-                  text: 'Voice playback failed: $error',
-                )),
-              );
-            }
-          });
+        if (mounted && !_interrupted) {
+          setState(
+            () => _lines.add((
+              me: false,
+              text: 'Voice playback failed: $error',
+            )),
+          );
+        }
+      });
 
       void feed(String text, {bool flush = false}) {
         if (_ended || _interrupted) return;
@@ -854,36 +896,53 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       final agent = Get.find<AgentService>();
       final inference = Get.find<InferenceService>();
       final session = _chat.currentSession;
-      final basePrompt = session?.id == sessionId
-          ? session?.systemPrompt
+      final basePrompt =
+          session?.id == sessionId ? session?.systemPrompt : null;
+      final skillContext = Get.isRegistered<SkillsService>()
+          ? await Get.find<SkillsService>()
+              .prepare(heard, await agent.inProject(project, agent.filesDir))
           : null;
-      final useTools = agent.wantsTools(heard, hasFile: file != null);
-      final system = agent.composeSystem(
-        '${basePrompt ?? settings.globalSystemPrompt.value}\n'
-        'You are on a voice call. Speak naturally in one to three short sentences. No markdown, lists or emoji. '
-        'If you used tools, just say the result.',
-        withTools: useTools,
-        request: heard,
-        withFiles: file != null,
-      );
+      final contextSize = inference.contextTokensTotal.value > 0
+          ? inference.contextTokensTotal.value
+          : 2048;
+      final useTools = agent.wantsTools(heard,
+          hasFile:
+              file != null || (skillContext?.documents.isNotEmpty ?? false));
+      String buildSystem() =>
+          agent.composeSystem(
+            '${basePrompt ?? settings.globalSystemPrompt.value}\n'
+            'You are on a voice call. Speak naturally in one to three short sentences. No markdown, lists or emoji. '
+            'If you used tools, just say the result.',
+            withTools: useTools,
+            request: heard,
+            withFiles: file != null,
+            contextSize: contextSize,
+          ) +
+          (skillContext == null || skillContext.documents.isEmpty
+              ? ''
+              : '\n\n${skillContext.prompt(contextSize ~/ 4)}');
       Future<String> gen(
         String prompt,
         List<Map<String, String>> hist,
         void Function(String) onTok,
-      ) => inference.generate(
-        prompt: AgentService.fitToContext(
-          system,
-          hist,
-          prompt,
-          inference.contextTokensTotal.value,
-        ),
-        systemPrompt: system,
-        conversationHistory: hist,
-        source: 'voice',
-        imagePath: shot,
-        maxTokens: useTools ? 500 : 160,
-        onToken: onTok,
-      );
+      ) {
+        final system =
+            '${buildSystem()}${prompt == message ? '' : '\n\nCurrent user request: $heard'}';
+        return inference.generate(
+          prompt: AgentService.fitToContext(
+            system,
+            hist,
+            prompt,
+            inference.contextTokensTotal.value,
+          ),
+          systemPrompt: system,
+          conversationHistory: hist,
+          source: 'voice',
+          imagePath: shot,
+          maxTokens: useTools ? 500 : 160,
+          onToken: onTok,
+        );
+      }
 
       String finalText;
       if (!useTools) {
@@ -895,32 +954,39 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         finalText = raw.isEmpty ? reply : raw;
         feed(finalText, flush: true);
       } else {
-        final result = await agent.inProject(project,
-          () => agent.runToolLoop(
-          generate: gen,
-          prompt: message,
-          history: List.of(_history),
-          confirm: confirmToolCall,
-          userText: heard,
-          researchQuestion: agent.needsResearch(heard) ? heard : null,
-          cancelled: () => _ended || _interrupted,
-          onVisible: (v) => feed(v),
-          onTrace: (trace) {
-            if (mounted) {
-              setState(() => _steps = splitSteps(trace.join('\n')).$1);
-              _scrollCall();
-            }
-          },
-          onStatus: (st) {
-            if (!_speaking) _set(_CallState.thinking, st);
-          },
-        ));
+        Future<ToolLoopResult> runAgentLoop() => agent.runToolLoop(
+              generate: gen,
+              allowDirectActions:
+                  skillContext == null || skillContext.documents.isEmpty,
+              prompt: message,
+              history: List.of(_history),
+              confirm: confirmToolCall,
+              userText: heard,
+              researchQuestion: agent.needsResearch(heard) ? heard : null,
+              cancelled: () => _ended || _interrupted,
+              onVisible: (v) => feed(v),
+              onTrace: (trace) {
+                if (mounted) {
+                  setState(() => _steps = splitSteps(trace.join('\n')).$1);
+                  _scrollCall();
+                }
+              },
+              onStatus: (st) {
+                if (!_speaking) _set(_CallState.thinking, st);
+              },
+            );
+        final result = await agent.inProject(
+            project,
+            () => skillContext == null
+                ? runAgentLoop()
+                : SkillsService.inTurn(skillContext, runAgentLoop));
         finalText = result.markdown;
         feed(_spoken(finalText), flush: true);
         for (final m in RegExp(
           r'!\[[^\]]*\]\(nmfile:([^)]+)\)',
         ).allMatches(finalText)) {
-          final f = await agent.inProject(project, () => agentFile(m.group(1)!));
+          final f =
+              await agent.inProject(project, () => agentFile(m.group(1)!));
           if (f != null && mounted) setState(() => _shots.add(f));
         }
       }
@@ -935,7 +1001,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
           ? (liveIdx == null ? '' : _lines[liveIdx!].text)
           : finalText;
       if (clean.trim().isNotEmpty) {
-        await _chat.saveVoiceMessage(sessionId, 'assistant', clean, workspaceProject: project);
+        await _chat.saveVoiceMessage(sessionId, 'assistant', clean,
+            workspaceProject: project);
         _history.add({'role': 'assistant', 'content': stripToolTrace(clean)});
       }
       if (liveIdx == null && clean.isNotEmpty && mounted) {
@@ -998,7 +1065,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     _micWatchdog?.cancel();
     _micWatchdog = Timer.periodic(const Duration(seconds: 3), (_) async {
       if (_ended || _muted || _micRestarting) return;
-      if (DateTime.now().difference(_lastAudio) < const Duration(seconds: 4)) return;
+      if (DateTime.now().difference(_lastAudio) < const Duration(seconds: 4))
+        return;
       _micRestarting = true;
       try {
         await _sub?.cancel();
@@ -1025,7 +1093,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       _callVoice = null;
     });
     final stt = _installed(VoiceKind.stt);
-    if (stt != null && WorkloadPlacement.forWorkload(PhoneWorkload.transcription) == null) {
+    if (stt != null &&
+        WorkloadPlacement.forWorkload(PhoneWorkload.transcription) == null) {
       _busy = true;
       _set(_CallState.starting, 'Switching language…');
       try {
@@ -1148,15 +1217,19 @@ class _VoiceCallViewState extends State<VoiceCallView> {
             decoration: const InputDecoration(
                 hintText: 'e.g. hey neuro. Empty = answer everything')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, ctl.text), child: const Text('Save')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, ctl.text),
+              child: const Text('Save')),
         ],
       ),
     );
     if (r == null) return;
     await _hive.setSetting(_kWakePhrase, r.trim());
     setState(() => _wake = r.trim().toLowerCase());
-    if (_state == _CallState.listening) _set(_CallState.listening, _listeningText());
+    if (_state == _CallState.listening)
+      _set(_CallState.listening, _listeningText());
   }
 
   @override
@@ -1182,10 +1255,14 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         ),
         IconButton(
             tooltip: 'Wake phrase',
-            icon: Icon(_wake.isEmpty ? Icons.hearing_disabled_outlined : Icons.hearing),
+            icon: Icon(_wake.isEmpty
+                ? Icons.hearing_disabled_outlined
+                : Icons.hearing),
             onPressed: _editWake),
         IconButton(
-            tooltip: _bargeIn ? 'Interrupting: on (use headphones)' : 'Interrupting: off',
+            tooltip: _bargeIn
+                ? 'Interrupting: on (use headphones)'
+                : 'Interrupting: off',
             icon: Icon(_bargeIn ? Icons.front_hand : Icons.front_hand_outlined),
             onPressed: () async {
               setState(() => _bargeIn = !_bargeIn);
@@ -1198,50 +1275,64 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       body: SafeArea(
         child: Column(children: [
           if (_cam != null && _cam!.value.isInitialized)
-            SizedBox(height: 150, child: ClipRRect(
-                borderRadius: BorderRadius.circular(12), child: CameraPreview(_cam!))),
+            SizedBox(
+                height: 150,
+                child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: CameraPreview(_cam!))),
           Expanded(
-            child: ListView(controller: _callScroll, padding: const EdgeInsets.all(16), children: [
-              if (_vad == null && _state == _CallState.listening)
-                const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: Text(
-                        'Tip: install the smart speech detector (Toolbox → Voice models) for better turn-taking.',
-                        style: TextStyle(fontSize: 12))),
-              for (final l in _lines)
-                Align(
-                  alignment: l.me ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                        color: color.withValues(alpha: l.me ? 0.15 : 0.07),
-                        borderRadius: BorderRadius.circular(14)),
-                    child: Text(l.text),
-                  ),
-                ),
-              if (_steps.isNotEmpty)
-                AgentStepsView(steps: _steps, messageId: 'voice-$_turnNumber', live: _busy),
-              if (_shots.isNotEmpty)
-                Wrap(spacing: 8, runSpacing: 8, children: [
-                  for (final f in _shots)
-                    GestureDetector(
-                      onTap: () => showDialog(
-                          context: context,
-                          builder: (_) => Dialog(child: InteractiveViewer(child: Image.file(f)))),
-                      child: ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Image.file(f, height: 160, fit: BoxFit.cover)),
+            child: ListView(
+                controller: _callScroll,
+                padding: const EdgeInsets.all(16),
+                children: [
+                  if (_vad == null && _state == _CallState.listening)
+                    const Padding(
+                        padding: EdgeInsets.only(bottom: 8),
+                        child: Text(
+                            'Tip: install the smart speech detector (Toolbox → Voice models) for better turn-taking.',
+                            style: TextStyle(fontSize: 12))),
+                  for (final l in _lines)
+                    Align(
+                      alignment:
+                          l.me ? Alignment.centerRight : Alignment.centerLeft,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(vertical: 4),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                            color: color.withValues(alpha: l.me ? 0.15 : 0.07),
+                            borderRadius: BorderRadius.circular(14)),
+                        child: Text(l.text),
+                      ),
                     ),
+                  if (_steps.isNotEmpty)
+                    AgentStepsView(
+                        steps: _steps,
+                        messageId: 'voice-$_turnNumber',
+                        live: _busy),
+                  if (_shots.isNotEmpty)
+                    Wrap(spacing: 8, runSpacing: 8, children: [
+                      for (final f in _shots)
+                        GestureDetector(
+                          onTap: () => showDialog(
+                              context: context,
+                              builder: (_) => Dialog(
+                                  child:
+                                      InteractiveViewer(child: Image.file(f)))),
+                          child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: Image.file(f,
+                                  height: 160, fit: BoxFit.cover)),
+                        ),
+                    ]),
                 ]),
-            ]),
           ),
           if (_attachedFile case final name?)
             InputChip(
               avatar: const Icon(Icons.attach_file),
               label: Text(name, overflow: TextOverflow.ellipsis),
               onPressed: _busy ? null : _sendAttachment,
-              onDeleted: _busy ? null : () => setState(() => _attachedFile = null),
+              onDeleted:
+                  _busy ? null : () => setState(() => _attachedFile = null),
             ),
           if (_speaking && !_interrupted)
             TextButton.icon(
@@ -1270,7 +1361,9 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                   iconSize: 28,
                   tooltip: 'Video call (vision models)',
                   onPressed: _toggleCamera,
-                  icon: Icon(_cam != null ? Icons.videocam : Icons.videocam_off_outlined)),
+                  icon: Icon(_cam != null
+                      ? Icons.videocam
+                      : Icons.videocam_off_outlined)),
               const SizedBox(width: 16),
               IconButton.filled(
                   iconSize: 28,

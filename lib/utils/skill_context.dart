@@ -87,7 +87,12 @@ class SkillTurnContext {
       parts.add('Source: ${doc.id}, ${doc.pages.length} pages.');
     }
     if (catalog.isNotEmpty) parts.add(catalog);
-    for (final page in _active.reversed) {
+    final candidates = [
+      ..._active.reversed,
+      for (final doc in documents.values)
+        if (doc.pages.isNotEmpty) doc.page(0),
+    ].toSet();
+    for (final page in candidates) {
       if (contextTokens('${parts.join('\n')}\n$page') <= maxTokens)
         parts.add(page);
     }

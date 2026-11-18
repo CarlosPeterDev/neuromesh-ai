@@ -65,6 +65,9 @@ class SkillsService extends GetxService {
   }
 
   Future<void> save(String text, {String? editing}) async {
+    if (utf8.encode(text).length > 2 * 1024 * 1024)
+      throw const FormatException(
+          'SKILL.md is limited to 2 MB. Move large documents into references.');
     final def = SkillDefinition.parse(text);
     if (editing != null && editing != def.name)
       throw const FormatException('Keep the skill name when editing.');
@@ -107,6 +110,8 @@ class SkillsService extends GetxService {
       throw const FormatException(
           'Import one skill folder containing one SKILL.md.');
     final manifest = manifests.single;
+    if (manifest.size > 2 * 1024 * 1024)
+      throw const FormatException('SKILL.md is limited to 2 MB.');
     final def = SkillDefinition.parse(utf8.decode(manifest.content));
     final prefix = manifest.name.substring(0, manifest.name.length - 8);
     final dest = Directory('${root.path}/${def.name}');

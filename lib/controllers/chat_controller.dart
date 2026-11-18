@@ -672,12 +672,17 @@ class ChatController extends GetxController {
   /// Keeps long chats going: when the conversation nears the model's context
   /// limit, older messages are replaced by a short model-written summary (kept
   /// on disk, so it is built once and reused). The visible chat is untouched.
-  Future<void> _compactHistory(List<Map<String, String>> history, String system,
-      String prompt, InferenceService inf, int generationId) async {
+  Future<void> _compactHistory(
+      List<Map<String, String>> history,
+      String system,
+      String prompt,
+      InferenceService inf,
+      int generationId,
+      String chatId) async {
     final ctx = inf.contextTokensTotal.value;
     if (ctx <= 0 || history.isEmpty) return;
     int est(String t) => (t.length / 2.8).ceil(); // conservative (Arabic, code)
-    final key = 'chat_summary_${currentSessionId.value}';
+    final key = 'chat_summary_$chatId';
     final saved = _hive.getSetting<Map>(key);
     var covered = (saved?['count'] as num?)?.toInt() ?? 0;
     final text = '${saved?['text'] ?? ''}';
@@ -946,7 +951,8 @@ class ChatController extends GetxController {
 
       final contextAgent = Get.find<AgentService>();
       final skillContext = Get.isRegistered<SkillsService>()
-          ? await Get.find<SkillsService>().prepare(visibleText,
+          ? await Get.find<SkillsService>().prepare(
+              '$visibleText${workspaceName == null ? '' : '\n@file:"$workspaceName"'}',
               await contextAgent.inProject(project, contextAgent.filesDir))
           : null;
 
@@ -1171,7 +1177,7 @@ class ChatController extends GetxController {
           }
 
           await _compactHistory(
-              history, system, finalPrompt, inference, generationId);
+              history, system, finalPrompt, inference, generationId, sessionId);
           if (generationId != _generationSerial) return;
 
           if (!useTools) {
