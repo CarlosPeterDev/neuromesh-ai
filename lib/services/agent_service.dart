@@ -901,8 +901,14 @@ class AgentService extends GetxService {
     return _question.hasMatch(t);
   }
 
+  static final _simpleGreeting = RegExp(
+    r'^\s*(?:hi|hello|helli|hey|good morning|good evening|مرحبا|مرحبًا|أهلا|أهلًا|اهلا|السلام عليكم|صباح الخير|مساء الخير)[!?.؟،\s]*$',
+    caseSensitive: false,
+  );
+
   /// Whether this chat turn should offer tools to the model.
   bool wantsTools(String text, {bool hasFile = false}) {
+    if (!hasFile && _simpleGreeting.hasMatch(text)) return false;
     switch (mode.value) {
       case AgentChatMode.off:
         return false;

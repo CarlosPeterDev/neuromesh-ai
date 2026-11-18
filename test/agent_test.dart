@@ -15,6 +15,7 @@ void main() {
       for (final prompt in [
         'Create audio file that says hello Carlos using tts tool',
         'Can you explain it?',
+        'Create a file in the workspace named hello.txt',
         '',
       ]) {
         final history = [
@@ -37,6 +38,17 @@ void main() {
       expect(fitted.length, lessThan(prompt.length));
       expect(history.single['content'], fitted);
     });
+  });
+
+  test('greetings bypass tools even in Always mode, while tasks keep them', () {
+    Get.put(HiveService());
+    addTearDown(Get.reset);
+    final agent = AgentService()..mode.value = AgentChatMode.always;
+    expect(agent.wantsTools('Hi'), isFalse);
+    expect(agent.wantsTools('Helli!'), isFalse);
+    expect(agent.wantsTools('السلام عليكم'), isFalse);
+    expect(agent.wantsTools('Hi', hasFile: true), isTrue);
+    expect(agent.wantsTools('Create a file in the workspace named hello.txt'), isTrue);
   });
 
   test('routes literal speech and leaves voice overrides to the model', () {
