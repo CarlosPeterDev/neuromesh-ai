@@ -1047,7 +1047,7 @@ class ChatController extends GetxController {
                   void Function(String) onTok) {
             // Never send more than the context can hold: an overflow makes
             // small models fail or answer nothing.
-            prompt = agent.fitToContext(
+            prompt = AgentService.fitToContext(
                 system, hist, prompt, inference.contextTokensTotal.value);
             return inference.generate(
                 prompt: prompt,
@@ -1202,7 +1202,7 @@ class ChatController extends GetxController {
         final idx = sessions.indexWhere((s) => s.id == updated.id);
         if (idx >= 0) sessions[idx] = updated;
       }
-    } catch (e) {
+    } catch (e, stack) {
       if (generationId != _generationSerial) return;
       isStreaming.value = false;
       streamingAttachmentType.value = null;
@@ -1214,7 +1214,11 @@ class ChatController extends GetxController {
         await Get.find<ImageGenerationNotificationService>().failed();
       }
       imageGenStartTime.value = null;
-      Get.find<AppLogService>().error('Chat response failed', details: e);
+      final frames = stack.toString().trimRight().split('\n').take(8);
+      Get.find<AppLogService>().error(
+        'Chat response failed',
+        details: '$e\n${frames.join('\n')}',
+      );
       final errorMsg = ChatMessage(
         id: _uuid.v4(),
         chatId: currentSessionId.value,

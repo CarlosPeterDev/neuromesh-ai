@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/diagnostics_service.dart';
 import '../services/model_load_diagnostics.dart';
+import '../services/telegram_report_delivery.dart';
 
 class DiagnosticsView extends StatefulWidget {
   const DiagnosticsView({super.key});
@@ -13,13 +14,18 @@ class DiagnosticsView extends StatefulWidget {
 class _DiagnosticsViewState extends State<DiagnosticsView> {
   late Future<String> _report;
   bool _includeErrors = false;
-  bool _sharing = false;
+  bool _sending = false;
+  bool _sent = false;
+  String? _sendError;
   String _description = '';
+  TelegramReportDelivery? _direct;
+  bool _loadingDelivery = true;
 
   @override
   void initState() {
     super.initState();
     _refresh();
+    _loadDelivery();
   }
 
   void _refresh() {
@@ -28,29 +34,114 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
     );
   }
 
-  Future<void> _share(BuildContext buttonContext, String preview) async {
-    final box = buttonContext.findRenderObject() as RenderBox;
-    final origin = box.localToGlobal(Offset.zero) & box.size;
-    setState(() => _sharing = true);
+  Future<void> _loadDelivery() async {
     try {
-      await DiagnosticsService.shareReport(
-        preview,
-        sharePositionOrigin: origin,
-      );
+      final delivery = await TelegramReportDelivery.load();
+      if (mounted) setState(() => _direct = delivery);
     } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not share the ZIP. Try again.')),
-        );
-      }
+      if (mounted)
+        setState(() => _sendError = 'Could not read saved Telegram settings.');
     } finally {
-      if (mounted) setState(() => _sharing = false);
+      if (mounted) setState(() => _loadingDelivery = false);
+    }
+  }
+
+  Future<void> _editDelivery() async {
+    var token = '';
+    var chat = _direct?.chatId ?? '';
+    bool remove = false;
+    try {
+      final delivery = await showDialog<TelegramReportDelivery>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, update) {
+            final parsed = TelegramReportDelivery.parse(token, chat);
+            return AlertDialog(
+              title: const Text('Direct Telegram delivery'),
+              content: SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Text(
+                      'These credentials are saved on this device. This destination receives your diagnostic ZIP.'),
+                  TextFormField(
+                      obscureText: true,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      decoration: const InputDecoration(labelText: 'Bot token'),
+                      onChanged: (value) => update(() => token = value)),
+                  TextFormField(
+                      initialValue: chat,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(signed: true),
+                      decoration: const InputDecoration(labelText: 'Chat ID'),
+                      onChanged: (value) => update(() => chat = value)),
+                ]),
+              ),
+              actions: [
+                if (_direct != null)
+                  TextButton(
+                      onPressed: () {
+                        remove = true;
+                        Navigator.pop(context);
+                      },
+                      child: const Text('Remove')),
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancel')),
+                FilledButton(
+                    onPressed: parsed == null
+                        ? null
+                        : () => Navigator.pop(context, parsed),
+                    child: const Text('Save')),
+              ],
+            );
+          },
+        ),
+      );
+      if (remove) {
+        await TelegramReportDelivery.clear();
+      } else if (delivery != null) {
+        await delivery.save();
+      } else {
+        return;
+      }
+      if (mounted)
+        setState(() {
+          _direct = delivery;
+          _sendError = null;
+        });
+    } catch (_) {
+      if (mounted)
+        setState(
+            () => _sendError = 'Could not save credentials to secure storage.');
+    }
+  }
+
+  Future<void> _send(String preview) async {
+    if (_sending || _sent) return;
+    setState(() {
+      _sending = true;
+      _sendError = null;
+    });
+    try {
+      await DiagnosticsService.sendReport(preview, direct: _direct);
+      if (mounted) setState(() => _sent = true);
+    } on ReportSubmissionError catch (error) {
+      if (mounted) setState(() => _sendError = error.message);
+    } finally {
+      if (mounted) setState(() => _sending = false);
     }
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Report an error')),
+        appBar: AppBar(title: const Text('Report an error'), actions: [
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Telegram delivery settings',
+            onPressed:
+                _loadingDelivery || _sending || _sent ? null : _editDelivery,
+          ),
+        ]),
         body: SafeArea(
           child: FutureBuilder<String>(
             future: _report,
@@ -70,20 +161,20 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
                         const Padding(
                           padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
                           child: Text(
-                            'Describe the problem and review the diagnostic '
-                            'details before sharing your report.',
+                            'Your report goes to NeuroMesh support via Telegram '
+                            'when you tap Send report. Review the preview first.',
                           ),
                         ),
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                           child: TextFormField(
                             initialValue: _description,
-                            enabled: !_sharing,
+                            enabled: !_sending && !_sent,
                             minLines: 2,
                             maxLines: 4,
                             maxLength: 1500,
                             decoration: const InputDecoration(
-                              labelText: 'What happened? (optional)',
+                              labelText: 'What happened?',
                               hintText:
                                   'What did you try, and what did you expect?',
                             ),
@@ -95,9 +186,9 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
                           value: _includeErrors,
                           title: const Text('Include recent app logs'),
                           subtitle: const Text(
-                            'Review these logs for personal details before sharing.',
+                            'Review these logs for personal details before sending.',
                           ),
-                          onChanged: _sharing
+                          onChanged: (_sending || _sent)
                               ? null
                               : (value) => setState(() {
                                     _includeErrors = value;
@@ -126,15 +217,36 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
                   if (preview != null)
                     Padding(
                       padding: const EdgeInsets.all(16),
-                      child: Builder(
-                        builder: (buttonContext) => FilledButton.icon(
-                          icon: const Icon(Icons.share_outlined),
-                          label: Text(
-                              _sharing ? 'Preparing report…' : 'Share report'),
-                          onPressed: _sharing
-                              ? null
-                              : () => _share(buttonContext, preview),
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (_sendError case final message?)
+                            Text(message,
+                                style: TextStyle(
+                                    color:
+                                        Theme.of(context).colorScheme.error)),
+                          if (_direct == null &&
+                              !DiagnosticsService.canSendReport)
+                            const Text(
+                                'Open Telegram delivery settings to connect your bot.'),
+                          FilledButton.icon(
+                            icon: Icon(_sent
+                                ? Icons.check_rounded
+                                : Icons.send_outlined),
+                            label: Text(_sent
+                                ? 'Report sent'
+                                : _sending
+                                    ? 'Sending…'
+                                    : 'Send report'),
+                            onPressed: _sending ||
+                                    _sent ||
+                                    note.isEmpty ||
+                                    (_direct == null &&
+                                        !DiagnosticsService.canSendReport)
+                                ? null
+                                : () => _send(preview),
+                          ),
+                        ],
                       ),
                     ),
                 ],

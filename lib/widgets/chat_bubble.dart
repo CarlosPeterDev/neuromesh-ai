@@ -206,7 +206,6 @@ class ChatBubble extends StatelessWidget {
             durationSeconds: message.thoughtDurationSeconds,
             styleSheet: _thoughtMarkdownStyle(context),
           ),
-        if (steps.isNotEmpty) AgentStepsView(steps: steps),
         if (answerContent.isNotEmpty)
           Directionality(
             textDirection: detectDirection(answerContent),
@@ -236,6 +235,10 @@ class ChatBubble extends StatelessWidget {
         if (sources.isNotEmpty) ...[
           const SizedBox(height: 10),
           _SourcesList(sources: sources, muted: muted),
+        ],
+        if (steps.isNotEmpty) ...[
+          if (answerContent.isNotEmpty) const SizedBox(height: 10),
+          AgentStepsView(steps: steps, messageId: message.id),
         ],
         if (message.fileName != null) ...[
           const SizedBox(height: 10),

@@ -40,12 +40,12 @@ class _RelayViewState extends State<RelayView> {
   Future<void> _deploy() async {
     setState(() => _error = null);
     if (_useKey && _key.text.trim().isEmpty) _key.text = RelayService.randomSecret(40);
-    await _save();
     try {
+      await _save();
       await r.deploy();
-      Get.snackbar('Relay ready', r.url.value);
+      if (mounted) Get.snackbar('Relay ready', r.url.value);
     } catch (e) {
-      setState(() => _error = '$e'.replaceFirst('Exception: ', ''));
+      if (mounted) setState(() => _error = '$e'.replaceFirst('Exception: ', ''));
     }
   }
 
@@ -217,7 +217,7 @@ class _RelayViewState extends State<RelayView> {
                     try {
                       v ? await r.start() : await r.stop();
                     } catch (e) {
-                      setState(() => _error = '$e'.replaceFirst('Exception: ', ''));
+                      if (mounted) setState(() => _error = '$e'.replaceFirst('Exception: ', ''));
                     }
                   },
                 ),

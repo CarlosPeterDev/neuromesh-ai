@@ -14,7 +14,7 @@ The app uses the network only when you ask it to:
 - Searching and downloading models from Hugging Face (huggingface.co) and voice models from GitHub.
 - Optional features you turn on: a cloud provider with your own API key, MCP servers you add, the agent's "fetch web page" tool (asks first unless you choose Always allow), the local API server (reachable on your local network only while you run it), and Phone cluster over your Wi-Fi. If you assign a worker phone, that phone receives the text, audio or image prompt needed for that workload over your local network.
 - Opening a public GitHub issue draft with the description you write when you choose "Send feedback".
-- When you choose "Report an error", you can review a diagnostic ZIP containing the app version, device type, available memory and storage, and recent model-load details, resource snapshots and a timeline. You can optionally add a description and recent app logs. Logs may contain personal text, so review the preview before sharing. When you choose "Share ZIP", the app hands the file to your system share sheet and you choose the recipient.
+- When you tap "Send report", the app sends your description and diagnostic preview over HTTPS. With direct Telegram delivery configured on your device, the app sends a ZIP to the chat you select and stores the bot token in the device’s secure storage. Builds with a support relay send reports to that relay for delivery via Telegram. The preview can include app version, device and memory information, model-load details, and recent app logs if you choose to include them.
 
 ## Permissions
 - Microphone: voice calls and voice typing.
@@ -22,7 +22,7 @@ The app uses the network only when you ask it to:
 - Storage/Files: only through the system file picker when you import or export.
 
 ## What we collect
-In builds configured with Firebase Crashlytics, crash and error diagnostics may be sent to Firebase, including app and device details, model context and recent error logs. Exported reports are shared through the recipient you choose. The manual diagnostic ZIP excludes chat and model files.
+In builds configured with Firebase Crashlytics, crash and error diagnostics may be sent to Firebase, including app and device details, model context and recent error logs. Support report ZIPs exclude chat and model files.
 
 ## Children
 The app is not directed at children under 13.

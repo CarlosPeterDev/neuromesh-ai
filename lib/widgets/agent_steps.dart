@@ -95,7 +95,11 @@ IconData _iconFor(String n) {
 /// A collapsible "what the agent did" list; tap a step for its details.
 class AgentStepsView extends StatelessWidget {
   final List<AgentStep> steps;
-  const AgentStepsView({super.key, required this.steps});
+  final String messageId;
+  final bool live;
+  const AgentStepsView({
+    super.key, required this.steps, required this.messageId, this.live = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -112,8 +116,8 @@ class AgentStepsView extends StatelessWidget {
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
-          initiallyExpanded: running,
-          key: PageStorageKey('steps_${steps.length}_$running'),
+          initiallyExpanded: live,
+          key: PageStorageKey('agent-steps-$messageId'),
           tilePadding: const EdgeInsets.symmetric(horizontal: 12),
           childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
           dense: true,
@@ -130,7 +134,18 @@ class AgentStepsView extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
           ),
-          children: [for (final s in steps) _StepTile(step: s)],
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 240),
+              child: ListView.builder(
+                key: PageStorageKey('agent-step-list-$messageId'),
+                primary: false,
+                shrinkWrap: true,
+                itemCount: steps.length,
+                itemBuilder: (context, index) => _StepTile(step: steps[index]),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -143,36 +158,108 @@ class _StepTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final muted = Theme.of(context).hintColor;
-    final mono = TextStyle(fontFamily: 'monospace', fontSize: 12, color: muted);
-    final argsText = const JsonEncoder.withIndent('  ').convert(step.args);
-    return ExpansionTile(
+    return ListTile(
       dense: true,
-      tilePadding: const EdgeInsets.symmetric(horizontal: 6),
-      childrenPadding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 6),
       leading: step.running
-          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+          ? const SizedBox(
+              width: 16, height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
           : Icon(_iconFor(step.name), size: 18),
       title: Text(step.label,
-          maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
-      subtitle: step.running
-          ? const Text('working…', style: TextStyle(fontSize: 11.5))
-          : Text('${step.name}${step.ms > 0 ? ' · ${(step.ms / 1000).toStringAsFixed(1)}s' : ''}',
-              style: const TextStyle(fontSize: 11.5)),
-      expandedCrossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (step.args.isNotEmpty) ...[
-          Text('Input', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: muted)),
-          SelectableText(argsText, style: mono),
-          const SizedBox(height: 8),
-        ],
-        if (!step.running) ...[
-          Text('Result', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: muted)),
-          SelectableText(step.result.isEmpty ? '(empty)' : step.result, style: mono),
-        ],
-      ],
+          maxLines: 2, overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 13)),
+      subtitle: Text(
+        step.running
+            ? 'Working…'
+            : '${step.name}${step.ms > 0 ? ' · ${(step.ms / 1000).toStringAsFixed(1)}s' : ''}',
+        style: const TextStyle(fontSize: 11.5),
+      ),
+      trailing: const Icon(Icons.chevron_right_rounded, size: 18),
+      onTap: () => showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        useSafeArea: true,
+        builder: (context) => _StepDetails(step: step),
+      ),
     );
   }
+}
+
+class _StepDetails extends StatelessWidget {
+  final AgentStep step;
+  const _StepDetails({required this.step});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final textStyle = theme.textTheme.bodyMedium;
+    return SafeArea(
+      top: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.65),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(step.label, style: theme.textTheme.titleMedium),
+              if (step.args.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text('Input', style: theme.textTheme.titleSmall),
+                for (final entry in step.args.entries) ...[
+                  const SizedBox(height: 8),
+                  Text(_fieldLabel(entry.key), style: theme.textTheme.labelLarge),
+                  SelectableText(_fieldValue(entry.value), style: textStyle),
+                ],
+              ],
+              const SizedBox(height: 12),
+              Text(step.running ? 'Working…' : 'Result',
+                  style: theme.textTheme.labelLarge),
+              if (!step.running)
+                SelectableText(_readableResult(step.result), style: textStyle),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _readableResult(String result) {
+  if (result.isEmpty) return '(empty)';
+  final text = result.trimLeft();
+  if (text.startsWith('{') || text.startsWith('[')) {
+    try {
+      return _fieldValue(jsonDecode(text));
+    } on FormatException {
+      return result;
+    }
+  }
+  return result;
+}
+
+String _fieldLabel(String key) {
+  if (key.isEmpty) return 'Value';
+  if (key == 'model_id') return 'Model ID';
+  final words = key.replaceAll('_', ' ');
+  return words[0].toUpperCase() + words.substring(1);
+}
+
+String _fieldValue(Object? value) {
+  if (value is Map) {
+    return value.entries
+        .map((entry) => '${_fieldLabel(entry.key.toString())} — ${_fieldValue(entry.value)}')
+        .join('\n');
+  }
+  if (value is List) {
+    return value.map((item) => '• ${_fieldValue(item)}').join('\n');
+  }
+  if (value == null) return '—';
+  if (value is bool) return value ? 'Yes' : 'No';
+  return value.toString();
 }
 
 // ── Files the agent produced: ![alt](nmfile:name) and [📎 name](nmfile:name) ──

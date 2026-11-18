@@ -21,6 +21,22 @@ void main() {
     expect(decodeWav(Uint8List(10)), isNull);
   });
 
+  test('resamples a generated WAV for transcription', () {
+    final input = Float32List.fromList([0, .5, 1, .5]);
+    final wav = decodeWav(encodeWav(input, 32000))!;
+    final result = resampleWav(wav.samples, wav.rate, 16000);
+    expect(result, hasLength(2));
+    expect(result[0], closeTo(0, .001));
+    expect(result[1], closeTo(1, .001));
+  });
+
+  test('voice names resolve exact speakers or unique short labels', () {
+    final model = kVoiceModels.firstWhere((m) => m.speakers.contains('Bella (F)'));
+    expect(model.speakerIndexFor('bella'), model.speakers.indexOf('Bella (F)'));
+    expect(model.speakerIndexFor('BELLA (F)'), model.speakers.indexOf('Bella (F)'));
+    expect(model.speakerIndexFor('unavailable'), isNull);
+  });
+
   test('speech chunks drop markdown, code and thinking', () {
     final c = speechChunks('<think>hmm</think>**Hello** there. How are you? ```x=1```');
     expect(c, ['Hello there.', 'How are you?']);

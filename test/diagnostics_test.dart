@@ -1,24 +1,13 @@
-import 'dart:convert';
 import 'dart:io';
 
-import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
-import 'package:neuromesh_ai/services/diagnostics_service.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
 import 'package:neuromesh_ai/services/model_load_diagnostics.dart';
 import 'package:neuromesh_ai/utils/chat_io.dart';
 
 void main() {
-  test('ZIP contains exactly the report preview, including Unicode', () {
-    const preview = 'Model diagnostics\nالنموذج: مثال\n';
-    final zip = ZipDecoder().decodeBytes(DiagnosticsService.encodeZip(preview));
-    expect(zip.files, hasLength(1));
-    expect(zip.files.single.name, 'diagnostics.txt');
-    expect(utf8.decode(zip.files.single.content), preview);
-  });
-
   test('redacts URLs, provider tokens and parent directories', () {
     final fakeToken = '123456789:${List.filled(35, 'A').join()}';
     final output = diagnosticText(

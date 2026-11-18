@@ -9,6 +9,31 @@ class ParsedToolCall {
   const ParsedToolCall(this.name, this.arguments, this.textBefore);
 }
 
+final _literalSpeechRequest = RegExp(
+  r'^\s*(?:please\s+)?(?:create|make|generate)\s+(?:an?\s+)?(?:audio|wav)\s+file\s+(?:that\s+)?(?:says?|saying)\s+(.+?)\s+using\s+(?:the\s+)?(?:tts|text.to.speech)\s+tool[.!]?\s*$',
+  caseSensitive: false,
+);
+
+/// Directly routes requests that explicitly supply the text and ask for TTS.
+String? literalSpeechText(String request) {
+  final match = _literalSpeechRequest.firstMatch(request);
+  var text = match?.group(1)?.trim();
+  if (text == null || text.isEmpty) return null;
+  if ((text.startsWith('"') && text.endsWith('"')) ||
+      (text.startsWith('“') && text.endsWith('”'))) {
+    text = text.substring(1, text.length - 1).trim();
+  }
+  return text.isEmpty ? null : text;
+}
+
+final _namedWorkspaceFile = RegExp(
+  r'^\s*(?:please\s+)?(?:create|make)\s+(?:an?\s+)?(?:empty\s+)?(?:text\s+)?file\s+'
+  r'(?:(?:in\s+(?:the\s+)?workspace)\s+)(?:named|called)\s+([\w-]+\.txt)[.!]?\s*$',
+  caseSensitive: false,
+);
+
+String? namedWorkspaceFile(String request) => _namedWorkspaceFile.firstMatch(request)?.group(1);
+
 /// Finds the first tool call in [reply]. Tolerates a missing closing tag
 /// and surrounding prose; returns null when there is no valid call.
 ParsedToolCall? parseToolCall(String reply) {

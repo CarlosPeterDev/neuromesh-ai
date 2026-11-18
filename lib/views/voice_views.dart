@@ -31,7 +31,6 @@ const _kBargeIn = 'voice_barge_in';
 const _kWakePhrase = 'voice_wake_phrase';
 const _kSttId = 'voice_stt_id';
 const _kTtsId = 'voice_tts_id';
-const _kSid = 'voice_sid';
 const _kSpeed = 'voice_speed';
 
 class VoiceModelsView extends StatelessWidget {
@@ -64,7 +63,6 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
 
   String get _sttId => _hive.getSetting<String>(_kSttId) ?? '';
   String get _ttsId => _hive.getSetting<String>(_kTtsId) ?? '';
-  int get _sid => _hive.getSetting<int>(_kSid) ?? 0;
   double get _speed => _hive.getSetting<double>(_kSpeed) ?? 1.0;
 
   /// The model that will actually be used for [kind]: the picked one if it is
@@ -83,12 +81,12 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
     setState(() => _previewing = true);
     try {
       final v = Get.find<VoiceService>();
-      v.sid = _sid;
       v.speed = _speed;
       if (!v.ttsLoadedFor(m)) await v.loadTts(m);
       await v.speak(m.lang == 'ar'
           ? 'مرحباً، هذا صوتي. كيف يبدو؟'
-          : 'Hello, this is how I sound. Do you like this voice?');
+          : 'Hello, this is how I sound. Do you like this voice?',
+          localModel: m, preferLocal: true);
     } catch (e) {
       Get.snackbar('Could not play the voice', '$e');
     } finally {
@@ -156,7 +154,7 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
 
   Widget _voiceOptions(VoiceModelInfo tts) {
     final sp = tts.speakers;
-    final sid = sp.isEmpty ? 0 : _sid.clamp(0, sp.length - 1);
+    final sid = VoiceService.savedSpeaker(tts);
     return AppGroup(children: [
       Padding(
         padding: const EdgeInsets.all(12),
@@ -171,9 +169,9 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
                 for (var i = 0; i < sp.length; i++)
                   DropdownMenuItem(value: i, child: Text(sp[i])),
               ],
-              onChanged: (v) {
-                _hive.setSetting(_kSid, v ?? 0);
-                setState(() {});
+              onChanged: (v) async {
+                await VoiceService.saveSpeaker(tts, v ?? 0);
+                if (mounted) setState(() {});
               },
             ),
           ] else
@@ -236,7 +234,6 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
       onTap: has && !m.clone && m.kind != VoiceKind.vad
           ? () {
               _hive.setSetting(m.kind == VoiceKind.stt ? _kSttId : _kTtsId, m.id);
-              _hive.setSetting(_kSid, 0);
               setState(() {});
             }
           : null,
@@ -375,6 +372,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
 
   bool _busy = false; // transcribing / thinking
   bool _speaking = false;
+  VoiceModelInfo? _callVoice;
   int _bargeFrames = 0;
   final _pending = <Float32List>[]; // utterances that arrive while busy
   bool _interrupted = false;
@@ -432,6 +430,9 @@ class _VoiceCallViewState extends State<VoiceCallView> {
 
   /// The cloning voice when you picked one (English only), else a normal voice.
   VoiceModelInfo? _ttsChoice(String lang) {
+    final chosen = _callVoice;
+    if (chosen != null && _store.installed.contains(chosen.id) &&
+        (chosen.lang == lang || chosen.lang == 'multi')) return chosen;
     final clones = Get.find<VoiceCloneStore>();
     if (lang == 'en' && clones.active.value.isNotEmpty) {
       final m = voiceModelById('pocket-tts-clone');
@@ -445,7 +446,6 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       _set(_CallState.error, 'Load a chat model first (Models tab).');
       return;
     }
-    _voice.sid = _hive.getSetting<int>(_kSid) ?? 0;
     _voice.speed = _hive.getSetting<double>(_kSpeed) ?? 1.0;
     final stt = _installed(VoiceKind.stt);
     final remoteStt = WorkloadPlacement.forWorkload(PhoneWorkload.transcription);
@@ -594,7 +594,11 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     await for (final s in sentences) {
       if (_ended || _interrupted) break;
       onSpoken?.call(s); // the caption grows as each sentence is spoken
-      await _voice.speak(s, systemLang: sysLang, workerLanguage: _lang);
+      await _voice.speak(s,
+          systemLang: _callVoice == null ? sysLang : null,
+          workerLanguage: _lang,
+          localModel: _ttsChoice(_lang),
+          preferLocal: _callVoice != null);
     }
   }
 
@@ -802,7 +806,11 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   Future<void> _toggleLang() async {
     final next = _lang == 'en' ? 'ar' : 'en';
     await _hive.setSetting(_kLang, next);
-    setState(() => _lang = next);
+    if (!mounted) return;
+    setState(() {
+      _lang = next;
+      _callVoice = null;
+    });
     final stt = _installed(VoiceKind.stt);
     if (stt != null && WorkloadPlacement.forWorkload(PhoneWorkload.transcription) == null) {
       _busy = true;
@@ -815,6 +823,64 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       _busy = false;
       _set(_CallState.listening, _listeningText());
     }
+  }
+
+  Future<void> _chooseCallVoice() async {
+    final voices = kVoiceModels.where((model) =>
+        model.kind == VoiceKind.tts && !model.clone &&
+        _store.installed.contains(model.id) &&
+        (model.lang == _lang || model.lang == 'multi')).toList();
+    if (voices.isEmpty) {
+      await Get.to(() => const VoiceModelsView());
+      return;
+    }
+    final current = _ttsChoice(_lang);
+    var model = voices.contains(current) ? current! : voices.first;
+    var speaker = VoiceService.savedSpeaker(model);
+    final selected = await showAppSheet<(VoiceModelInfo, int)>(
+      context,
+      title: 'Speaking voice',
+      builder: (context) => StatefulBuilder(
+        builder: (context, update) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            DropdownButtonFormField<VoiceModelInfo>(
+              initialValue: model,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Model'),
+              items: [for (final choice in voices)
+                DropdownMenuItem(value: choice, child: Text(choice.title))],
+              onChanged: (choice) {
+                if (choice != null) update(() {
+                  model = choice;
+                  speaker = VoiceService.savedSpeaker(choice);
+                });
+              },
+            ),
+            if (model.speakers.isNotEmpty)
+              DropdownButtonFormField<int>(
+                key: ValueKey(model.id),
+                initialValue: speaker,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Speaker'),
+                items: [for (var i = 0; i < model.speakers.length; i++)
+                  DropdownMenuItem(value: i, child: Text(model.speakers[i]))],
+                onChanged: (value) => update(() => speaker = value ?? 0),
+              ),
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop((model, speaker)),
+              child: const Text('Use this voice'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (selected == null || !mounted) return;
+    final (chosen, index) = selected;
+    await VoiceService.saveSpeaker(chosen, index);
+    await _hive.setSetting(_kTtsId, chosen.id);
+    if (mounted) setState(() => _callVoice = chosen);
   }
 
   Future<void> _editWake() async {
@@ -851,6 +917,11 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     };
     return Scaffold(
       appBar: AppBar(title: const Text('Voice call'), actions: [
+        IconButton(
+          tooltip: 'Choose speaking voice',
+          icon: const Icon(Icons.record_voice_over_outlined),
+          onPressed: _busy || _speaking ? null : _chooseCallVoice,
+        ),
         IconButton(
             tooltip: 'Wake phrase',
             icon: Icon(_wake.isEmpty ? Icons.hearing_disabled_outlined : Icons.hearing),

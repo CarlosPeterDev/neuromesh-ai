@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 
 import '../controllers/chat_controller.dart';
+import '../utils/memory_text.dart';
 import 'agent_service.dart';
 import 'hive_service.dart';
 import 'inference_service.dart';
@@ -165,6 +166,7 @@ class MemoryService extends GetxService with WidgetsBindingObserver {
       }
       final known = _agent.memory
           .reversed
+          .where((note) => !isMemoryTask(note))
           .take(40)
           .toList()
           .reversed
@@ -175,8 +177,9 @@ class MemoryService extends GetxService with WidgetsBindingObserver {
             'List lasting facts about the USER that would help in future chats: who they are, '
             'their work, projects, tools, preferences, goals, constraints, languages, habits.\n'
             'Rules: one short line per fact, each starting with "- ". Maximum $maxPerRun lines. '
-            'Only facts the user stated or clearly showed. Skip one-off requests, anything about the '
-            'assistant, and facts already known. Never include passwords, keys, tokens, card or ID numbers. '
+            'Only facts the user stated or clearly showed. Omit tasks, commands, action items, and requests to do work. '
+            'Keep lasting preferences and project context as facts, for example: User builds Flutter apps. '
+            'Omit facts already known, passwords, keys, tokens, card or ID numbers. '
             'If there is nothing worth keeping, write only: NONE\n\n'
             'Already known:\n${known.isEmpty ? '(nothing yet)' : known}\n\n'
             'Conversation:\n$transcript',
@@ -276,7 +279,7 @@ class MemoryService extends GetxService with WidgetsBindingObserver {
       final low = fact.toLowerCase();
       if (fact.length < 6 || fact.length > 200) continue;
       if (low == 'none' || low.startsWith('none ') || low.startsWith('nothing')) continue;
-      if (_secret.hasMatch(fact) || _longId.hasMatch(fact)) continue;
+      if (_secret.hasMatch(fact) || _longId.hasMatch(fact) || isMemoryTask(fact)) continue;
       out.add(fact);
       if (out.length >= maxPerRun) break;
     }

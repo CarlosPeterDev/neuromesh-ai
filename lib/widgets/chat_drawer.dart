@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../controllers/chat_controller.dart';
 import '../controllers/home_controller.dart';
 import '../models/chat_session.dart';
+import '../services/agent_service.dart' show stripToolTrace;
 import '../services/hive_service.dart';
 import 'tonal_button.dart';
 import '../core/haptics.dart';
@@ -54,7 +55,7 @@ class _ChatDrawerState extends State<ChatDrawer> {
     if (q.length < 2) return {};
     final ids = <String>{};
     for (final v in Get.find<HiveService>().messagesBox.values) {
-      if (v is Map && '${v['content']}'.toLowerCase().contains(q)) {
+      if (v is Map && stripToolTrace('${v['content'] ?? ''}').toLowerCase().contains(q)) {
         ids.add('${v['chatId']}');
       }
     }
@@ -323,7 +324,7 @@ class _ChatDrawerState extends State<ChatDrawer> {
                 cursorColor: accent,
                 textInputAction: TextInputAction.search,
                 decoration: InputDecoration(
-                  hintText: 'Search',
+                  hintText: 'Search all chats',
                   hintStyle: GoogleFonts.inter(fontSize: 15, color: muted),
                   prefixIcon:
                       Icon(Icons.search_rounded, size: 19, color: muted),
@@ -363,7 +364,7 @@ class _ChatDrawerState extends State<ChatDrawer> {
                     _query.isEmpty ||
                     s.title.toLowerCase().contains(_query) ||
                     _matchIds.contains(s.id) ||
-                    (s.lastMessage ?? '').toLowerCase().contains(_query))
+                    stripToolTrace(s.lastMessage ?? '').toLowerCase().contains(_query))
                 .toList();
 
             if (all.isEmpty) {

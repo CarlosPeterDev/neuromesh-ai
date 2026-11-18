@@ -31,6 +31,18 @@ class VoiceModelInfo {
   /// Names of the built-in voices, in the model's speaker order (multi-speaker
   /// models only). The user can audition them, so a wrong label is harmless.
   final List<String> speakers;
+
+  int? speakerIndexFor(String name) {
+    final query = name.trim().toLowerCase();
+    if (query.isEmpty) return null;
+    final exact = speakers.indexWhere((value) => value.toLowerCase() == query);
+    if (exact >= 0) return exact;
+    final matches = [
+      for (var i = 0; i < speakers.length; i++)
+        if (speakers[i].split(' (').first.toLowerCase() == query) i,
+    ];
+    return matches.length == 1 ? matches.single : null;
+  }
   const VoiceModelInfo({
     required this.id,
     required this.kind,

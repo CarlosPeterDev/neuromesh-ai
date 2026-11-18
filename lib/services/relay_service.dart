@@ -41,7 +41,7 @@ class RelayService extends GetxService {
   WebSocket? _ws;
   Timer? _ping;
   bool _wantOn = false;
-  int _retry = 0;
+  int _generation = 0;
   final _reqs = <String, _Req>{};
 
   @override
@@ -50,7 +50,13 @@ class RelayService extends GetxService {
     url.value = _hive.getSetting<String>('relay_url') ?? '';
     // Persistent until turned off: resume after an app restart.
     if (!kIsWeb && (_hive.getSetting<bool>('relay_on') ?? false) && url.value.isNotEmpty) {
-      Future.delayed(const Duration(seconds: 4), () => start());
+      unawaited(Future<void>.delayed(const Duration(seconds: 4), () async {
+        try {
+          await start();
+        } catch (_) {
+          // start() leaves the error on the remote access screen.
+        }
+      }));
     }
   }
 
@@ -90,7 +96,10 @@ class RelayService extends GetxService {
     }
     if (body != null) req.bodyBytes = body;
     if (headers != null) req.headers.addAll(headers);
-    final res = await http.Response.fromStream(await req.send().timeout(const Duration(seconds: 60)));
+    final res = await req.send().then(http.Response.fromStream)
+        .timeout(const Duration(seconds: 45), onTimeout: () {
+      throw Exception('Cloudflare did not respond. Check your connection and retry.');
+    });
     Map<String, dynamic> j;
     try {
       j = jsonDecode(res.body) as Map<String, dynamic>;
@@ -197,29 +206,47 @@ class RelayService extends GetxService {
     if (_wantOn || kIsWeb) return;
     if (url.value.isEmpty) throw Exception('Deploy the relay first.');
     _wantOn = true;
+    final generation = ++_generation;
     enabled.value = true;
-    await _hive.setSetting('relay_on', true);
-    final sc = Get.find<ServerController>();
-    if (keyMode == 'local' && !sc.useApiKey.value) {
-      sc.useApiKey.value = true;
+    status.value = 'Starting the local API…';
+    try {
+      await _hive.setSetting('relay_on', true);
+      if (generation != _generation) return;
+      final sc = Get.find<ServerController>();
+      if (keyMode == 'local' && !sc.useApiKey.value) {
+        sc.useApiKey.value = true;
+        await sc.saveSettings();
+      }
+      if (!sc.isRunning.value) {
+        await sc.startServer().timeout(const Duration(seconds: 10));
+      }
+      if (generation != _generation) return;
+      if (!sc.isRunning.value) throw StateError('The local API could not start.');
+      unawaited(_keepProcessAlive(true));
+      unawaited(_loop(generation));
+    } catch (_) {
+      if (generation != _generation) return;
+      await stop();
+      status.value = 'The local API could not start. Check Server & API.';
+      throw StateError(status.value);
     }
-    if (!sc.isRunning.value) await sc.startServer();
-    await _keepProcessAlive(true);
-    unawaited(_loop());
   }
 
   Future<void> stop() async {
+    final generation = ++_generation;
     _wantOn = false;
     enabled.value = false;
-    await _hive.setSetting('relay_on', false);
-    _ping?.cancel();
-    try {
-      await _ws?.close();
-    } catch (_) {}
-    _ws = null;
     connected.value = false;
     status.value = 'Off';
-    await _keepProcessAlive(false);
+    _ping?.cancel();
+    _reqs.clear();
+    final oldSocket = _ws;
+    _ws = null;
+    await _hive.setSetting('relay_on', false);
+    try {
+      await oldSocket?.close().timeout(const Duration(seconds: 3));
+    } catch (_) {}
+    if (generation == _generation) await _keepProcessAlive(false);
   }
 
   Future<void> _keepProcessAlive(bool on) async {
@@ -240,15 +267,26 @@ class RelayService extends GetxService {
     } catch (_) {}
   }
 
-  Future<void> _loop() async {
-    while (_wantOn) {
+  Future<void> _loop(int generation) async {
+    var retry = 0;
+    while (_wantOn && generation == _generation) {
       try {
-        status.value = 'Connecting…';
+        status.value = 'Connecting to the Cloudflare relay…';
         final u = Uri.parse(url.value);
-        final ws = await WebSocket.connect('wss://${u.host}/_phone?token=${Uri.encodeQueryComponent(relayToken)}')
-            .timeout(const Duration(seconds: 20));
+        final pending = WebSocket.connect(
+            'wss://${u.host}/_phone?token=${Uri.encodeQueryComponent(relayToken)}');
+        final ws = await pending.timeout(const Duration(seconds: 15), onTimeout: () {
+          unawaited(pending.then<void>((lateSocket) async {
+            await lateSocket.close();
+          }).catchError((Object _) {}));
+          throw TimeoutException('Relay connection deadline exceeded.');
+        });
+        if (generation != _generation) {
+          await ws.close();
+          return;
+        }
         _ws = ws;
-        _retry = 0;
+        retry = 0;
         connected.value = true;
         status.value = 'Connected';
         _ping?.cancel();
@@ -260,15 +298,18 @@ class RelayService extends GetxService {
         await for (final msg in ws) {
           if (msg is String && msg != 'pong') _onFrame(ws, msg);
         }
-      } catch (e) {
-        status.value = 'Reconnecting… ($e)';
+      } catch (_) {
+        if (generation != _generation) return;
+        status.value = 'Could not reach the relay. Check the Worker address and connection.';
       }
+      if (generation != _generation) return;
+      if (connected.value) status.value = 'Relay disconnected. Reconnecting…';
       connected.value = false;
       _ping?.cancel();
       _reqs.clear();
       if (!_wantOn) break;
-      _retry = min(_retry + 1, 6);
-      await Future.delayed(Duration(seconds: 2 * _retry));
+      retry = min(retry + 1, 6);
+      await Future.delayed(Duration(seconds: 2 * retry));
     }
   }
 

@@ -34,10 +34,16 @@ void registerExtraTools(AgentService agent) {
       b.writeln('Chat model loaded now: ${mc.lastLoadedModelName.isEmpty ? '(none)' : mc.lastLoadedModelName}');
       final files = mc.downloadedFiles.toList();
       b.writeln('Downloaded models (${files.length}): ${files.isEmpty ? 'none' : files.take(30).join(', ')}');
-      final stt = kVoiceModels.where((m) => m.kind == VoiceKind.stt && vs.installed.contains(m.id)).map((m) => m.title);
-      final tts = kVoiceModels.where((m) => m.kind == VoiceKind.tts && vs.installed.contains(m.id)).map((m) => m.title);
-      b.writeln('Listening models: ${stt.isEmpty ? 'NONE (ask the user to download one in Toolbox → Voice models)' : stt.join('; ')}${v.sttReady ? ' [loaded]' : ''}');
-      b.writeln('Speaking models: ${tts.isEmpty ? 'NONE (ask the user to download one in Toolbox → Voice models)' : tts.join('; ')}${v.ttsReady ? ' [loaded]' : ''}');
+      final voiceModels = kVoiceModels
+          .where((m) => !m.clone && vs.installed.contains(m.id)).toList();
+      for (final (kind, heading, loaded) in [
+        (VoiceKind.stt, 'Listening models', v.sttReady),
+        (VoiceKind.tts, 'Speaking models', v.ttsReady),
+      ]) {
+        final entries = voiceModels.where((m) => m.kind == kind).map((m) =>
+            '${m.id} — ${m.title} [${m.lang}]${m.speakers.isEmpty ? '' : '; speakers: ${m.speakers.join(', ')}'}');
+        b.writeln('$heading: ${entries.isEmpty ? 'NONE (download in Models → Voice)' : entries.join('\n')}${loaded ? '\nRuntime loaded' : ''}');
+      }
       b.writeln('Image model: ${img.lastModelName ?? 'NONE (Models → Image models)'}');
       return b.toString().trim();
     },
