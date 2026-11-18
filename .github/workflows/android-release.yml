@@ -265,7 +265,8 @@ jobs:
           tar -C "$B" -czf "NeuroMesh-AI-v${V}-linux-x64.tar.gz" .
           bash scripts/package_linux.sh "$B" "$V" web/icons/Icon-512.png
           if [[ "$GITHUB_EVENT_NAME" != "pull_request" && "$GITHUB_REF" == "refs/heads/main" ]]; then
-            for f in NeuroMesh-AI-v${V}-linux-x64.*; do
+            for f in "NeuroMesh-AI-v${V}-linux-x64.deb" "NeuroMesh-AI-v${V}-linux-x64.AppImage"; do
+              [[ -f "$f" ]] || continue
               gh release upload "v${V}" "$f" --clobber --repo "$GITHUB_REPOSITORY"
               gh release upload latest "$f" --clobber --repo "$GITHUB_REPOSITORY"
             done
@@ -296,10 +297,9 @@ jobs:
           "$ISCC" "/DAppVersion=${V}" "/DSourceDir=$(cygpath -w "$PWD/$B")" "/DOutDir=$(cygpath -w "$PWD")" installer/neuromesh.iss
           ls -la NeuroMesh-AI-Setup-*.exe
           if [[ "$GITHUB_EVENT_NAME" != "pull_request" && "$GITHUB_REF" == "refs/heads/main" ]]; then
-            for f in "NeuroMesh-AI-v${V}-windows-x64-portable.zip" "NeuroMesh-AI-Setup-v${V}-x64.exe"; do
-              gh release upload "v${V}" "$f" --clobber --repo "$GITHUB_REPOSITORY"
-              gh release upload latest "$f" --clobber --repo "$GITHUB_REPOSITORY"
-            done
+            installer="NeuroMesh-AI-Setup-v${V}-x64.exe"
+            gh release upload "v${V}" "$installer" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload latest "$installer" --clobber --repo "$GITHUB_REPOSITORY"
           fi
 
       - uses: actions/upload-artifact@v4
