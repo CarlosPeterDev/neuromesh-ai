@@ -22,8 +22,7 @@ ModelFileRole modelFileRole(String path) {
   if (name.endsWith('.gguf') && name.contains('mmproj')) {
     return ModelFileRole.projector;
   }
-  if (isFastMtpDraft(name) ||
-      RegExp(r'(^|[-_.])(draft|speculative)([-_.]|$)').hasMatch(name)) {
+  if (isFastMtpDraft(name)) {
     return ModelFileRole.draft;
   }
   if (RegExp(r'(^|[-_.])(lora|adapter_model)([-_.]|$)').hasMatch(name)) {
