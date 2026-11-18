@@ -13,7 +13,7 @@ void main() {
     expect(modelFileRole('Family-7B-MTP-Q4_K_M.gguf'), ModelFileRole.model);
     expect(modelFileRole('mmproj-family-f16.gguf'), ModelFileRole.projector);
     expect(modelFileRole('family-FastMTP-64K.gguf'), ModelFileRole.draft);
-    expect(modelFileRole('family-draft.gguf'), ModelFileRole.draft);
+    expect(modelFileRole('family-draft.gguf'), ModelFileRole.model);
     expect(modelFileRole('family-lora.safetensors'), ModelFileRole.adapter);
     expect(modelFileRole('family-vae.safetensors'), ModelFileRole.imageAddon);
     expect(modelFileRole('vae/diffusion_pytorch_model.safetensors'), ModelFileRole.imageAddon);
