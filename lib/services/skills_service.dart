@@ -196,7 +196,7 @@ class SkillsService extends GetxService {
     final extension = name.split('.').last.toLowerCase();
     final text = extension == 'pdf' || extension == 'docx'
         ? await DocumentExtractorService.extractText(file.path, extension)
-        : await file.readAsString();
+        : utf8.decode(await file.readAsBytes());
     return ContextDocument('file:$name', text);
   }
 

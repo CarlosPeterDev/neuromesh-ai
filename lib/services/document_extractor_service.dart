@@ -87,12 +87,12 @@ class DocumentExtractorService {
     // Preserve paragraph breaks: <w:p> elements separate paragraphs.
     final paragraphs = <String>[];
     for (final p in document.findAllElements('w:p')) {
-      final pTexts = p.findAllElements('w:t').map((e) => e.value).join();
+      final pTexts = p.findAllElements('w:t').map((e) => e.innerText).join();
       if (pTexts.isNotEmpty) paragraphs.add(pTexts);
     }
 
     return paragraphs.isNotEmpty
         ? paragraphs.join('\n\n')
-        : document.findAllElements('w:t').map((e) => e.value).join();
+        : document.findAllElements('w:t').map((e) => e.innerText).join();
   }
 }
