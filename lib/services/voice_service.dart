@@ -60,6 +60,7 @@ Uint8List encodeWav(Float32List samples, int sampleRate) {
     final size = bd.getUint32(pos + 4, Endian.little);
     final body = pos + 8;
     if (id == 'fmt ') {
+      if (size < 16 || body + 16 > b.length) return null;
       fmt = bd.getUint16(body, Endian.little);
       channels = bd.getUint16(body + 2, Endian.little);
       rate = bd.getUint32(body + 4, Endian.little);
@@ -83,6 +84,22 @@ Uint8List encodeWav(Float32List samples, int sampleRate) {
     pos = body + size + (size.isOdd ? 1 : 0);
   }
   return null;
+}
+
+/// Converts PCM WAV inputs to the recognizer's 16 kHz rate.
+Float32List resampleWav(Float32List samples, int from, int to) {
+  if (from == to || samples.isEmpty) return samples;
+  if (from < 4000 || from > 384000 || to <= 0) {
+    throw const FormatException('Unsupported WAV sample rate.');
+  }
+  final output = Float32List(math.max(1, (samples.length * to / from).round()));
+  for (var i = 0; i < output.length; i++) {
+    final position = i * from / to;
+    final left = math.min(position.floor(), samples.length - 1);
+    final right = math.min(left + 1, samples.length - 1);
+    output[i] = samples[left] + (samples[right] - samples[left]) * (position - left);
+  }
+  return output;
 }
 
 /// Splits text into short speakable chunks and removes markdown noise.
@@ -140,6 +157,34 @@ class VoiceService extends GetxService {
   String _espeak = '';
   bool _bindings = false;
   bool _phonemizerReady = false;
+  Future<void> _ttsQueue = Future.value();
+  Future<void> _sttQueue = Future.value();
+
+  Future<T> _withTts<T>(Future<T> Function() action) {
+    final result = _ttsQueue.then((_) => action());
+    _ttsQueue = result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return result;
+  }
+
+  Future<T> _withStt<T>(Future<T> Function() action) {
+    final result = _sttQueue.then((_) => action());
+    _sttQueue = result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return result;
+  }
+
+  static int savedSpeaker(VoiceModelInfo model) {
+    if (model.speakers.isEmpty) return 0;
+    final hive = Get.find<HiveService>();
+    final saved = hive.getSetting<int>('voice_speaker_${model.id}') ??
+        (hive.getSetting<String>('voice_tts_id') == model.id
+            ? hive.getSetting<int>('voice_sid')
+            : null) ?? 0;
+    return saved.clamp(0, model.speakers.length - 1);
+  }
+
+  static Future<void> saveSpeaker(VoiceModelInfo model, int index) =>
+      Get.find<HiveService>().setSetting('voice_speaker_${model.id}', index);
+
 
   final AudioPlayer _player = AudioPlayer();
   FlutterTts? _system;
@@ -215,7 +260,11 @@ class VoiceService extends GetxService {
     return files.first;
   }
 
-  Future<void> loadStt(VoiceModelInfo m, {String language = ''}) async {
+  Future<void> loadStt(VoiceModelInfo m, {String language = ''}) =>
+      _withStt(() => _loadStt(m, language: language));
+
+  Future<void> _loadStt(VoiceModelInfo m, {required String language}) async {
+    if (sttLoadedFor(m, language)) return;
     _initBindings();
     final dir = await Get.find<VoiceModelStore>().dirFor(m);
     final tokens = await _firstFile(dir, (p) => p.endsWith('tokens.txt'));
@@ -242,7 +291,10 @@ class VoiceService extends GetxService {
         debug: false,
       );
     }
-    _stt?.free();
+    final previous = _stt;
+    _stt = null;
+    _sttId = null;
+    previous?.free();
     _stt = await sherpa.OfflineRecognizer.createAsync(
         sherpa.OfflineRecognizerConfig(model: model));
     _sttId = '${m.id}|$language';
@@ -251,7 +303,10 @@ class VoiceService extends GetxService {
   bool sttLoadedFor(VoiceModelInfo m, String language) =>
       _stt != null && _sttId == '${m.id}|$language';
 
-  Future<void> loadTts(VoiceModelInfo m) async {
+  Future<void> loadTts(VoiceModelInfo m) => _withTts(() => _loadTts(m));
+
+  Future<void> _loadTts(VoiceModelInfo m) async {
+    if (ttsLoadedFor(m)) return;
     _initBindings();
     final dir = await Get.find<VoiceModelStore>().dirFor(m);
     if (m.clone) {
@@ -273,13 +328,9 @@ class VoiceService extends GetxService {
         ),
         maxNumSentences: 1,
       );
-      _tts?.free();
-      _tts = sherpa.OfflineTts(cfg);
-      _ttsId = m.id;
-      _isClone = true;
+      _replaceTts(m, cfg);
       return;
     }
-    _isClone = false;
     if (m.engine == 'kokoro' || m.engine == 'kitten') {
       final onnx = await _firstFile(dir, (p) => p.endsWith('.onnx'));
       final voices = await _firstFile(dir, (p) => p.endsWith('voices.bin'));
@@ -321,14 +372,10 @@ class VoiceService extends GetxService {
               ),
               numThreads: 4,
               debug: false);
-      _tts?.free();
-      _tts = sherpa.OfflineTts(sherpa.OfflineTtsConfig(
+      _replaceTts(m, sherpa.OfflineTtsConfig(
           model: mc, ruleFsts: fsts.join(','), maxNumSentences: 1));
-      _ttsId = m.id;
-      _native = true;
       return;
     }
-    _native = false;
     final model = await _firstFile(dir, (p) => p.endsWith('.onnx'));
     final tokens = await _firstFile(dir, (p) => p.endsWith('tokens.txt'));
     if (!_phonemizerReady) {
@@ -347,10 +394,29 @@ class VoiceService extends GetxService {
       ),
       maxNumSentences: 1,
     );
-    _tts?.free();
-    _tts = sherpa.OfflineTts(cfg);
-    _ttsId = m.id;
-    _espeak = m.espeakVoice;
+    _replaceTts(m, cfg);
+  }
+
+  void _replaceTts(VoiceModelInfo model, sherpa.OfflineTtsConfig config) {
+    final previous = _tts;
+    _tts = null;
+    _ttsId = null;
+    previous?.free();
+    _tts = sherpa.OfflineTts(config);
+    _ttsId = model.id;
+    _isClone = model.clone;
+    _native = model.engine == 'kokoro' || model.engine == 'kitten';
+    _espeak = model.espeakVoice;
+  }
+
+  VoiceModelInfo? _requestedModel(VoiceKind kind, String id) {
+    if (id.trim().isEmpty) return null;
+    final model = voiceModelById(id.trim());
+    if (model == null || model.kind != kind || model.clone ||
+        !Get.find<VoiceModelStore>().installed.contains(model.id)) {
+      throw ArgumentError('Choose an installed model ID from models_status.');
+    }
+    return model;
   }
 
   /// The installed model the user picked (or the first installed one).
@@ -369,11 +435,12 @@ class VoiceService extends GetxService {
   }
 
   /// Transcribes an audio file (mp3, m4a, ogg, wav, mp4…) in 25-second pieces.
-  Future<String> transcribeFile(String path, {String language = ''}) async {
+  Future<String> transcribeFile(String path, {String language = '', String modelId = ''}) async {
+    final requested = _requestedModel(VoiceKind.stt, modelId);
     Float32List? pcm;
     if (path.toLowerCase().endsWith('.wav')) {
       final decoded = decodeWav(await File(path).readAsBytes());
-      if (decoded?.rate == 16000) pcm = decoded!.samples;
+      if (decoded != null) pcm = resampleWav(decoded.samples, decoded.rate, 16000);
     }
     pcm ??= await Get.find<DeviceBridge>().decodeAudio(path);
     if (pcm == null || pcm.isEmpty) throw Exception('Could not read audio from this file.');
@@ -382,15 +449,15 @@ class VoiceService extends GetxService {
     for (var i = 0; i < pcm.length; i += piece) {
       final end = math.min(i + piece, pcm.length);
       final t = await transcribeSamples(
-          Float32List.sublistView(pcm, i, end), language: language);
+          Float32List.sublistView(pcm, i, end), language: language, model: requested);
       if (t.isNotEmpty) out..write(t)..write(' ');
     }
     return out.toString().trim();
   }
 
   Future<String> transcribeSamples(Float32List samples,
-      {String language = '', bool allowWorker = true}) async {
-    final worker = allowWorker
+      {String language = '', bool allowWorker = true, VoiceModelInfo? model}) async {
+    final worker = allowWorker && model == null
         ? WorkloadPlacement.forWorkload(PhoneWorkload.transcription)
         : null;
     if (worker != null) {
@@ -402,16 +469,19 @@ class VoiceService extends GetxService {
           maxBytes: 65536);
       return utf8.decode(bytes).trim();
     }
-    final model = pickInstalled(VoiceKind.stt);
-    if (model == null) throw StateError('Install or assign a listening model.');
-    if (!sttLoadedFor(model, language)) await loadStt(model, language: language);
-    return transcribe(samples);
+    final selected = model ?? pickInstalled(VoiceKind.stt);
+    if (selected == null) throw StateError('Install or assign a listening model.');
+    return _withStt(() async {
+      await _loadStt(selected, language: language);
+      return transcribe(samples);
+    });
   }
 
   /// Speaks [text] with the chosen voice into a WAV file's bytes.
   Future<Uint8List> synthesizeToWav(String text,
-      {String lang = '', bool allowWorker = true}) async {
-    final worker = allowWorker
+      {String lang = '', bool allowWorker = true, String modelId = '', String speaker = ''}) async {
+    final requested = _requestedModel(VoiceKind.tts, modelId);
+    final worker = allowWorker && requested == null && speaker.trim().isEmpty
         ? WorkloadPlacement.forWorkload(PhoneWorkload.speech)
         : null;
     if (worker != null) {
@@ -419,30 +489,32 @@ class VoiceService extends GetxService {
           payload: {'text': text, 'language': lang},
           timeout: const Duration(seconds: 60));
     }
-    final m = pickInstalled(VoiceKind.tts, lang: lang);
+    final m = requested ?? pickInstalled(VoiceKind.tts, lang: lang);
     if (m == null) {
-      throw Exception('No speaking model installed. Download one in Toolbox → Voice models.');
+      throw StateError('Download a speaking model in Models → Voice.');
     }
-    final h = Get.find<HiveService>();
-    sid = h.getSetting<int>('voice_sid') ?? 0;
-    speed = h.getSetting<double>('voice_speed') ?? 1.0;
-    if (!ttsLoadedFor(m)) await loadTts(m);
-    final parts = <Float32List>[];
-    var rate = 22050;
-    for (final c in speechChunks(text)) {
-      final r = synthesize(c);
-      if (r == null) continue;
-      parts.add(r.samples);
-      rate = r.rate;
-    }
-    if (parts.isEmpty) throw Exception('Nothing could be spoken.');
-    final all = Float32List(parts.fold<int>(0, (a, b) => a + b.length));
-    var o = 0;
-    for (final p in parts) {
-      all.setRange(o, o + p.length, p);
-      o += p.length;
-    }
-    return encodeWav(all, rate);
+    final voice = speaker.trim().isEmpty ? savedSpeaker(m) : m.speakerIndexFor(speaker);
+    if (voice == null) throw ArgumentError('Choose a speaker listed for ${m.id} in models_status.');
+    final rateMultiplier = Get.find<HiveService>().getSetting<double>('voice_speed') ?? 1.0;
+    return _withTts(() async {
+      await _loadTts(m);
+      final parts = <Float32List>[];
+      var rate = 22050;
+      for (final c in speechChunks(text)) {
+        final r = synthesize(c, speakerIndex: voice, speakingSpeed: rateMultiplier);
+        if (r == null) continue;
+        parts.add(r.samples);
+        rate = r.rate;
+      }
+      if (parts.isEmpty) throw Exception('Nothing could be spoken.');
+      final all = Float32List(parts.fold<int>(0, (a, b) => a + b.length));
+      var o = 0;
+      for (final p in parts) {
+        all.setRange(o, o + p.length, p);
+        o += p.length;
+      }
+      return encodeWav(all, rate);
+    });
   }
 
   bool ttsLoadedFor(VoiceModelInfo m) => _tts != null && _ttsId == m.id;
@@ -451,12 +523,14 @@ class VoiceService extends GetxService {
   String transcribe(Float32List samples, {int sampleRate = 16000}) {
     final r = _stt;
     if (r == null) throw StateError('Speech recognizer not loaded');
-    final s = r.createStream();
-    s.acceptWaveform(samples: samples, sampleRate: sampleRate);
-    r.decode(s);
-    final text = r.getResult(s).text.trim();
-    s.free();
-    return text;
+    final stream = r.createStream();
+    try {
+      stream.acceptWaveform(samples: samples, sampleRate: sampleRate);
+      r.decode(stream);
+      return r.getResult(stream).text.trim();
+    } finally {
+      stream.free();
+    }
   }
 
   Completer<void>? _stopSignal;
@@ -470,7 +544,10 @@ class VoiceService extends GetxService {
   }
 
   /// Synthesizes one chunk with the loaded on-device model.
-  ({Float32List samples, int rate})? synthesize(String chunk) {
+  ({Float32List samples, int rate})? synthesize(String chunk,
+      {int? speakerIndex, double? speakingSpeed}) {
+    final voice = speakerIndex ?? sid;
+    final rate = speakingSpeed ?? speed;
     final tts = _tts;
     if (tts == null) return null;
     if (_isClone) {
@@ -492,7 +569,7 @@ class VoiceService extends GetxService {
     if (_native) {
       final audio = tts.generateWithConfig(
         text: chunk,
-        config: sherpa.OfflineTtsGenerationConfig(sid: sid, speed: speed),
+        config: sherpa.OfflineTtsGenerationConfig(sid: voice, speed: rate),
       );
       return audio.samples.isEmpty
           ? null
@@ -505,7 +582,7 @@ class VoiceService extends GetxService {
     final audio = tts.generateWithConfig(
       text: '',
       config: sherpa.OfflineTtsGenerationConfig(
-          sid: 0, speed: speed, phonemeCodepoints: cps),
+          sid: 0, speed: rate, phonemeCodepoints: cps),
     );
     return audio.samples.isEmpty
         ? null
@@ -570,11 +647,16 @@ class VoiceService extends GetxService {
 
   /// Speaks with the worker phone, the on-device voice model, or the
   /// phone's own voice when [systemLang] is given (e.g. 'ar', 'en-US').
-  Future<void> speak(String text, {String? systemLang, String workerLanguage = ''}) async {
+  Future<void> speak(String text, {
+    String? systemLang,
+    String workerLanguage = '',
+    VoiceModelInfo? localModel,
+    bool preferLocal = false,
+  }) async {
     _stopSpeaking = false;
     final chunks = speechChunks(text);
     if (chunks.isEmpty) return;
-    final assigned = systemLang == null
+    final assigned = systemLang == null && !preferLocal
         ? WorkloadPlacement.forWorkload(PhoneWorkload.speech)
         : null;
     if (assigned != null) {
@@ -587,8 +669,9 @@ class VoiceService extends GetxService {
       }
       return;
     }
-    final useWorker = systemLang == null && workerUrl.isNotEmpty;
-    if (systemLang != null || (_tts == null && !useWorker)) {
+    final useWorker = systemLang == null && !preferLocal && workerUrl.isNotEmpty;
+    final localVoice = localModel ?? (_ttsId == null ? null : voiceModelById(_ttsId!));
+    if (systemLang != null || (localVoice == null && !useWorker)) {
       _system ??= FlutterTts();
       await _system!.awaitSpeakCompletion(true);
       await _system!.setLanguage(systemLang ?? 'en-US');
@@ -598,6 +681,8 @@ class VoiceService extends GetxService {
       }
       return;
     }
+    final localSpeaker = localModel == null ? sid : savedSpeaker(localModel);
+    final localSpeed = speed;
     var workerOk = useWorker;
     for (var i = 0; i < chunks.length; i++) {
       if (_stopSpeaking) return;
@@ -610,7 +695,7 @@ class VoiceService extends GetxService {
         }
         workerOk = false; // fall back to this phone for the rest
       }
-      if (_tts == null) {
+      if (localVoice == null) {
         // Worker unreachable and no local voice: use the phone's own voice.
         _system ??= FlutterTts();
         await _system!.awaitSpeakCompletion(true);
@@ -618,8 +703,12 @@ class VoiceService extends GetxService {
         await _system!.speak(chunks[i]);
         continue;
       }
-      final r = synthesize(chunks[i]);
-      if (r == null) continue;
+      final r = await _withTts(() async {
+        await _loadTts(localVoice);
+        return synthesize(chunks[i],
+            speakerIndex: localSpeaker, speakingSpeed: localSpeed);
+      });
+      if (r == null || _stopSpeaking) continue;
       await _playWav(encodeWav(r.samples, r.rate), i);
       if (_stopSpeaking) return;
     }

@@ -376,24 +376,31 @@ class AgentService extends GetxService {
     ),
     AgentTool(
       'transcribe_audio',
-      'Turn a workspace audio file (mp3, m4a, ogg, wav, video) into text with the on-device speech model.',
-      '{"name":"audio file name","language":"optional code such as en or ar"}',
+      'Transcribe a workspace audio file. Choose an installed listening model ID from models_status if the user requests a model or the default is unsuitable.',
+      '{"name":"audio file name","language":"optional code such as en or ar","model_id":"optional installed listening model ID"}',
       (args) async {
         final f = await _safeFile((args['name'] ?? '').toString());
         if (!await f.exists()) return 'Error: file not found. Use list_files.';
         final t = await Get.find<VoiceService>()
-            .transcribeFile(f.path, language: (args['language'] ?? '').toString());
+            .transcribeFile(f.path,
+                language: (args['language'] ?? '').toString(),
+                modelId: (args['model_id'] ?? '').toString());
         return t.isEmpty ? '(no speech found)' : _page(t, 0);
       },
     ),
     AgentTool(
       'text_to_speech',
-      'Speak text with the on-device voice model and save it as a WAV file in the workspace. Show it to the user with [📎 name](nmfile:name).',
-      '{"text":"string","name":"output file name ending in .wav"}',
+      'Create a WAV in the workspace. Use models_status to choose a speaking model and exact speaker when the user requests a voice or asks you to choose. Omit overrides to use the user’s defaults. Show it with [📎 name](nmfile:name).',
+      '{"text":"string","name":"output file name ending in .wav","language":"optional voice language such as en or ar","model_id":"optional installed speaking model ID","speaker":"optional speaker name from that model"}',
       (args) async {
         var name = (args['name'] ?? 'speech.wav').toString();
         if (!name.toLowerCase().endsWith('.wav')) name = '$name.wav';
-        final wav = await Get.find<VoiceService>().synthesizeToWav((args['text'] ?? '').toString());
+        final wav = await Get.find<VoiceService>().synthesizeToWav(
+          (args['text'] ?? '').toString(),
+          lang: (args['language'] ?? '').toString(),
+          modelId: (args['model_id'] ?? '').toString(),
+          speaker: (args['speaker'] ?? '').toString(),
+        );
         final f = await _safeFile(name);
         await f.writeAsBytes(wav);
         return 'Saved ${f.path.split('/').last} (${wav.length ~/ 1024} KB). Show it with [📎 ${f.path.split('/').last}](nmfile:${f.path.split('/').last}).';
@@ -1015,20 +1022,22 @@ class AgentService extends GetxService {
   /// Trims [hist] and [prompt] so the whole request fits the model's context
   /// with room left to answer; an overflow makes small models fail or go silent.
   /// Returns the (possibly shortened) prompt.
-  String fitToContext(String system, List<Map<String, String>> hist, String prompt, int ctxTokens) {
+  static String fitToContext(String system, List<Map<String, String>> hist, String prompt, int ctxTokens) {
     if (ctxTokens <= 0) return prompt;
     int est(String t) => (t.length / 2.8).ceil();
     final budget = (ctxTokens * 0.68).floor() - 120;
     int total() => est(system) + hist.fold<int>(0, (a, m) => a + est(m['content'] ?? ''));
     // Drop the oldest turns first (keep the last message).
-    while (total() > budget && hist.length > 2) {
+    while (total() > budget && hist.length > 1) {
       hist.removeAt(0);
-      if (hist.isNotEmpty && hist.first['role'] != 'user') hist.removeAt(0);
+      if (hist.length > 1 && hist.first['role'] != 'user') hist.removeAt(0);
     }
     if (total() > budget && hist.isNotEmpty) {
       final over = ((total() - budget) * 2.8).ceil();
       final cur = hist.last['content'] ?? '';
-      final keep = (cur.length - over).clamp(400, cur.length);
+      // Preserve short requests intact, even when the system prompt is large.
+      final minimum = cur.length < 400 ? cur.length : 400;
+      final keep = (cur.length - over).clamp(minimum, cur.length);
       if (keep < cur.length) {
         final head = (keep * 0.55).floor();
         final cut = '${cur.substring(0, head)}\n…(shortened to fit memory)…\n${cur.substring(cur.length - (keep - head))}';
