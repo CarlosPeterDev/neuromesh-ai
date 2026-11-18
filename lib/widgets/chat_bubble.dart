@@ -30,13 +30,9 @@ class ChatBubble extends StatelessWidget {
       return _buildGeneratedImageCard(context, isDark);
     }
 
-    final visibleContent = message.fileName == null
-        ? message.content
-        : message.content.split('\n\nAttached file:').first;
+    if (isUser) return _buildUser(context, isDark, message.visibleUserText);
 
-    if (isUser) return _buildUser(context, isDark, visibleContent);
-
-    final thoughtParts = splitThoughtTags(_cleanAssistantText(visibleContent));
+    final thoughtParts = splitThoughtTags(_cleanAssistantText(message.content));
     final answerContent = thoughtParts.answer.trim();
     return _buildAssistant(context, isDark, thoughtParts, answerContent);
   }
@@ -84,22 +80,28 @@ class ChatBubble extends StatelessWidget {
   }
 
   Future<void> _editAndResend(BuildContext context, String text) async {
-    final ctl = TextEditingController(text: text);
+    var edited = text;
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Edit message'),
-        content: TextField(controller: ctl, maxLines: 6, minLines: 1, autofocus: true),
+        content: TextFormField(
+          initialValue: text,
+          onChanged: (value) => edited = value,
+          maxLines: 6,
+          minLines: 1,
+          autofocus: true,
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           TextButton(
-              onPressed: () => Navigator.pop(ctx, ctl.text),
+              onPressed: () => Navigator.pop(ctx, edited),
               child: const Text('Resend')),
         ],
       ),
     );
-    if (result != null && result.trim().isNotEmpty) {
-      Get.find<ChatController>().resendLast(result);
+    if (context.mounted && result != null && result.trim().isNotEmpty) {
+      await Get.find<ChatController>().resendLast(result, messageId: message.id);
     }
   }
 
@@ -159,7 +161,9 @@ class ChatBubble extends StatelessWidget {
               iconSize: 16,
               color: Theme.of(context).hintColor,
               icon: const Icon(Icons.edit_outlined),
-              onPressed: () => _editAndResend(context, text),
+              onPressed: Get.find<ChatController>().isLoading.value
+                  ? null
+                  : () => _editAndResend(context, text),
             ),
           ),
         if (text.trim().isNotEmpty)
@@ -265,7 +269,9 @@ class ChatBubble extends StatelessWidget {
                   iconSize: 18,
                   color: muted,
                   icon: const Icon(Icons.refresh_rounded),
-                  onPressed: () => Get.find<ChatController>().regenerate(),
+                  onPressed: Get.find<ChatController>().isLoading.value
+                      ? null
+                      : () => Get.find<ChatController>().regenerate(),
                 ),
               if (meta.isNotEmpty) ...[
                 const SizedBox(width: 6),

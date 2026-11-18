@@ -24,12 +24,14 @@ class ChatMessage {
   Uint8List? _decodedImageBytes;
   Uint8List? get decodedImageBytes {
     if (imageBase64 == null) return null;
-    _decodedImageBytes ??= base64Decode(imageBase64!);
-    return _decodedImageBytes;
+    try {
+      return _decodedImageBytes ??= base64Decode(imageBase64!);
+    } on FormatException {
+      return null;
+    }
   }
 
   ChatMessage({
-
     required this.id,
     required this.chatId,
     required this.role,
@@ -48,6 +50,21 @@ class ChatMessage {
     this.imageGenDurationMs,
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
+
+  static const _attachmentSeparator = '\n\nAttached file:';
+
+  String get visibleUserText {
+    final start = fileName == null ? -1 : content.indexOf(_attachmentSeparator);
+    return start < 0 ? content : content.substring(0, start);
+  }
+
+  ChatMessage withUserText(String text) {
+    final start = fileName == null ? -1 : content.indexOf(_attachmentSeparator);
+    return ChatMessage.fromMap({
+      ...toMap(),
+      'content': start < 0 ? text : '$text${content.substring(start)}',
+    });
+  }
 
   Map<String, dynamic> toMap() => {
         'id': id,

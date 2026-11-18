@@ -28,6 +28,16 @@ class _RelayViewState extends State<RelayView> {
   late bool _useKey = r.apiKey.isNotEmpty;
   String? _error;
 
+  @override
+  void dispose() {
+    _token.dispose();
+    _account.dispose();
+    _name.dispose();
+    _password.dispose();
+    _key.dispose();
+    super.dispose();
+  }
+
   Future<void> _save() => r.saveSettings(
         token: _token.text,
         account: _account.text,
@@ -144,6 +154,7 @@ class _RelayViewState extends State<RelayView> {
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   child: TextField(
                       controller: _password,
+                      obscureText: true,
                       decoration: appInputDecoration(context, hint: 'Password')),
                 ),
               SwitchListTile(
@@ -158,6 +169,7 @@ class _RelayViewState extends State<RelayView> {
                     Expanded(
                         child: TextField(
                             controller: _key,
+                            obscureText: true,
                             decoration: appInputDecoration(context, hint: 'API key'))),
                     IconButton(
                         tooltip: 'Generate',
@@ -211,7 +223,9 @@ class _RelayViewState extends State<RelayView> {
                   title: const Text('Remote access'),
                   subtitle: Text(r.enabled.value
                       ? (r.connected.value ? 'On · connected' : r.status.value)
-                      : 'Off. Stays on until you turn it off.'),
+                      : r.status.value == 'Off'
+                          ? 'Off'
+                          : r.status.value),
                   value: r.enabled.value,
                   onChanged: (v) async {
                     try {
