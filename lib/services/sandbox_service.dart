@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:crypto/crypto.dart';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -17,9 +18,16 @@ import 'hive_service.dart';
 /// Not part of the Google Play build: it downloads packages and runs them.
 class SandboxService extends GetxService {
   static const rootfsUrl =
-      'https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.3-aarch64.tar.gz';
+      'https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.9-aarch64.tar.gz';
+
+  static const rootfsSha256 =
+      'a389940ee42579ead202fb91607fb25698a58a3a5b55c15b4603e5d39cfa4492';
 
   final installed = false.obs;
+  final downloadProgress = Rx<double?>(null);
+  Future<void>? _initializing;
+  Future<void>? _installation;
+  int _commands = 0;
   final busy = false.obs;
   final status = ''.obs;
 
@@ -33,46 +41,150 @@ class SandboxService extends GetxService {
   }
 
   @override
-  Future<void> onInit() async {
+  void onInit() {
     super.onInit();
-    if (!supported) return;
-    _libDir = await Get.find<DeviceBridge>().nativeLibDir();
-    installed.value = File('${(await _root()).path}/rootfs/bin/sh').existsSync() ||
-        Link('${(await _root()).path}/rootfs/bin/sh').existsSync();
+    if (supported) {
+      _initializing = _initialize().catchError((Object error) {
+        status.value = 'Could not initialize Linux: $error';
+      });
+    }
   }
 
-  bool get hasProot => _libDir.isNotEmpty && File('$_libDir/libproot.so').existsSync();
+  Future<void> _initialize() async {
+    _libDir = await Get.find<DeviceBridge>().nativeLibDir();
+    installed.value =
+        await File('${(await _root()).path}/rootfs/bin/busybox').exists();
+  }
 
-  /// Downloads Alpine (about 4 MB) and prepares it.
-  Future<void> install() async {
-    if (!supported) throw Exception('The Linux sandbox is only in the Pro build.');
-    if (!hasProot) throw Exception('This build does not include proot.');
+  bool get hasProot =>
+      _libDir.isNotEmpty &&
+      ['libproot.so', 'libproot_loader.so', 'libtalloc.so']
+          .every((name) => File('$_libDir/$name').existsSync());
+
+  /// Alpine is downloaded only after the user chooses Install.
+  Future<void> install() {
+    if (_installation != null) return _installation!;
+    final task = _install();
+    _installation = task;
+    return task.whenComplete(() => _installation = null);
+  }
+
+  Future<void> _install() async {
+    if (!supported)
+      throw Exception('The Linux sandbox requires the full Android build.');
+    await _initializing;
+    if (_libDir.isEmpty) await _initialize();
+    if (!hasProot)
+      throw Exception('The Linux runtime is missing from this build.');
+    if (installed.value) return;
+    if (busy.value || _commands > 0)
+      throw StateError('Wait for the current sandbox operation.');
     busy.value = true;
+    downloadProgress.value = null;
+    final client = http.Client();
+    Directory? staging;
+    File? archive;
     try {
       final root = await _root();
       await root.create(recursive: true);
-      final rootfs = Directory('${root.path}/rootfs');
-      if (await rootfs.exists()) await rootfs.delete(recursive: true);
-      await rootfs.create(recursive: true);
+      staging = Directory('${root.path}/rootfs.installing');
+      if (await staging.exists()) await staging.delete(recursive: true);
+      await staging.create(recursive: true);
       status.value = 'Downloading Alpine Linux…';
-      final tgz = File('${root.path}/rootfs.tar.gz');
-      final res = await http.get(Uri.parse(rootfsUrl)).timeout(const Duration(minutes: 5));
-      if (res.statusCode != 200) throw Exception('Download failed (${res.statusCode}).');
-      await tgz.writeAsBytes(res.bodyBytes);
-      status.value = 'Unpacking…';
-      final r = await Process.run('tar', ['-xzf', tgz.path, '-C', rootfs.path]);
-      if (r.exitCode != 0) throw Exception('Unpack failed: ${r.stderr}');
-      await tgz.delete();
-      await File('${rootfs.path}/etc/resolv.conf').writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
+      archive = File('${root.path}/rootfs.tar.gz.part');
+      final response = await client
+          .send(http.Request('GET', Uri.parse(rootfsUrl)))
+          .timeout(const Duration(seconds: 30));
+      if (response.statusCode != 200) {
+        throw HttpException(
+            'Alpine download failed (HTTP ${response.statusCode}).');
+      }
+      final expected = response.contentLength;
+      const maxBytes = 16 * 1024 * 1024;
+      if (expected != null && expected > maxBytes) {
+        throw const FormatException(
+            'The Alpine download is unexpectedly large.');
+      }
+      final sink = archive.openWrite();
+      var received = 0;
+      final clock = Stopwatch()..start();
+      try {
+        await for (final chunk
+            in response.stream.timeout(const Duration(seconds: 30))) {
+          received += chunk.length;
+          if (received > maxBytes ||
+              clock.elapsed > const Duration(minutes: 5)) {
+            throw const FormatException(
+                'Alpine download exceeded its size or time limit.');
+          }
+          sink.add(chunk);
+          if (expected != null && expected > 0) {
+            downloadProgress.value = received / expected;
+            status.value =
+                'Downloading Alpine Linux · ${(received * 100 / expected).round()}%';
+          }
+        }
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+      if (expected != null && received != expected) {
+        throw const FormatException(
+            'Alpine download is incomplete. Retry installation.');
+      }
+      status.value = 'Checking download…';
+      final digest = await sha256.bind(archive.openRead()).first;
+      if (digest.toString() != rootfsSha256) {
+        throw const FormatException(
+            'Alpine checksum did not match. Retry installation.');
+      }
+      downloadProgress.value = null;
+      status.value = 'Unpacking Alpine Linux…';
+      final process = await Process.start('/system/bin/toybox',
+          ['tar', '-xzf', archive.path, '-C', staging.path]);
+      final output = process.stdout.drain<void>();
+      final errors = process.stderr.transform(utf8.decoder).join();
+      final exitCode = await process.exitCode.timeout(const Duration(minutes: 2),
+          onTimeout: () async {
+            process.kill(ProcessSignal.sigkill);
+            await process.exitCode;
+            return -1;
+          });
+      await output;
+      final errorText = await errors;
+      if (exitCode != 0) throw Exception('Alpine unpack failed: $errorText');
+      if (!await File('${staging.path}/bin/busybox').exists() ||
+          !await File('${staging.path}/etc/alpine-release').exists()) {
+        throw const FormatException('The Alpine installation is incomplete.');
+      }
+      await File('${staging.path}/etc/resolv.conf')
+          .writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
       await Directory('${root.path}/tmp').create(recursive: true);
+      final destination = Directory('${root.path}/rootfs');
+      if (await destination.exists()) await destination.delete(recursive: true);
+      await staging.rename(destination.path);
+      staging = null;
       installed.value = true;
       status.value = 'Ready';
+    } catch (_) {
+      status.value = 'Installation failed. Retry to download Alpine again.';
+      rethrow;
     } finally {
+      client.close();
+      if (archive != null && await archive.exists()) await archive.delete();
+      if (staging != null && await staging.exists())
+        await staging.delete(recursive: true);
+      downloadProgress.value = null;
       busy.value = false;
     }
   }
 
   Future<void> uninstall() async {
+    await _initializing;
+    if (_installation != null || busy.value || _commands > 0) {
+      throw StateError(
+          'Wait for the current sandbox operation before removing Linux.');
+    }
     final root = await _root();
     if (await root.exists()) await root.delete(recursive: true);
     installed.value = false;
@@ -86,20 +198,26 @@ class SandboxService extends GetxService {
   /// package installs never collide.
   Future<String> run(String command, {int timeoutSec = 120}) {
     final done = Completer<String>();
+    _commands++;
     final prev = _lock;
     _lock = done.future.catchError((_) => '');
     prev.whenComplete(() async {
       try {
-        done.complete(await _run(command, timeoutSec: timeoutSec.clamp(5, 1800)));
+        done.complete(
+            await _run(command, timeoutSec: timeoutSec.clamp(5, 1800)));
       } catch (e) {
         done.complete('Error: $e');
+      } finally {
+        _commands--;
       }
     });
     return done.future;
   }
 
   Future<String> _run(String command, {int timeoutSec = 120}) async {
-    if (!installed.value) return 'Error: the Linux sandbox is not installed. Call sandbox_setup, or turn it on in Chat tools.';
+    await _initializing;
+    if (!installed.value)
+      return 'Error: the Linux sandbox is not installed. Call sandbox_setup, or turn it on in Chat tools.';
     final root = await _root();
     final work = (await Get.find<AgentService>().filesDir()).path;
     final libs = '${root.path}/lib';
@@ -110,20 +228,31 @@ class SandboxService extends GetxService {
       await File('$_libDir/libtalloc.so').copy(talloc.path);
     }
     final args = [
-      '-r', '${root.path}/rootfs',
+      '-r',
+      '${root.path}/rootfs',
       '-0',
       '--link2symlink',
-      '-w', '/workspace',
-      '-b', '/dev', '-b', '/proc', '-b', '/sys',
-      '-b', '$work:/workspace',
-      '/bin/sh', '-c', command,
+      '-w',
+      '/workspace',
+      '-b',
+      '/dev',
+      '-b',
+      '/proc',
+      '-b',
+      '/sys',
+      '-b',
+      '$work:/workspace',
+      '/bin/sh',
+      '-c',
+      command,
     ];
     final env = {
       'PROOT_LOADER': '$_libDir/libproot_loader.so',
       'PROOT_TMP_DIR': '${root.path}/tmp',
       'LD_LIBRARY_PATH': '$libs:$_libDir',
       'HOME': '/root',
-      'PATH': '/workspace/_bin:/root/.npm-global/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      'PATH':
+          '/workspace/_bin:/root/.npm-global/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
       'TERM': 'xterm',
       'LANG': 'C.UTF-8',
       'PIP_BREAK_SYSTEM_PACKAGES': '1',
@@ -133,7 +262,8 @@ class SandboxService extends GetxService {
     };
     Process p;
     try {
-      p = await Process.start('$_libDir/libproot.so', args, environment: env, includeParentEnvironment: false);
+      p = await Process.start('$_libDir/libproot.so', args,
+          environment: env, includeParentEnvironment: false);
     } catch (e) {
       return 'Error: could not start the sandbox: $e';
     }
@@ -145,7 +275,8 @@ class SandboxService extends GetxService {
     p.stdin.close();
     final subs = [p.stdout.listen(add), p.stderr.listen(add)];
     var timedOut = false;
-    final code = await p.exitCode.timeout(Duration(seconds: timeoutSec), onTimeout: () {
+    final code =
+        await p.exitCode.timeout(Duration(seconds: timeoutSec), onTimeout: () {
       timedOut = true;
       p.kill(ProcessSignal.sigkill);
       return -1;
@@ -155,7 +286,8 @@ class SandboxService extends GetxService {
     }
     var text = out.toString().trim();
     if (text.length > 6000) {
-      text = '${text.substring(0, 2500)}\n… (output cut) …\n${text.substring(text.length - 3200)}';
+      text =
+          '${text.substring(0, 2500)}\n… (output cut) …\n${text.substring(text.length - 3200)}';
     }
     return '${timedOut ? '[timed out after $timeoutSec s]\n' : ''}${text.isEmpty ? '(no output)' : text}\n[exit code $code]';
   }
@@ -306,7 +438,8 @@ void registerSandboxShell(AgentService agent) {
       s.status.value = 'Installing tools…';
       try {
         final out = await s.run('apk update >/dev/null 2>&1; apk add --no-cache $pk', timeoutSec: 1500);
-        return 'Sandbox profile "$p" installed.\n${out.length > 800 ? out.substring(out.length - 800) : out}';
+        final ok = out.endsWith('[exit code 0]');
+        return '${ok ? 'Sandbox profile installed' : 'Sandbox package setup failed'}.\n${out.length > 800 ? out.substring(out.length - 800) : out}';
       } finally {
         s.busy.value = false;
         s.status.value = 'Ready';

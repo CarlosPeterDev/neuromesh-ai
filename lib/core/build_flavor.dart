@@ -2,5 +2,5 @@
 /// for no restricted permissions and never downloads or runs code.
 const bool kPlayBuild = bool.fromEnvironment('PLAY_BUILD');
 
-/// True for the "Pro" APK that bundles the Linux sandbox (not for Play).
+/// True for the full "Pro" APK/AAB with the on-demand Linux sandbox.
 const bool kProBuild = bool.fromEnvironment('PRO_BUILD');

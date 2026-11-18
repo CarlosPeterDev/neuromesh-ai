@@ -1014,11 +1014,14 @@ class _SandboxCard extends StatelessWidget {
                     ? 'The AI can run commands, create files and deploy from here'
                     : 'About 4 MB download. Lets the AI run real commands (python, node, git, curl…).',
             trailing: sb.busy.value
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(value: sb.downloadProgress.value, strokeWidth: 2))
                 : sb.installed.value
                     ? IconButton(
                         icon: const Icon(Icons.delete_outline),
-                        onPressed: () => sb.uninstall())
+                        onPressed: () async {
+                          try { await sb.uninstall(); }
+                          catch (error) { Get.snackbar('Linux is busy', '$error'); }
+                        })
                     : IconButton(
                         icon: const Icon(Icons.download_rounded),
                         onPressed: () async {

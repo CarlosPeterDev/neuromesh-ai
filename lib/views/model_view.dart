@@ -11,6 +11,8 @@ import '../services/download_service.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
 import 'hf_browser.dart';
+import 'model_helpers_view.dart';
+import '../utils/model_file_role.dart';
 import 'voice_views.dart';
 import '../services/voice_models.dart';
 import '../services/favorites_service.dart';
@@ -1421,6 +1423,7 @@ class ModelView extends GetView<ModelController> {
         const AppTag('Image', icon: Icons.image_outlined),
       if (controller.isNpuModel(model)) const AppTag('NPU'),
       if (controller.isUncensoredModel(model)) const AppTag('Uncensored'),
+      AppTag(modelFileRole(model.filename).label),
       if (model.isImported) const AppTag('Imported'),
       if (model.isCustom) const AppTag('Custom'),
     ];
@@ -1549,7 +1552,9 @@ class ModelView extends GetView<ModelController> {
       if (isCurrentlyDownloading) {
         primaryAction = _DownloadRing(filename: model.filename);
       } else if (isDownloaded) {
-        if (isThisModelLoading) {
+        if (modelFileRole(model.filename).isHelper) {
+          primaryAction = AppTag(modelFileRole(model.filename).label);
+        } else if (isThisModelLoading) {
           primaryAction = Text(
               isThisImageModelLoading || loadPercent == '0'
                   ? 'Loading…'
@@ -1663,7 +1668,7 @@ class ModelView extends GetView<ModelController> {
       ].join(' · ');
       void openDetails() => _showModelDetails(
           context, model, subtitle, secondary, disableActions, primaryAction,
-          onLoad: load);
+          onLoad: modelFileRole(model.filename).isHelper ? null : load);
       return Material(
         color: Colors.transparent,
         child: InkWell(
@@ -1764,18 +1769,23 @@ class ModelView extends GetView<ModelController> {
 
   /// My models: everything on the phone. Tap a row to load it.
   List<Widget> _buildLibrary(BuildContext context) {
-    final models = controller.displayedModels
-        .where((m) => controller.isDownloaded(m.filename))
-        .toList();
-    if (models.isEmpty) return [_buildEmptyLibrary(context)];
+    final installed = controller.displayedModels
+        .where((m) => controller.isDownloaded(m.filename)).toList();
+    if (installed.isEmpty) return [_buildEmptyLibrary(context)];
+    final models = installed.where((m) => controller.libraryRole.value == 'all' ||
+        (controller.libraryRole.value == 'helpers'
+            ? modelFileRole(m.filename).isHelper
+            : !modelFileRole(m.filename).isHelper)).toList();
     final t = AppTokens.of(context);
-    final image = models.where(controller.isImageModel).toList();
-    final vision = models
+    final helpers = models.where((m) => modelFileRole(m.filename).isHelper).toList();
+    final mainModels = models.where((m) => !modelFileRole(m.filename).isHelper).toList();
+    final image = mainModels.where(controller.isImageModel).toList();
+    final vision = mainModels
         .where(
             (m) => !controller.isImageModel(m) && controller.isVisionModel(m))
         .toList();
     final chat =
-        models.where((m) => !image.contains(m) && !vision.contains(m)).toList();
+        mainModels.where((m) => !image.contains(m) && !vision.contains(m)).toList();
     var first = true;
     List<Widget> group(String title, List<AiModel> list) {
       if (list.isEmpty) return const [];
@@ -1805,6 +1815,14 @@ class ModelView extends GetView<ModelController> {
           _sortAction(),
         ]),
       ),
+      Wrap(spacing: 8, children: [
+        for (final entry in const [('all', 'All'), ('models', 'Main models'), ('helpers', 'Helpers')])
+          ChoiceChip(label: Text(entry.$2),
+              selected: controller.libraryRole.value == entry.$1,
+              onSelected: (_) => controller.libraryRole.value = entry.$1),
+      ]),
+      if (models.isEmpty) const Text('No files match this filter.'),
+      ...group('Helpers', helpers),
       ...group('Chat', chat),
       ...group('Vision', vision),
       ...group('Image', image),
@@ -1884,7 +1902,18 @@ class ModelView extends GetView<ModelController> {
               const SizedBox(height: 12),
               Wrap(spacing: 6, runSpacing: 6, children: tags),
             ],
-            if (onLoad != null) ...[
+            const SizedBox(height: 12),
+            Text(modelFileRole(model.filename).help),
+            TextButton.icon(
+              icon: const Icon(Icons.extension_outlined),
+              label: Text(modelFileRole(model.filename).isHelper
+                  ? 'Find the matching main model' : 'Find model helpers'),
+              onPressed: () {
+                Navigator.pop(ctx);
+                Get.to(() => ModelHelpersView(model: model));
+              },
+            ),
+            if (onLoad != null && !modelFileRole(model.filename).isHelper) ...[
               const SizedBox(height: 18),
               PrimaryButton(
                 label: 'Load model',

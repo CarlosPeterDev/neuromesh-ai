@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import '../services/download_service.dart';
 import '../utils/llama_archs.dart';
+import '../utils/model_file_role.dart';
 import '../services/gguf_metadata.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
@@ -58,6 +59,7 @@ class ModelController extends GetxController {
   final customModels = <AiModel>[].obs;
   final fileSizes = <String, int>{}.obs;
   final modelScope = 'local'.obs;
+  final libraryRole = 'all'.obs;
   final localFilter = ''.obs;
   final importFileName = ''.obs;
   final importStatus = ''.obs;
@@ -148,6 +150,7 @@ class ModelController extends GetxController {
     availableModels.value = AppConstants.availableModels
         .map((m) => AiModel.fromMap(m))
         // Core ML (Apple NPU) models only run on iOS/macOS.
+        .map(_withHelper)
         .where((m) => supportsAppleNpu || !isNpuModel(m))
         .toList()
       ..addAll(customModels);
@@ -177,7 +180,7 @@ class ModelController extends GetxController {
       ..clear()
       ..addAll(allFiles.where(_isVisionProjectorFile));
     final files =
-        allFiles.where((file) => !_isAuxiliaryImageFile(file)).toList();
+        allFiles;
     downloadedFiles.value = files;
     for (final file in files) {
       fileSizes[file] = await _download.getModelSize(file);
@@ -225,6 +228,8 @@ class ModelController extends GetxController {
       }
     }
 
+    availableModels.assignAll(availableModels.map(_withHelper).toList());
+
     // Remove any imported models that are no longer downloaded
     availableModels.removeWhere(
         (model) => model.isImported && !files.contains(model.filename));
@@ -232,6 +237,33 @@ class ModelController extends GetxController {
     if (localFilter.value.isEmpty) {
       localFilter.value = defaultLocalFilter;
     }
+  }
+
+  AiModel _withHelper(AiModel model) {
+    final links = _hive.getSetting<Map>('model_helper_links');
+    final link = links?[model.filename];
+    if (link is! Map || link['filename'] is! String || link['url'] is! String) {
+      return model;
+    }
+    return model.copyWith(
+        mmprojFilename: link['filename'] as String,
+        mmprojUrl: link['url'] as String,
+        isVision: true);
+  }
+
+  Future<void> attachVisionHelper(
+      AiModel model, String filename, String url) async {
+    if (modelFileRole(filename) != ModelFileRole.projector ||
+        modelFileRole(model.filename).isHelper ||
+        model.runtime != AiModel.runtimeLlama) {
+      throw const FormatException('Choose a main GGUF model and a vision projector.');
+    }
+    final links = Map<dynamic, dynamic>.from(
+        _hive.getSetting<Map>('model_helper_links') ?? {});
+    links[model.filename] = {'filename': filename, 'url': url};
+    await _hive.setSetting('model_helper_links', links);
+    final index = availableModels.indexWhere((m) => m.filename == model.filename);
+    if (index >= 0) availableModels[index] = _withHelper(model);
   }
 
   bool isDownloaded(String filename) {
@@ -461,6 +493,14 @@ class ModelController extends GetxController {
           !_download.activeDownloads.containsKey(model.mmprojFilename)) {
         unawaited(_downloadVisionFile(model));
       }
+      if (huggingFaceRepository(model.url) != null &&
+          !AppConstants.availableModels.any((m) => m['filename'] == model.filename)) {
+        customModels.removeWhere((m) => m.filename == model.filename);
+        customModels.add(model);
+        await _saveCustomModels();
+        availableModels.removeWhere((m) => m.filename == model.filename);
+        availableModels.add(_withHelper(model));
+      }
       await _download.downloadModel(
         url: model.url,
         filename: model.filename,
@@ -667,8 +707,8 @@ class ModelController extends GetxController {
           tone: ToastTone.warning);
       return;
     }
-    if (_isAuxiliaryImageFile(filename)) {
-      showToast('Helper file', 'Load the model that uses this helper file.',
+    if (modelFileRole(filename).isHelper || _isAuxiliaryImageFile(filename)) {
+      showToast('Helper file', modelFileRole(filename).help,
           tone: ToastTone.info);
       return;
     }

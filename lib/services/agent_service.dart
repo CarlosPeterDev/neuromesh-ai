@@ -997,7 +997,7 @@ class AgentService extends GetxService {
   // ── when and how tools are offered ───────────────────────────────────
 
   static final _intent = RegExp(
-      r'\b(file|files|folder|directory|document|attached|attachment|read|open|list|create|write|save|edit|search|look up|find|calculate|compute|remember|forget|note|run|execute|command|shell|script|install|deploy|build|github|repo|supabase|database|vercel|url|http|website|web ?page|download|time is it|date today|zip|pdf|csv|json)\b|مجلد|ملف|اقرا|افتح|احفظ|اكتب|ابحث|احسب|تذكر|انسى|شغل|نفذ|ارفع|حمل|موقع',
+      r'\b(model|helper|projector|mmproj|fastmtp|file|files|folder|directory|document|attached|attachment|read|open|list|create|write|save|edit|search|look up|find|calculate|compute|remember|forget|note|run|execute|command|shell|script|install|deploy|build|github|repo|supabase|database|vercel|url|http|website|web ?page|download|time is it|date today|zip|pdf|csv|json)\b|مجلد|ملف|اقرا|افتح|احفظ|اكتب|ابحث|احسب|تذكر|انسى|شغل|نفذ|ارفع|حمل|موقع',
       caseSensitive: false);
 
   static final _actionOnly = RegExp(
@@ -1078,6 +1078,10 @@ class AgentService extends GetxService {
   Set<String> _toolsFor(String request, {bool withFiles = false}) {
     final r = request;
     final on = <String>{..._coreTools};
+    if (RegExp(r'model|helper|projector|mmproj|fastmtp|موديل|مساعد|رؤية',
+        caseSensitive: false).hasMatch(r)) {
+      on.addAll(const {'models_status', 'find_model_helpers', 'attach_model_helper'});
+    }
     if (_gVoice.hasMatch(r)) on.addAll(const {'text_to_speech', 'transcribe_audio', 'models_status'});
     if (_gImage.hasMatch(r)) on.addAll(const {'generate_image', 'models_status'});
     if (withFiles || _gFiles.hasMatch(r)) {

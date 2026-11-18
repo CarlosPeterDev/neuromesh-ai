@@ -379,7 +379,7 @@ jobs:
 
       - run: flutter pub get
 
-      - name: Build Pro APK
+      - name: Build Pro APK and full AAB
         env:
           NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.sign.outputs.production == 'true' && 'false' || 'true' }}
           GH_TOKEN: ${{ github.token }}
@@ -392,3 +392,11 @@ jobs:
           unzip -l "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.apk" | grep -E 'libproot|libtalloc'
           gh release upload "v${V}" "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.apk" --clobber
           gh release upload latest "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.apk" --clobber
+          flutter build appbundle --release "--dart-define=NEUROMESH_REPORT_ENDPOINT=$NEUROMESH_REPORT_ENDPOINT" --target-platform android-arm64 --dart-define=PRO_BUILD=true --build-name=$V --build-number=$((ANDROID_VERSION_CODE_BASE + GITHUB_RUN_NUMBER))
+          cp build/app/outputs/bundle/release/app-release.aab "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.aab"
+          unzip -tq "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.aab"
+          unzip -l "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.aab" | grep -F 'base/lib/arm64-v8a/libproot.so'
+          unzip -l "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.aab" | grep -F 'base/lib/arm64-v8a/libproot_loader.so'
+          unzip -l "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.aab" | grep -F 'base/lib/arm64-v8a/libtalloc.so'
+          gh release upload "v${V}" "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.aab" --clobber
+          gh release upload latest "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.aab" --clobber
