@@ -73,6 +73,32 @@ void main() {
       await expectLater(
           store.prepare('@file:../secret', workspace), throwsFormatException);
     });
+    test('optional binary attachments preserve the normal file-tool fallback',
+        () async {
+      final workspace = await Directory('${temp.path}/workspace').create();
+      await File('${workspace.path}/binary.zip')
+          .writeAsBytes([0xff, 0xfe, 0xfd]);
+      final context = await store.prepare('Inspect this archive', workspace,
+          attachment: 'binary.zip');
+      expect(context.documents, isEmpty);
+      await expectLater(
+          store.prepare('@file:binary.zip', workspace), throwsFormatException);
+    });
+
+    test('mentioned DOCX uses extracted text instead of decoding ZIP bytes',
+        () async {
+      final workspace = await Directory('${temp.path}/workspace').create();
+      const xml =
+          '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Document context</w:t></w:r></w:p></w:body></w:document>';
+      final bytes = utf8.encode(xml);
+      final doc = Archive()
+        ..addFile(ArchiveFile('word/document.xml', bytes.length, bytes));
+      await File('${workspace.path}/notes.docx')
+          .writeAsBytes(ZipEncoder().encode(doc));
+      final context = await store.prepare('@file:notes.docx', workspace);
+      expect(context.read('file:notes.docx', 1), contains('Document context'));
+    });
+
     test('zip preserves resources and rejects traversal without overwriting',
         () async {
       final zip = File('${temp.path}/skill.zip');

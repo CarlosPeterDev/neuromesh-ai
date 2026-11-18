@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import '../utils/skill_context.dart';
 import '../utils/bm25.dart';
 import 'agent_service.dart';
+import 'document_extractor_service.dart';
 
 class SkillsService extends GetxService {
   final skills = <SkillDefinition>[].obs;
@@ -137,7 +138,8 @@ class SkillsService extends GetxService {
     await reload();
   }
 
-  Future<SkillTurnContext> prepare(String request, Directory workspace) async {
+  Future<SkillTurnContext> prepare(String request, Directory workspace,
+      {String? attachment}) async {
     final docs = <String, ContextDocument>{};
     final enabled = skills.where((s) => !disabled.contains(s.name)).toList();
     final selected = <String>{};
@@ -148,20 +150,16 @@ class SkillsService extends GetxService {
               'Skill "$name" is missing or disabled. Open Skills to enable or import it.');
         selected.add(name);
       } else {
-        safeSkillPath(name);
-        final file = File('${workspace.path}/$name');
-        if (!await file.exists())
-          throw FormatException('Workspace file "$name" was not found.');
-        final resolved = await file.resolveSymbolicLinks();
-        final base = await workspace.resolveSymbolicLinks();
-        if (!resolved.startsWith('$base${Platform.pathSeparator}'))
-          throw const FormatException(
-              'File must be inside the current workspace.');
-        if (await file.length() > 2 * 1024 * 1024)
-          throw const FormatException(
-              'Referenced text files are limited to 2 MB.');
-        docs['file:$name'] =
-            ContextDocument('file:$name', await file.readAsString());
+        docs['file:$name'] = await _readWorkspaceDocument(workspace, name);
+      }
+    }
+    if (attachment != null && !docs.containsKey('file:$attachment')) {
+      try {
+        docs['file:$attachment'] =
+            await _readWorkspaceDocument(workspace, attachment);
+      } catch (_) {
+        // Optional attachments retain the existing file tools (including binary
+        // summaries and larger files). Explicit @file references still report errors.
       }
     }
     // Rank only descriptions, avoiding full instruction loading for unrelated skills.
@@ -181,6 +179,25 @@ class SkillsService extends GetxService {
       if (doc.pages.isNotEmpty) turn.read(doc.id, 1);
     }
     return turn;
+  }
+
+  Future<ContextDocument> _readWorkspaceDocument(
+      Directory workspace, String name) async {
+    safeSkillPath(name);
+    final file = File('${workspace.path}/$name');
+    if (!await file.exists())
+      throw FormatException('Workspace file "$name" was not found.');
+    final resolved = await file.resolveSymbolicLinks();
+    final base = await workspace.resolveSymbolicLinks();
+    if (!resolved.startsWith('$base${Platform.pathSeparator}'))
+      throw const FormatException('File must be inside the current workspace.');
+    if (await file.length() > 2 * 1024 * 1024)
+      throw const FormatException('Referenced text files are limited to 2 MB.');
+    final extension = name.split('.').last.toLowerCase();
+    final text = extension == 'pdf' || extension == 'docx'
+        ? await DocumentExtractorService.extractText(file.path, extension)
+        : await file.readAsString();
+    return ContextDocument('file:$name', text);
   }
 
   void registerTools(AgentService agent) {
