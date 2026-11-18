@@ -163,8 +163,10 @@ class _AgentStepsViewState extends State<AgentStepsView> {
                                   shrinkWrap: true,
                                   padding: const EdgeInsets.all(12),
                                   itemCount: steps.length,
-                                  itemBuilder: (ctx, i) =>
-                                      _StepTile(step: steps[i]))),
+                                  itemBuilder: (ctx, i) => _StepTile(
+                                      step: steps[i],
+                                      updates: changes,
+                                      index: i))),
                         ])),
               ),
             ));
@@ -210,7 +212,10 @@ class _AgentStepsViewState extends State<AgentStepsView> {
 
 class _StepTile extends StatelessWidget {
   final AgentStep step;
-  const _StepTile({required this.step});
+  final ValueNotifier<List<AgentStep>> updates;
+  final int index;
+  const _StepTile(
+      {required this.step, required this.updates, required this.index});
 
   @override
   Widget build(BuildContext context) {
@@ -240,7 +245,11 @@ class _StepTile extends StatelessWidget {
         isScrollControlled: true,
         showDragHandle: true,
         useSafeArea: true,
-        builder: (context) => _StepDetails(step: step),
+        builder: (context) => ValueListenableBuilder<List<AgentStep>>(
+          valueListenable: updates,
+          builder: (context, current, _) => _StepDetails(
+              step: index < current.length ? current[index] : step),
+        ),
       ),
     );
   }
@@ -265,6 +274,10 @@ class _StepDetails extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(step.label, style: theme.textTheme.titleMedium),
+              const SizedBox(height: 4),
+              Text(
+                  '${step.name}${step.ms > 0 ? ' · ${(step.ms / 1000).toStringAsFixed(1)}s' : ''}',
+                  style: theme.textTheme.bodySmall),
               if (step.args.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 Text('Input', style: theme.textTheme.titleSmall),

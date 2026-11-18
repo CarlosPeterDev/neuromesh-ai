@@ -102,4 +102,27 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     expect(tester.takeException(), isNull);
   });
+  testWidgets('an open tool detail shows its result as soon as it finishes',
+      (tester) async {
+    final source = ''.obs;
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: AgentStepsView(
+      messageId: 'details',
+      live: true,
+      traceSource: source,
+      steps: const [AgentStep('write_file', 'Writing file', {}, '', true, 0)],
+    ))));
+    await tester.tap(find.textContaining('Working…'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Writing file'));
+    await tester.pump(const Duration(milliseconds: 300));
+    source.value =
+        '> 🔧 {"n":"write_file","l":"Saved file","a":{},"r":"done","run":false,"ms":12}';
+    await tester.pump();
+    expect(find.text('done'), findsOneWidget);
+    expect(find.text('Result'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }
