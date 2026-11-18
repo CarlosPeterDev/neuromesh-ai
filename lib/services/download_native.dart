@@ -124,7 +124,7 @@ Future<String> downloadModel({
 }) async {
   final partial = File('$savePath$partialDownloadSuffix');
   final cancelToken = CancelToken();
-  final filename = savePath.split('/').last;
+  final filename = File(savePath).uri.pathSegments.last;
   _cancelTokens[filename] = cancelToken;
   RandomAccessFile? sink;
 
@@ -170,7 +170,16 @@ Future<String> downloadModel({
 
     // 206 = server honoured the Range; anything else is the whole file.
     final resumed = response.statusCode == 206;
-    if (!resumed) existing = 0;
+    if (resumed) {
+      final range = response.headers.value('content-range');
+      final start = RegExp(r'^bytes (\d+)-\d+/').firstMatch(range ?? '')?.group(1);
+      if (int.tryParse(start ?? '') != existing) {
+        cancelToken.cancel('Invalid resume response');
+        throw const FormatException('The server returned the wrong byte range.');
+      }
+    } else {
+      existing = 0;
+    }
     final total = resumed
         ? _totalFromContentRange(response.headers.value('content-range'))
         : int.tryParse(

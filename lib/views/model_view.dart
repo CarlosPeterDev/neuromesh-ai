@@ -359,7 +359,7 @@ class ModelView extends GetView<ModelController> {
                     // Copies to Downloads are quick and can't be cancelled.
                     if (!dp.filename.startsWith('save:'))
                       IconButton(
-                        tooltip: controller.canPauseDownloads
+                        tooltip: controller.canPauseDownload(dp.filename)
                             ? 'Pause download'
                             : 'Cancel download',
                         onPressed: () {
@@ -372,7 +372,7 @@ class ModelView extends GetView<ModelController> {
                               : controller.pauseDownload(dp.filename);
                         },
                         icon: Icon(
-                            controller.canPauseDownloads
+                            controller.canPauseDownload(dp.filename)
                                 ? Icons.pause_rounded
                                 : Icons.close_rounded,
                             size: 20,

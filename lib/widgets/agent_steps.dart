@@ -274,10 +274,12 @@ Future<File?> agentFile(String name) async {
 }
 
 /// Inline image for `![alt](nmfile:name)`.
-Widget agentImage(Uri uri, String? alt) {
+Widget agentImage(Uri uri, String? alt, {String? project}) {
   final name = Uri.decodeComponent(uri.toString().substring(nmFileScheme.length));
   return FutureBuilder<File?>(
-    future: agentFile(name),
+    future: project == null
+        ? agentFile(name)
+        : Get.find<AgentService>().inProject(project, () => agentFile(name)),
     builder: (c, snap) {
       final f = snap.data;
       if (f == null) return Text(snap.connectionState == ConnectionState.done ? '[missing: $name]' : '');

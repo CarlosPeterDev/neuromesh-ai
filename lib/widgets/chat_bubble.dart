@@ -14,6 +14,7 @@ import 'attachment_preview.dart';
 import 'image_viewer.dart';
 import 'thought_disclosure.dart';
 import '../core/haptics.dart';
+import '../services/agent_service.dart';
 
 class ChatBubble extends StatelessWidget {
   final ChatMessage message;
@@ -223,12 +224,14 @@ class ChatBubble extends StatelessWidget {
                 builders: {'pre': _CodeBlockBuilder(context)},
                 styleSheet: answerStyle(context),
                 sizedImageBuilder: (cfg) => cfg.uri.toString().startsWith(nmFileScheme)
-                    ? agentImage(cfg.uri, cfg.alt)
+                    ? agentImage(cfg.uri, cfg.alt, project: message.workspaceProject)
                     : const SizedBox.shrink(),
                 onTapLink: (text, href, title) {
                   if (href == null) return;
                   if (href.startsWith(nmFileScheme)) {
-                    openAgentFile(context, href.substring(nmFileScheme.length));
+                    final agent = Get.find<AgentService>();
+                    agent.inProject(message.workspaceProject ?? '',
+                        () => openAgentFile(context, href.substring(nmFileScheme.length)));
                   } else {
                     openLink(context, href);
                   }

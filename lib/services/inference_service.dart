@@ -57,6 +57,8 @@ class InferenceService extends GetxService {
   platform.InferenceEngine? _engine;
   String _sessionNativeRuntime = '';
   bool _unloadingModel = false;
+  String? _loadedProjector;
+  static final _clusterRetry = Object();
 
   String get sessionNativeRuntime => _sessionNativeRuntime;
 
@@ -70,6 +72,7 @@ class InferenceService extends GetxService {
     bool enableLiteRtVision = false,
     String? mmprojPath,
     ModelLoadDiagnostics? diagnostics,
+    bool recoveringCluster = false,
   }) async {
     if (!supportsLocalInference) {
       return 'ERROR: Local inference is not available on this platform. Use Cloud mode.';
@@ -172,6 +175,7 @@ class InferenceService extends GetxService {
         clusterWorkers = await Get.find<ClusterService>().applyForNextLoad(
           modelPath,
           modelName: modelName,
+          recovering: recoveringCluster,
         );
       }
 
@@ -202,6 +206,7 @@ class InferenceService extends GetxService {
       }
 
       modelLoadProgress.value = 1.0;
+      _loadedProjector = mmprojPath;
       loadedModelName.value = requestedModelName;
       loadedModelRuntime.value = result.runtime;
       if (result.runtime == 'llama' || result.runtime == 'litert') {
@@ -284,6 +289,7 @@ class InferenceService extends GetxService {
     _engine = null;
     isModelLoaded.value = false;
     isVisionLoaded.value = false;
+    _loadedProjector = null;
     loadedModelName.value = '';
     loadedModelRuntime.value = '';
     loadedBackend.value = '';
@@ -368,6 +374,41 @@ class InferenceService extends GetxService {
     final stopFilter = StopSequenceFilter(stopSequences);
     var stopSequenceHit = false;
 
+    Future<String?> recoverCluster() async {
+      if (Zone.current[_clusterRetry] == true || !isCurrent() || firstVisibleTokenAt != null ||
+          !Get.isRegistered<ClusterService>()) return null;
+      final cluster = Get.find<ClusterService>();
+      final path = _hive.getSetting<String>(AppConstants.keyLocalModelPath);
+      if (path == null || !await cluster.activeWorkerDisconnected() || !isCurrent()) {
+        return null;
+      }
+      final name = loadedModelName.value;
+      final projector = _loadedProjector;
+      // Releasing the current engine invalidates this generation once.
+      final expectedStops = stopCount + 1;
+      Get.find<AppLogService>().warning('Cluster worker disconnected; attempting to reload model');
+      final loaded = await loadModel(path, modelName: name, mmprojPath: projector,
+          recoveringCluster: true);
+      if (loaded.startsWith('ERROR:')) {
+        return 'ERROR: A cluster worker disconnected and this model could not be reloaded. $loaded';
+      }
+      if (stopCount != expectedStops || isGenerating.value) return null;
+      return runZoned(
+        () => generate(
+          prompt: prompt,
+          systemPrompt: systemPrompt,
+          conversationHistory: conversationHistory,
+          source: source,
+          imagePath: imagePath,
+          audioPath: audioPath,
+          maxTokens: maxTokens,
+          stopSequences: stopSequences,
+          onToken: onToken,
+        ),
+        zoneValues: {_clusterRetry: true},
+      );
+    }
+
     try {
       final temperature = _hive.getSetting<double>(
             AppConstants.keyTemperature,
@@ -431,6 +472,11 @@ class InferenceService extends GetxService {
       );
       tokenFlushTimer?.cancel();
       if (!isCurrent()) return result;
+      if (result.startsWith('ERROR:') || result.trim().isEmpty) {
+        final recovered = await recoverCluster();
+        if (recovered != null) return recovered;
+        if (!isCurrent()) return result;
+      }
       if (stopFilter.isActive) {
         final tail = stopFilter.flush();
         if (tail.isNotEmpty) {
@@ -466,6 +512,8 @@ class InferenceService extends GetxService {
       return finalText;
     } catch (e) {
       tokenFlushTimer?.cancel();
+      final recovered = await recoverCluster();
+      if (recovered != null) return recovered;
       if (isCurrent()) {
         isGenerating.value = false;
         generationSource.value = '';

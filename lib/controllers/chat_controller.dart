@@ -786,6 +786,11 @@ class ChatController extends GetxController {
     final sessionId = currentSessionId.value;
     if (previous != null && previous.chatId != sessionId) return;
     final generationId = ++_generationSerial;
+    final project = previous == null
+        ? (Get.isRegistered<AgentService>()
+            ? Get.find<AgentService>().projectForChat(sessionId)
+            : '')
+        : previous.workspaceProject ?? '';
     isLoading.value = true;
     var posted = false;
 
@@ -805,10 +810,9 @@ class ChatController extends GetxController {
           fileType != 'audio' &&
           Get.isRegistered<AgentService>()) {
         try {
-          workspaceName = await Get.find<AgentService>().importToWorkspace(
-            filePath,
-            fileName,
-          );
+          final agent = Get.find<AgentService>();
+          workspaceName = await agent.inProject(project,
+              () => agent.importToWorkspace(filePath, fileName));
         } on FileSystemException {
           if (fileContent == null || fileContent.trim().isEmpty) rethrow;
         }
@@ -876,6 +880,7 @@ class ChatController extends GetxController {
             id: _uuid.v4(),
             chatId: sessionId,
             role: 'user',
+            workspaceProject: project,
             content: effectiveText,
             imageBase64: imgBase64, // Always save the encoded base64 string
             imagePath: imagePath,
@@ -1169,7 +1174,9 @@ class ChatController extends GetxController {
               _scrollToBottom();
             }
 
-            final result = await agent.runToolLoop(
+            final result = await agent.inProject(
+              project,
+              () => agent.runToolLoop(
               generate: generateOnce,
               prompt: finalPrompt,
               history: history,
@@ -1191,7 +1198,7 @@ class ChatController extends GetxController {
                 status = '';
                 render();
               },
-            );
+            ));
             rawResponse = result.markdown;
           }
           if (saved != null && !rawResponse.startsWith('ERROR')) {
@@ -1263,6 +1270,7 @@ class ChatController extends GetxController {
         id: _uuid.v4(),
         chatId: currentSessionId.value,
         role: 'assistant',
+        workspaceProject: project,
         content: rawResponse,
         imageBase64: outImageBase64,
         tokensPerSec: tps,
@@ -1386,6 +1394,7 @@ class ChatController extends GetxController {
     String role,
     String content, {
     String? fileName,
+    String? workspaceProject,
   }) async {
     final session = sessions.firstWhereOrNull((item) => item.id == sessionId);
     if (session == null || content.trim().isEmpty) return;
@@ -1395,6 +1404,7 @@ class ChatController extends GetxController {
       role: role,
       content: content,
       fileName: fileName,
+      workspaceProject: workspaceProject,
       fileType: fileName == null ? null : 'file',
     );
     final title = session.title == 'New Chat' && role == 'user'

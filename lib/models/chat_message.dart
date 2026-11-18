@@ -8,6 +8,7 @@ class ChatMessage {
   final String content;
   final String? imageBase64; // For multimodal
   final String? imagePath;
+  final String? workspaceProject;
   final String? fileName;
   final String? fileContent;
   final String? filePath;
@@ -38,6 +39,7 @@ class ChatMessage {
     required this.content,
     this.imageBase64,
     this.imagePath,
+    this.workspaceProject,
     this.fileName,
     this.fileContent,
     this.filePath,
@@ -73,6 +75,7 @@ class ChatMessage {
         'content': content,
         'imageBase64': imageBase64,
         'imagePath': imagePath,
+        'workspaceProject': workspaceProject,
         'fileName': fileName,
         'fileContent': fileContent,
         'filePath': filePath,
@@ -93,6 +96,7 @@ class ChatMessage {
         content: map['content'] ?? '',
         imageBase64: map['imageBase64'],
         imagePath: map['imagePath'],
+        workspaceProject: map['workspaceProject'] as String?,
         fileName: map['fileName'],
         fileContent: map['fileContent'],
         filePath: map['filePath'],

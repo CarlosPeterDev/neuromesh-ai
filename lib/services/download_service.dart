@@ -331,19 +331,22 @@ class DownloadService extends GetxService with WidgetsBindingObserver {
   }) async {
     if (kIsWeb) return 'ERROR: Downloading models is not supported on web.';
 
+    if (activeDownloads.containsKey(filename)) return 'ALREADY_DOWNLOADING';
     final downloadProgress = DownloadProgress(filename: filename);
     activeDownloads[filename] = downloadProgress;
 
-    if (Platform.isAndroid) {
+    // Android DownloadManager cannot pause without deleting its partial file.
+    // Keep it for Wi-Fi-only jobs, where the platform enforces network policy.
+    final wifiOnly = Platform.isAndroid &&
+        Get.find<HiveService>().getSetting<bool>('wifi_only') == true;
+    if (Platform.isAndroid && wifiOnly) {
       try {
         final modelsDirectory = await modelsDir;
         final result = await platform_dl.startNativeDownload(
           url: url,
           filename: filename,
           modelsDir: modelsDirectory,
-          wifiOnly: Get.find<HiveService>()
-                  .getSetting<bool>('wifi_only', defaultValue: false) ==
-              true,
+          wifiOnly: true,
         );
         if (result != null) {
           final id = result['downloadId'] as int;
@@ -357,7 +360,7 @@ class DownloadService extends GetxService with WidgetsBindingObserver {
         rethrow;
       }
     } else {
-      // iOS/desktop: the app's own resumable downloader.
+      // Resumable app-managed download; the partial file survives app restart.
       return _directDownload(url, filename, downloadProgress,
           authToken: authToken);
     }
@@ -372,6 +375,10 @@ class DownloadService extends GetxService with WidgetsBindingObserver {
     final savePath = await modelPath(filename);
     downloadProgress.startedAt = DateTime.now();
     try {
+      if (downloadProgress.isPaused.value) {
+        activeDownloads.remove(filename);
+        return 'PAUSED';
+      }
       final result = await platform_dl.downloadModel(
         url: url,
         savePath: savePath,
@@ -423,6 +430,8 @@ class DownloadService extends GetxService with WidgetsBindingObserver {
     );
   }
 
+  bool canPauseDownload(String filename) => !_nativeDownloadIds.containsKey(filename);
+
   void pauseDownload(String filename) {
     if (_bundleFiles.containsKey(filename)) {
       cancelBundle(filename);
@@ -448,6 +457,18 @@ class DownloadService extends GetxService with WidgetsBindingObserver {
       await platform_dl.cancelNativeDownload(
           downloadId: nativeId, filename: filename);
       _nativeDownloadIds.remove(filename);
+    } else {
+      platform_dl.pauseDownload(filename);
+      final progress = activeDownloads[filename];
+      if (progress != null) {
+        final limit = DateTime.now().add(const Duration(seconds: 5));
+        while (identical(activeDownloads[filename], progress)) {
+          if (DateTime.now().isAfter(limit)) {
+            throw StateError('Wait for the download to stop before deleting it.');
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+      }
     }
     await platform_dl.deleteModel(await modelPath(filename));
   }

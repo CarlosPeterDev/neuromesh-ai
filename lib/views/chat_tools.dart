@@ -1,4 +1,4 @@
-import 'dart:io' show FileSystemEntityType;
+import 'dart:io' show File, FileSystemEntityType;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +8,7 @@ import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/ui.dart';
+import '../controllers/chat_controller.dart';
 import '../widgets/agent_steps.dart';
 import '../services/agent_service.dart';
 import '../services/mcp_client.dart';
@@ -717,6 +718,8 @@ class _AlpineTerminalViewState extends State<_AlpineTerminalView> {
   final _input = TextEditingController();
   final _output = ScrollController();
   final _entries = <String>[];
+  late final _agent = Get.find<AgentService>();
+  late final _project = _agent.projectForChat(Get.find<ChatController>().currentSessionId.value);
   bool _running = false;
 
   @override
@@ -735,7 +738,7 @@ class _AlpineTerminalViewState extends State<_AlpineTerminalView> {
       _input.clear();
     });
     try {
-      final result = await _sandbox.run(command);
+      final result = await _agent.inProject(_project, () => _sandbox.run(command));
       if (mounted) setState(() => _entries.add(result));
     } finally {
       if (mounted) {
@@ -818,6 +821,11 @@ class _Workspace extends StatefulWidget {
 
 class _WorkspaceState extends State<_Workspace> {
   List<FileSystemEntityInfo> _items = [];
+  List<String> _archived = [];
+  String? _error;
+  late final _chat = Get.find<ChatController>();
+  late String _chatId = _chat.currentSessionId.value;
+  late String _project = widget.agent.projectForChat(_chatId);
 
   @override
   void initState() {
@@ -826,33 +834,138 @@ class _WorkspaceState extends State<_Workspace> {
   }
 
   Future<void> _load() async {
-    final dir = await widget.agent.filesDir();
-    final out = <FileSystemEntityInfo>[];
-    await for (final f in dir.list(followLinks: false)) {
-      final st = await f.stat();
-      if (st.type != FileSystemEntityType.file) continue;
-      out.add(FileSystemEntityInfo(f.path, f.uri.pathSegments.last, st.size));
+    final project = _project;
+    try {
+      final (items, archived) = await widget.agent.inProject(project, () async {
+        final dir = await widget.agent.filesDir();
+        final out = <FileSystemEntityInfo>[];
+        await for (final f in dir.list(followLinks: false)) {
+          if (f is! File) continue;
+          final st = await f.stat();
+          if (st.type != FileSystemEntityType.file) continue;
+          out.add(FileSystemEntityInfo(f.path, f.uri.pathSegments.last, st.size));
+        }
+        out.sort((a, b) => a.name.compareTo(b.name));
+        final archived = await widget.agent.archivedWorkspaceFiles();
+        return (out, archived.where((name) => !out.any((item) => item.name == name)).toList());
+      });
+      if (mounted && _project == project) setState(() {
+        _items = items;
+        _archived = archived;
+        _error = null;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _error = 'The workspace could not be read.');
     }
-    out.sort((a, b) => a.name.compareTo(b.name));
-    if (mounted) setState(() => _items = out);
+  }
+
+  Future<void> _chooseProject() async {
+    var name = _project;
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Project workspace'),
+        content: TextFormField(
+          initialValue: name,
+          maxLength: 60,
+          decoration: const InputDecoration(
+            labelText: 'Project name',
+            helperText: 'Use the same name in related chats.',
+          ),
+          onChanged: (value) => name = value,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialog, ''), child: const Text('Use shared workspace')),
+          FilledButton(onPressed: () => Navigator.pop(dialog, name.trim()), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    if (_chatId.isEmpty && chosen.isNotEmpty) {
+      _chat.createNewChat();
+      _chatId = _chat.currentSessionId.value;
+    }
+    if (_chatId.isEmpty) return;
+    await widget.agent.setChatProject(_chatId, chosen);
+    if (!mounted) return;
+    setState(() {
+      _project = chosen;
+      _items = [];
+      _archived = [];
+    });
+    await _load();
+  }
+
+  Future<void> _history(String name) async {
+    final project = _project;
+    final versions = await widget.agent.inProject(project,
+        () => widget.agent.workspaceVersions(name));
+    if (!mounted) return;
+    final selected = await showAppSheet<int>(
+      context,
+      title: name,
+      subtitle: 'File versions',
+      builder: (context) => versions.isEmpty
+          ? const Text('No saved versions.')
+          : Column(children: [
+              for (final version in versions)
+                ListTile(
+                  title: Text(DateTime.fromMicrosecondsSinceEpoch(version).toLocal().toString().split('.').first),
+                  trailing: const Icon(Icons.restore_rounded),
+                  onTap: () => Navigator.pop(context, version),
+                ),
+            ]),
+    );
+    if (selected == null || !mounted) return;
+    try {
+      final restored = await widget.agent.inProject(project,
+          () => widget.agent.restoreWorkspaceVersion(name, selected));
+      if (mounted) showToast(restored ? 'File restored' : 'Version unavailable', name);
+      await _load();
+    } catch (_) {
+      if (mounted) showToast('Could not restore the file', name, tone: ToastTone.error);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return AppGroup(children: [
+      AppRow(
+        icon: Icons.folder_open_outlined,
+        title: _project.isEmpty ? 'Shared workspace' : _project,
+        subtitle: 'Choose a project for this chat',
+        onTap: _chooseProject,
+      ),
+      if (_error != null) AppNotice(_error!),
+      for (final name in _archived)
+        AppRow(
+          icon: Icons.history_rounded,
+          title: name,
+          subtitle: 'Archived versions',
+          onTap: () => _history(name),
+        ),
       for (final f in _items)
         AppRow(
           icon: Icons.insert_drive_file_outlined,
           title: f.name,
-          onTap: () => openAgentFile(context, Uri.encodeComponent(f.name)),
+          onTap: () => widget.agent.inProject(_project, () => openAgentFile(context, Uri.encodeComponent(f.name))),
           subtitle: '${(f.size / 1024).toStringAsFixed(f.size < 10240 ? 1 : 0)} KB · AI workspace',
-          trailing: IconButton(
-              tooltip: 'Delete',
-              icon: const Icon(Icons.delete_outline_rounded, size: 18),
-              onPressed: () async {
-                await widget.agent.deleteWorkspaceFile(f.name);
-                _load();
-              }),
+          trailing: PopupMenuButton<String>(
+            tooltip: 'File actions',
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'history', child: Text('File versions')),
+              PopupMenuItem(value: 'delete', child: Text('Delete')),
+            ],
+            onSelected: (action) async {
+              if (action == 'history') {
+                await _history(f.name);
+              } else {
+                await widget.agent.inProject(_project, () => widget.agent.deleteWorkspaceFile(f.name));
+                await _load();
+              }
+            },
+          ),
         ),
       AppRow(
         icon: Icons.refresh_rounded,
@@ -868,7 +981,7 @@ class _WorkspaceState extends State<_Workspace> {
           final r = await FilePicker.pickFiles(type: FileType.any);
           final f = r?.files.single;
           if (f?.path == null) return;
-          await widget.agent.importToWorkspace(f!.path!, f.name);
+          await widget.agent.inProject(_project, () => widget.agent.importToWorkspace(f!.path!, f.name));
           _load();
         },
       ),
