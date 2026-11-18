@@ -312,6 +312,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   int _turnNumber = 0;
   bool _addingFile = false;
   String? _attachedFile;
+  String? _attachmentProject;
   final _bargeAudio = <double>[];
   final _callScroll = ScrollController();
   final _interruptionAudio = <double>[];
@@ -732,9 +733,18 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       final result = await FilePicker.pickFiles();
       final file = result?.files.single;
       if (_ended || file?.path == null) return;
-      final name = await Get.find<AgentService>()
-          .importToWorkspace(file!.path!, file.name);
-      if (mounted) setState(() => _attachedFile = name);
+      if (_sessionId.isEmpty) {
+        _chat.createNewChat();
+        _sessionId = _chat.currentSessionId.value;
+      }
+      final agent = Get.find<AgentService>();
+      final project = agent.projectForChat(_sessionId);
+      final name = await agent.inProject(project,
+          () => agent.importToWorkspace(file!.path!, file.name));
+      if (mounted) setState(() {
+        _attachedFile = name;
+        _attachmentProject = project;
+      });
     } catch (_) {
       if (mounted) showToast('Could not attach this file', 'Choose the file again.');
     } finally {
@@ -766,13 +776,17 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       _sessionId = _chat.currentSessionId.value;
     }
     final sessionId = _sessionId;
-    await _chat.saveVoiceMessage(sessionId, 'user', message, fileName: file);
+    final project = (file == null ? null : _attachmentProject) ??
+        Get.find<AgentService>().projectForChat(sessionId);
+    await _chat.saveVoiceMessage(sessionId, 'user', message,
+        fileName: file, workspaceProject: project);
     _history.add({'role': 'user', 'content': message});
     if (_ended) return;
     setState(() {
       _steps = [];
       _turnNumber++;
       _attachedFile = null;
+      _attachmentProject = null;
       _lines.add((me: true, text: file == null ? heard : '$heard\n📎 $file'));
     });
 
@@ -881,7 +895,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         finalText = raw.isEmpty ? reply : raw;
         feed(finalText, flush: true);
       } else {
-        final result = await agent.runToolLoop(
+        final result = await agent.inProject(project,
+          () => agent.runToolLoop(
           generate: gen,
           prompt: message,
           history: List.of(_history),
@@ -899,13 +914,13 @@ class _VoiceCallViewState extends State<VoiceCallView> {
           onStatus: (st) {
             if (!_speaking) _set(_CallState.thinking, st);
           },
-        );
+        ));
         finalText = result.markdown;
         feed(_spoken(finalText), flush: true);
         for (final m in RegExp(
           r'!\[[^\]]*\]\(nmfile:([^)]+)\)',
         ).allMatches(finalText)) {
-          final f = await agentFile(m.group(1)!);
+          final f = await agent.inProject(project, () => agentFile(m.group(1)!));
           if (f != null && mounted) setState(() => _shots.add(f));
         }
       }
@@ -920,7 +935,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
           ? (liveIdx == null ? '' : _lines[liveIdx!].text)
           : finalText;
       if (clean.trim().isNotEmpty) {
-        await _chat.saveVoiceMessage(sessionId, 'assistant', clean);
+        await _chat.saveVoiceMessage(sessionId, 'assistant', clean, workspaceProject: project);
         _history.add({'role': 'assistant', 'content': stripToolTrace(clean)});
       }
       if (liveIdx == null && clean.isNotEmpty && mounted) {

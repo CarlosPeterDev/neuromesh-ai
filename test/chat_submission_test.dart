@@ -4,6 +4,10 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
+// Platform mock for the app's existing path_provider dependency.
+// ignore: depend_on_referenced_packages
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+import 'package:neuromesh_ai/services/agent_tools.dart';
 import 'package:neuromesh_ai/controllers/chat_controller.dart';
 import 'package:neuromesh_ai/controllers/settings_controller.dart';
 import 'package:neuromesh_ai/core/constants.dart';
@@ -144,6 +148,33 @@ void main() {
     expect(chat.messages.last.content, 'Summary');
   });
 
+  test('project workspaces isolate files and restore snapshots', () async {
+    final original = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _TestPaths(dir.path);
+    addTearDown(() => PathProviderPlatform.instance = original);
+
+    Future<String> write(String project, String text) => agent.inProject(
+      project,
+      () => agent.executeTool(
+        ParsedToolCall('write_file', {'name': 'notes.txt', 'content': text}, ''),
+        (_, __, ___) async => true,
+      ),
+    );
+    expect(await write('Project A', 'first draft'), startsWith('Wrote'));
+    expect(await write('Project A', 'second draft'), startsWith('Wrote'));
+    expect(await write('Project B', 'other project'), startsWith('Wrote'));
+    await agent.inProject('Project A', () async {
+      final versions = await agent.workspaceVersions('notes.txt');
+      expect(versions, hasLength(1));
+      expect(await agent.restoreWorkspaceVersion('notes.txt', versions.single), isTrue);
+      expect(await File('${(await agent.filesDir()).path}/notes.txt').readAsString(), 'first draft');
+    });
+    await agent.inProject('Project B', () async {
+      expect(await File('${(await agent.filesDir()).path}/notes.txt').readAsString(), 'other project');
+      expect(await agent.workspaceVersions('notes.txt'), isEmpty);
+    });
+  });
+
   test('a damaged saved image leaves the rest of the message readable', () {
     final message = ChatMessage(
       id: 'broken',
@@ -184,4 +215,12 @@ class _TestCloud extends CloudService {
     lastInput = messages.last['content'];
     return 'Reply';
   }
+}
+
+
+class _TestPaths extends PathProviderPlatform {
+  _TestPaths(this.path);
+  final String path;
+  @override
+  Future<String?> getApplicationDocumentsPath() async => path;
 }

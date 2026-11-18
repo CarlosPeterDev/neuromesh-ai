@@ -105,18 +105,108 @@ class AgentService extends GetxService {
 
   // ── workspace (private folder; attachments are copied here) ──────────
 
+  static final _workspaceKey = Object();
+
+  String projectForChat(String chatId) => chatId.isEmpty
+      ? ''
+      : _hive.getSetting<String>('workspace_project_$chatId') ?? '';
+
+  Future<void> setChatProject(String chatId, String name) async {
+    if (chatId.isEmpty) throw ArgumentError('Open a chat first.');
+    final project = name.trim();
+    if (project.length > 60 || project.contains(RegExp(r'[\r\n]'))) {
+      throw ArgumentError('Enter a project name up to 60 characters.');
+    }
+    await _hive.setSetting('workspace_project_$chatId', project);
+  }
+
+  Future<T> inProject<T>(String project, Future<T> Function() action) =>
+      runZoned(action, zoneValues: {_workspaceKey: project});
+
+  String get _project => Zone.current[_workspaceKey] as String? ?? '';
+  String get _projectId => base64Url.encode(utf8.encode(_project)).replaceAll('=', '');
+
   Future<Directory> filesDir() async {
     final base = await getApplicationDocumentsDirectory();
-    final d = Directory('${base.path}/agent_files');
+    final d = Directory(_project.isEmpty
+        ? '${base.path}/agent_files'
+        : '${base.path}/agent_projects/$_projectId');
     if (!await d.exists()) await d.create(recursive: true);
     return d;
+  }
+
+  Future<Directory> _versionDir(String name) async {
+    final base = await getApplicationDocumentsDirectory();
+    final key = base64Url.encode(utf8.encode(name)).replaceAll('=', '');
+    return Directory('${base.path}/agent_revisions/${_project.isEmpty ? "_" : _projectId}/$key');
+  }
+
+  Future<void> _keepFileVersion(File file) async {
+    if (!await file.exists()) return;
+    final dir = await _versionDir(file.uri.pathSegments.last);
+    await dir.create(recursive: true);
+    final now = DateTime.now().microsecondsSinceEpoch;
+    await file.copy('${dir.path}/$now');
+    final revisions = await _versions(dir);
+    for (final old in revisions.skip(10)) {
+      await old.delete();
+    }
+  }
+
+  Future<List<File>> _versions(Directory dir) async {
+    if (!await dir.exists()) return [];
+    return (await dir.list(followLinks: false).where((entry) => entry is File).cast<File>().toList())
+      ..sort((a, b) => b.path.compareTo(a.path));
+  }
+
+  Future<List<String>> archivedWorkspaceFiles() async {
+    final root = (await _versionDir('file')).parent;
+    if (!await root.exists()) return [];
+    final names = <String>[];
+    await for (final dir in root.list(followLinks: false)) {
+      if (dir is! Directory) continue;
+      try {
+        names.add(utf8.decode(base64Url.decode(base64Url.normalize(dir.uri.pathSegments.where((part) => part.isNotEmpty).last))));
+      } on FormatException {
+        continue;
+      }
+    }
+    return names..sort();
+  }
+
+  Future<List<int>> workspaceVersions(String name) async {
+    final dir = await _versionDir(name);
+    return (await _versions(dir))
+        .map((file) => int.tryParse(file.uri.pathSegments.last))
+        .whereType<int>()
+        .toList();
+  }
+
+  Future<bool> restoreWorkspaceVersion(String name, int version) async {
+    final file = await _safeFile(name);
+    final dir = await _versionDir(name);
+    final source = File('${dir.path}/$version');
+    if (!await source.exists()) return false;
+    final temp = File('${file.path}.restore-${DateTime.now().microsecondsSinceEpoch}');
+    await source.copy(temp.path);
+    try {
+      await _keepFileVersion(file);
+      await temp.rename(file.path);
+      return true;
+    } finally {
+      if (await temp.exists()) await temp.delete();
+    }
   }
 
   /// Only plain file names inside the agent folder are allowed.
   Future<File> _safeFile(String name) async {
     final n = name.split('/').last.split('\\').last;
     if (n.isEmpty || n.startsWith('.')) throw Exception('Invalid file name');
-    return File('${(await filesDir()).path}/$n');
+    final path = '${(await filesDir()).path}/$n';
+    if (await FileSystemEntity.type(path, followLinks: false) == FileSystemEntityType.link) {
+      throw ArgumentError('Workspace tools cannot open symbolic links.');
+    }
+    return File(path);
   }
 
   /// Copies a file the user attached into the workspace so tools can read it.
@@ -140,7 +230,10 @@ class AgentService extends GetxService {
 
   Future<void> deleteWorkspaceFile(String name) async {
     final f = await _safeFile(name);
-    if (await f.exists()) await f.delete();
+    if (await f.exists()) {
+      await _keepFileVersion(f);
+      await f.delete();
+    }
   }
 
   // ── memory ───────────────────────────────────────────────────────────
@@ -582,6 +675,7 @@ class AgentService extends GetxService {
             rethrow;
           }
         } else {
+          await _keepFileVersion(f);
           await f.writeAsString((args['content'] ?? '').toString());
         }
         return 'Wrote ${f.path.split('/').last}.';
@@ -593,6 +687,7 @@ class AgentService extends GetxService {
       '{"name":"string","content":"string"}',
       (args) async {
         final f = await _safeFile((args['name'] ?? '').toString());
+        await _keepFileVersion(f);
         await f.writeAsString((args['content'] ?? '').toString(), mode: FileMode.append);
         return 'Appended to ${f.path.split('/').last}.';
       },
@@ -612,6 +707,7 @@ class AgentService extends GetxService {
         if (n == 0) return 'Error: that text was not found. Use read_file and copy the exact text.';
         final all = '${args['all'] ?? ''}' == 'true';
         if (n > 1 && !all) return 'Error: the text appears $n times. Add more surrounding text, or set "all":"true".';
+        await _keepFileVersion(f);
         await f.writeAsString(all ? text.replaceAll(old, nw) : text.replaceFirst(old, nw));
         return 'Edited ${f.path.split('/').last} ($n replacement${n == 1 ? '' : 's'}).';
       },
@@ -623,6 +719,7 @@ class AgentService extends GetxService {
       (args) async {
         final f = await _safeFile((args['name'] ?? '').toString());
         if (!await f.exists()) return 'Error: no such file.';
+        await _keepFileVersion(f);
         await f.delete();
         return 'Deleted ${f.path.split('/').last}.';
       },

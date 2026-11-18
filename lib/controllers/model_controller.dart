@@ -594,9 +594,9 @@ class ModelController extends GetxController {
     }
   }
 
-  /// Android's DownloadManager offers no pause API, so stopping there cancels
-  /// the download; elsewhere progress is kept and the next download resumes.
-  bool get canPauseDownloads => !Platform.isAndroid;
+  bool canPauseDownload(String filename) =>
+      !(externalDownloadId.value != null && importFileName.value == filename) &&
+      _download.canPauseDownload(filename);
 
   void pauseDownload(String filename) {
     _download.pauseDownload(filename);

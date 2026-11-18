@@ -411,8 +411,24 @@ class ClusterService extends GetxService {
   /// the fastest phones are filled first, up to their free memory: phones
   /// take turns on every token, so the most work belongs on the fastest one,
   /// and phones that aren't needed are left out (one less Wi-Fi hop each).
-  Future<int> applyForNextLoad(String modelPath, {String? modelName}) async {
-    split.clear();
+  final _activeWorkerEndpoints = <String>{};
+
+  Future<bool> activeWorkerDisconnected() async {
+    if (_activeWorkerEndpoints.isEmpty) return false;
+    final endpoints = List.of(_activeWorkerEndpoints);
+    final online = await Future.wait(endpoints.map((endpoint) async {
+      try {
+        return await LlamaCluster.probe(endpoint)
+            .timeout(const Duration(seconds: 3));
+      } catch (_) {
+        return false;
+      }
+    }));
+    return online.contains(false);
+  }
+
+  Future<int> applyForNextLoad(String modelPath, {String? modelName, bool recovering = false}) async {
+    clearSplit();
     if (!isSupported) return 0;
     if (!enabled.value || workers.isEmpty) {
       await LlamaCluster.clear();
@@ -453,7 +469,7 @@ class ClusterService extends GetxService {
       return 0;
     }
     if (needMb <= master.capacityMb) {
-      final share = await _askFitsHere(
+      final share = !recovering && await _askFitsHere(
           modelName ?? modelPath.split('/').last, modelMb, available.length);
       if (!share) {
         await LlamaCluster.clear();
@@ -480,6 +496,7 @@ class ClusterService extends GetxService {
           '${e.message ?? 'A worker is unreachable'}. Turn on Worker on that '
           'phone, or set this phone\'s Phone cluster to Off.');
     }
+    _activeWorkerEndpoints.addAll(used.map((phone) => phone.worker!.endpoint));
     return used.length;
   }
 
@@ -601,7 +618,10 @@ class ClusterService extends GetxService {
     ]);
   }
 
-  void clearSplit() => split.clear();
+  void clearSplit() {
+    split.clear();
+    _activeWorkerEndpoints.clear();
+  }
 
   static String _gb(double mb) => '${(mb / 1024).toStringAsFixed(1)} GB';
 }
