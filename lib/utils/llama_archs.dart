@@ -137,3 +137,11 @@ const Set<String> kLlamaChatArchitectures = {
 /// model just because Hugging Face has no metadata for it.
 bool isSupportedLlamaArch(String? arch) =>
     arch == null || arch.isEmpty || kLlamaChatArchitectures.contains(arch);
+
+/// Standalone FastMTP draft files ship alongside the full text weights.
+bool isFastMtpDraft(String name) => _fastMtpDraftName.hasMatch(name.trim());
+
+final _fastMtpDraftName = RegExp(
+  r'(?:^|[-_.\s])fast[-_]?mtp[-_][0-9]+k(?:\.gguf)?$',
+  caseSensitive: false,
+);

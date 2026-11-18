@@ -761,6 +761,24 @@ class ModelController extends GetxController {
         ..set('ggufEstimatedBytesAtRequestedContext',
             gguf.estimateBytes(_settings.contextSize.value));
     }
+    if (!isImage &&
+        lower.endsWith('.gguf') &&
+        (isFastMtpDraft(filename) || isFastMtpDraft(gguf?.name ?? ''))) {
+      const reason = 'This GGUF is a FastMTP draft companion and cannot run as a chat model.';
+      report
+        ..stage('validate GGUF model role')
+        ..set('ggufRole', 'fastmtp_draft');
+      return _reportLoadFailure(
+        filename,
+        report,
+        reason,
+        diagnosis: (
+          likely: reason,
+          details: 'Select a complete text GGUF from the model repository. '
+              'If the full model exceeds this device’s available RAM, select a smaller model.',
+        ),
+      );
+    }
     report.stage('load confirmation');
     // The phone cluster splits GGUF models only (llama.cpp); a LiteRT model
     // always runs on this phone, so say so instead of silently ignoring the
