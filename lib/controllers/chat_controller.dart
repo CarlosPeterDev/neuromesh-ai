@@ -195,12 +195,13 @@ class ChatController extends GetxController {
     openChat(id);
   }
 
-  void _resetInferenceContext() {
+  Future<void> _resetInferenceContext() async {
     final inference = Get.find<InferenceService>();
-    if (inference.isModelLoaded.value) {
-      unawaited(inference.resetConversation().catchError((Object error) {
-        Get.find<AppLogService>().warning('Could not reset chat context', details: error);
-      }));
+    if (!inference.isModelLoaded.value) return;
+    try {
+      await inference.resetConversation();
+    } catch (error) {
+      Get.find<AppLogService>().warning('Could not reset chat context', details: error);
     }
   }
 
@@ -214,7 +215,7 @@ class ChatController extends GetxController {
     if (inference.isModelLoaded.value) {
       inference.refreshContextInfo();
     }
-    _resetInferenceContext();
+    unawaited(_resetInferenceContext());
     _scrollToBottom(force: true);
   }
 
@@ -774,8 +775,9 @@ class ChatController extends GetxController {
     if (text.isEmpty &&
         imagePath == null &&
         imageBase64 == null &&
-        fileName == null)
+        fileName == null) {
       return;
+    }
     final visibleText = text.isEmpty
         ? _defaultAttachmentPrompt(fileType)
         : text;
@@ -788,6 +790,10 @@ class ChatController extends GetxController {
     var posted = false;
 
     try {
+      if (previous != null) {
+        await _resetInferenceContext();
+        if (generationId != _generationSerial) return;
+      }
       // Copy non-media attachments into the agent workspace so the AI's file
       // tools can read the whole file (not just what fits in the prompt).
       String? workspaceName;
@@ -904,8 +910,9 @@ class ChatController extends GetxController {
         ]);
       }
       posted = true;
-      if (previous == null)
+      if (previous == null) {
         await _hive.saveMessage(userMsg.id, userMsg.toMap());
+      }
       if (generationId != _generationSerial) return;
       _scrollToBottom(force: true);
 
@@ -1285,8 +1292,9 @@ class ChatController extends GetxController {
       imageGenDecoding.value = false;
       final hadImageJob = imageGenStartTime.value != null;
       imageGenStartTime.value = null;
-      if (hadImageJob)
+      if (hadImageJob) {
         await Get.find<ImageGenerationNotificationService>().failed();
+      }
       if (generationId != _generationSerial) return;
       final frames = stack.toString().trimRight().split('\n').take(8);
       Get.find<AppLogService>().error(
