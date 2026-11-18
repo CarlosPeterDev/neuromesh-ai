@@ -10,6 +10,10 @@ set(SD_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SD_VULKAN OFF CACHE BOOL "" FORCE)
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+# Use the baseline x64 instruction set on systems without AVX2.
+foreach(feature SSE42 AVX AVX2 BMI2 FMA F16C)
+  set(GGML_${feature} OFF CACHE BOOL "" FORCE)
+endforeach()
 
 set(image_sources "${CMAKE_CURRENT_SOURCE_DIR}/../android/src/main/cpp")
 add_subdirectory("${image_sources}/stable-diffusion.cpp" stable-diffusion)

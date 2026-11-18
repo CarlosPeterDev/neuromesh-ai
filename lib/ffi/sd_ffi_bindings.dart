@@ -350,10 +350,15 @@ class SdFfiBindings {
     }
     if (_lib != null && _currentBackendLib == library) return;
     _lib = DynamicLibrary.open(library);
-    _currentBackendLib = library;
-    loadedBackend = backend;
-
-    _lookupFunctions();
+    try {
+      _lookupFunctions();
+      _currentBackendLib = library;
+      loadedBackend = backend;
+    } catch (_) {
+      _lib = null;
+      _currentBackendLib = '';
+      rethrow;
+    }
   }
 
   static void _lookupFunctions() {
@@ -378,8 +383,13 @@ class SdFfiBindings {
     generate = _lib!
         .lookupFunction<SdFfiGenerateNative, SdFfiGenerate>('sd_ffi_generate');
 
-    releaseImage = _lib!.lookupFunction<Void Function(Pointer<Uint8>),
-        void Function(Pointer<Uint8>)>('sd_ffi_release_image');
+    if (Platform.isAndroid && !_lib!.providesSymbol('sd_ffi_release_image')) {
+      // Older bundled Android GPU libraries allocate through libc.
+      releaseImage = calloc.free;
+    } else {
+      releaseImage = _lib!.lookupFunction<Void Function(Pointer<Uint8>),
+          void Function(Pointer<Uint8>)>('sd_ffi_release_image');
+    }
 
     getCores = _lib!
         .lookupFunction<SdFfiGetCoresNative, SdFfiGetCores>('sd_ffi_get_cores');
