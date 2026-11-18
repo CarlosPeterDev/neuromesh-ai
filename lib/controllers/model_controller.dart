@@ -12,6 +12,7 @@ import '../services/local_image_service.dart';
 import '../services/hive_service.dart';
 import '../services/app_log_service.dart';
 import '../services/device_info_service.dart';
+import '../services/device_bridge.dart';
 import '../services/model_load_diagnostics.dart';
 import '../views/diagnostics_view.dart';
 import '../models/ai_model.dart';
@@ -442,6 +443,17 @@ class ModelController extends GetxController {
       return;
     }
     try {
+      if (Get.isRegistered<DeviceBridge>()) {
+        final status = await Get.find<DeviceBridge>().status();
+        final free = status['storageFree'];
+        final bytes = _declaredModelBytes(model);
+        if (free is num && free > 0 && bytes > 0 && bytes >= free) {
+          showToast('Not enough storage',
+              'This model needs about ${model.size}. Free up space and retry.',
+              tone: ToastTone.warning);
+          return;
+        }
+      }
       // Vision models need their projector too; fetch both together.
       if (model.hasVisionProjector &&
           model.mmprojUrl.isNotEmpty &&

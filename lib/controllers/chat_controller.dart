@@ -1381,6 +1381,38 @@ class ChatController extends GetxController {
     }
   }
 
+  Future<void> saveVoiceMessage(
+    String sessionId,
+    String role,
+    String content, {
+    String? fileName,
+  }) async {
+    final session = sessions.firstWhereOrNull((item) => item.id == sessionId);
+    if (session == null || content.trim().isEmpty) return;
+    final message = ChatMessage(
+      id: _uuid.v4(),
+      chatId: sessionId,
+      role: role,
+      content: content,
+      fileName: fileName,
+      fileType: fileName == null ? null : 'file',
+    );
+    final title = session.title == 'New Chat' && role == 'user'
+        ? (content.split('\n').first.length > 40
+            ? '${content.substring(0, 40)}…'
+            : content.split('\n').first)
+        : session.title;
+    if (currentSessionId.value == sessionId) {
+      messages.add(message);
+      _scrollToBottom(force: true);
+    }
+    _updateSession(session.copyWith(
+      title: title,
+      lastMessage: role == 'user' ? message.visibleUserText : stripToolTrace(content),
+    ));
+    await _hive.saveMessage(message.id, message.toMap());
+  }
+
   void _handleUserScroll() {
     if (!scrollController.hasClients) return;
     final position = scrollController.position;

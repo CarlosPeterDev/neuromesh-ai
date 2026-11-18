@@ -12,6 +12,10 @@ import 'package:record/record.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import '../controllers/settings_controller.dart';
+import '../controllers/chat_controller.dart';
+import '../utils/thought_parser.dart';
+import 'voice_clone_view.dart';
+import 'chat_tools.dart';
 import '../core/ui.dart';
 import '../services/agent_service.dart';
 import '../services/hive_service.dart';
@@ -289,7 +293,8 @@ enum _CallState { starting, listening, thinking, speaking, error }
 
 /// Hands-free voice conversation with the loaded local model.
 class VoiceCallView extends StatefulWidget {
-  const VoiceCallView({super.key});
+  final bool useSelectedClone;
+  const VoiceCallView({super.key, this.useSelectedClone = false});
 
   @override
   State<VoiceCallView> createState() => _VoiceCallViewState();
@@ -301,6 +306,15 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   final _hive = Get.find<HiveService>();
   final _rec = AudioRecorder();
   final _history = <Map<String, String>>[];
+  final _chat = Get.find<ChatController>();
+  String _sessionId = '';
+  List<AgentStep> _steps = [];
+  int _turnNumber = 0;
+  bool _addingFile = false;
+  String? _attachedFile;
+  final _bargeAudio = <double>[];
+  final _callScroll = ScrollController();
+  final _interruptionAudio = <double>[];
   final _lines = <({bool me, String text})>[];
 
   _CallState _state = _CallState.starting;
@@ -382,8 +396,17 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   @override
   void initState() {
     super.initState();
+    _sessionId = _chat.currentSessionId.value;
+    _history.addAll(_chat.messages.where((m) => m.role == 'user' || m.role == 'assistant').map(
+      (m) => {'role': m.role, 'content': m.role == 'assistant'
+          ? stripToolTrace(splitThoughtTags(m.content).answer) : m.content},
+    ));
     _lang = _hive.getSetting<String>(_kLang) ?? 'en';
-    _bargeIn = _hive.getSetting<bool>(_kBargeIn, defaultValue: false) ?? false;
+    if (widget.useSelectedClone) {
+      _lang = 'en';
+      _callVoice = voiceModelById('pocket-tts-clone');
+    }
+    _bargeIn = _hive.getSetting<bool>(_kBargeIn, defaultValue: true) ?? true;
     _wake = (_hive.getSetting<String>(_kWakePhrase) ?? '').trim().toLowerCase();
     WidgetsBinding.instance.addPostFrameCallback((_) => _start());
   }
@@ -393,11 +416,24 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     _ended = true;
     _micWatchdog?.cancel();
     _cam?.dispose();
+    _callScroll.dispose();
     _sub?.cancel();
     _rec.dispose();
     _vad?.free();
     _voice.stopSpeaking();
+    final inference = Get.find<InferenceService>();
+    if (inference.generationSource.value == 'voice') {
+      unawaited(inference.stopGeneration());
+    }
     super.dispose();
+  }
+
+  void _scrollCall() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _callScroll.hasClients) {
+        _callScroll.jumpTo(_callScroll.position.maxScrollExtent);
+      }
+    });
   }
 
   void _set(_CallState s, String text) {
@@ -406,6 +442,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       _state = s;
       _status = text;
     });
+    _scrollCall();
   }
 
   VoiceModelInfo? _installed(VoiceKind k, {String? lang}) {
@@ -442,6 +479,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   }
 
   Future<void> _start() async {
+    if (_ended) return;
     if (!Get.find<InferenceService>().isModelLoaded.value) {
       _set(_CallState.error, 'Load a chat model first (Models tab).');
       return;
@@ -472,8 +510,14 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         }
       }
       _voice.loadWorkerSettings();
-      _vad = await _voice.createVad();
+      final detector = await _voice.createVad();
+      if (_ended) {
+        detector?.free();
+        return;
+      }
+      _vad = detector;
       final stream = await _rec.startStream(_recConfig);
+      if (_ended) return;
       _lastAudio = DateTime.now();
       _sub = stream.listen(_onAudio);
       _startMicWatchdog();
@@ -500,6 +544,12 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     if (_ended || _muted) return;
     final chunk = _toFloat(bytes);
 
+    if (_interrupted && _busy) {
+      if (_interruptionAudio.length < _rate * 5) {
+        _interruptionAudio.addAll(chunk);
+      }
+      return;
+    }
     // While the model is speaking, only look for the user interrupting.
     if (_speaking) {
       if (!_bargeIn) return;
@@ -521,15 +571,40 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     }
     final rms = math.sqrt(sum / math.max(chunk.length, 1));
     // Needs clearly louder than background, for ~0.4 s in a row.
-    if (rms > math.max(0.06, _noise * 6)) {
+    if (rms > math.max(0.065, _noise * 6)) {
       _bargeFrames += chunk.length;
-      if (_bargeFrames > _rate * 0.4) {
+      _bargeAudio.addAll(chunk);
+      if (_bargeFrames >= _rate * 0.46) {
+        final vad = _vad;
+        if (vad == null) {
+          _interrupt();
+        } else {
+          vad.reset();
+          for (var i = 0; i + 512 <= _bargeAudio.length; i += 512) {
+            vad.acceptWaveform(Float32List.fromList(_bargeAudio.sublist(i, i + 512)));
+          }
+          if (vad.isDetected() || !vad.isEmpty()) _interrupt();
+          vad.reset();
+        }
+        _bargeAudio.clear();
         _bargeFrames = 0;
-        _interrupted = true;
-        _voice.stopSpeaking();
       }
     } else {
       _bargeFrames = 0;
+      _bargeAudio.clear();
+    }
+  }
+
+  void _interrupt() {
+    if (!_speaking || _interrupted) return;
+    _interrupted = true;
+    _interruptionAudio.addAll(_bargeAudio);
+    _bargeAudio.clear();
+    _set(_CallState.listening, 'Listening to your interruption…');
+    unawaited(_voice.stopSpeaking());
+    final inference = Get.find<InferenceService>();
+    if (inference.generationSource.value == 'voice') {
+      unawaited(inference.stopGeneration());
     }
   }
 
@@ -638,19 +713,82 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         _afterTurn();
         return;
       }
-      if (mounted) setState(() => _lines.add((me: true, text: heard)));
+      if (!_ended) await _respond(heard);
+    } catch (e) {
+      if (mounted) setState(() => _lines.add((me: false, text: '⚠️ $e')));
+    } finally {
+      _finishTurn();
+    }
+  }
 
-      final settings = Get.find<SettingsController>();
-      final canSpeakRemotely =
-          WorkloadPlacement.forWorkload(PhoneWorkload.speech) != null ||
-          (_voice.workerUrl.isNotEmpty && _lang == 'en');
-      final sys = ((_ttsChoice(_lang) == null && !canSpeakRemotely) ||
-              _hive.getSetting<bool>(_kSystemTts, defaultValue: false)!)
-          ? (_lang == 'ar' ? 'ar' : 'en-US')
-          : null;
+  Future<void> _attachFile() async {
+    if (_addingFile || _busy) return;
+    if (Get.find<AgentService>().mode.value == AgentChatMode.off) {
+      showToast('Agent tools are off', 'Enable tools to use workspace files in the call.');
+      return;
+    }
+    setState(() => _addingFile = true);
+    try {
+      final result = await FilePicker.pickFiles();
+      final file = result?.files.single;
+      if (_ended || file?.path == null) return;
+      final name = await Get.find<AgentService>()
+          .importToWorkspace(file!.path!, file.name);
+      if (mounted) setState(() => _attachedFile = name);
+    } catch (_) {
+      if (mounted) showToast('Could not attach this file', 'Choose the file again.');
+    } finally {
+      if (mounted) setState(() => _addingFile = false);
+    }
+  }
 
-      _interrupted = false;
-      final ctl = StreamController<String>();
+  Future<void> _sendAttachment() async {
+    if (_busy || _attachedFile == null) return;
+    _busy = true;
+    try {
+      await _respond('Please inspect the attached file and summarize it.');
+    } catch (e) {
+      if (mounted) setState(() => _lines.add((me: false, text: '⚠️ $e')));
+    } finally {
+      _finishTurn();
+    }
+  }
+
+  Future<void> _respond(String heard) async {
+    if (_ended) return;
+    _set(_CallState.thinking, 'Thinking…');
+    final file = _attachedFile;
+    final message = file == null
+        ? heard
+        : '$heard\n\nAttached file: $file\nUse the workspace file tools to read it.';
+    if (_sessionId.isEmpty) {
+      _chat.createNewChat();
+      _sessionId = _chat.currentSessionId.value;
+    }
+    final sessionId = _sessionId;
+    await _chat.saveVoiceMessage(sessionId, 'user', message, fileName: file);
+    _history.add({'role': 'user', 'content': message});
+    if (_ended) return;
+    setState(() {
+      _steps = [];
+      _turnNumber++;
+      _attachedFile = null;
+      _lines.add((me: true, text: file == null ? heard : '$heard\n📎 $file'));
+    });
+
+    final settings = Get.find<SettingsController>();
+    final canSpeakRemotely =
+        WorkloadPlacement.forWorkload(PhoneWorkload.speech) != null ||
+        (_voice.workerUrl.isNotEmpty && _lang == 'en');
+    final sys =
+        ((_ttsChoice(_lang) == null && !canSpeakRemotely) ||
+            _hive.getSetting<bool>(_kSystemTts, defaultValue: false)!)
+        ? (_lang == 'ar' ? 'ar' : 'en-US')
+        : null;
+
+    _interrupted = false;
+    final ctl = StreamController<String>();
+    try {
       var read = 0;
       var started = false;
       int? liveIdx;
@@ -661,14 +799,28 @@ class _VoiceCallViewState extends State<VoiceCallView> {
             _lines.add((me: false, text: sentence));
             liveIdx = _lines.length - 1;
           } else {
-            _lines[liveIdx!] = (me: false, text: '${_lines[liveIdx!].text} $sentence');
+            _lines[liveIdx!] = (
+              me: false,
+              text: '${_lines[liveIdx!].text} $sentence',
+            );
           }
         });
       }
 
-      final speakingDone = _speakQueue(ctl.stream, sys, onSpoken: caption);
+      final speakingDone = _speakQueue(ctl.stream, sys, onSpoken: caption)
+          .catchError((Object error) {
+            if (mounted && !_interrupted) {
+              setState(
+                () => _lines.add((
+                  me: false,
+                  text: 'Voice playback failed: $error',
+                )),
+              );
+            }
+          });
 
       void feed(String text, {bool flush = false}) {
+        if (_ended || _interrupted) return;
         final v = _spoken(text);
         if (v.length < read) read = 0; // a new segment after a tool step
         final r = nextSentences(v, read, flush: flush);
@@ -684,30 +836,45 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       }
 
       final shot = await _snap();
+      if (_ended) return;
       final agent = Get.find<AgentService>();
       final inference = Get.find<InferenceService>();
-      final settings2 = settings;
-      final useTools = agent.wantsTools(heard);
+      final session = _chat.currentSession;
+      final basePrompt = session?.id == sessionId
+          ? session?.systemPrompt
+          : null;
+      final useTools = agent.wantsTools(heard, hasFile: file != null);
       final system = agent.composeSystem(
-          '${settings2.globalSystemPrompt.value}\n'
-          'You are on a voice call. Speak naturally in one to three short sentences. No markdown, lists or emoji. '
-          'If you used tools, just say the result.',
-          withTools: useTools);
-      Future<String> gen(String prompt, List<Map<String, String>> hist, void Function(String) onTok) =>
-          inference.generate(
-            prompt: prompt,
-            systemPrompt: system,
-            conversationHistory: hist,
-            source: 'voice',
-            imagePath: shot,
-            maxTokens: useTools ? 500 : 160,
-            onToken: onTok,
-          );
+        '${basePrompt ?? settings.globalSystemPrompt.value}\n'
+        'You are on a voice call. Speak naturally in one to three short sentences. No markdown, lists or emoji. '
+        'If you used tools, just say the result.',
+        withTools: useTools,
+        request: heard,
+        withFiles: file != null,
+      );
+      Future<String> gen(
+        String prompt,
+        List<Map<String, String>> hist,
+        void Function(String) onTok,
+      ) => inference.generate(
+        prompt: AgentService.fitToContext(
+          system,
+          hist,
+          prompt,
+          inference.contextTokensTotal.value,
+        ),
+        systemPrompt: system,
+        conversationHistory: hist,
+        source: 'voice',
+        imagePath: shot,
+        maxTokens: useTools ? 500 : 160,
+        onToken: onTok,
+      );
 
       String finalText;
       if (!useTools) {
         var raw = '';
-        final reply = await gen(heard, List.of(_history), (t) {
+        final reply = await gen(message, List.of(_history), (t) {
           raw += t;
           feed(raw);
         });
@@ -716,46 +883,68 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       } else {
         final result = await agent.runToolLoop(
           generate: gen,
-          prompt: heard,
+          prompt: message,
           history: List.of(_history),
           confirm: confirmToolCall,
           userText: heard,
           researchQuestion: agent.needsResearch(heard) ? heard : null,
           cancelled: () => _ended || _interrupted,
           onVisible: (v) => feed(v),
+          onTrace: (trace) {
+            if (mounted) {
+              setState(() => _steps = splitSteps(trace.join('\n')).$1);
+              _scrollCall();
+            }
+          },
           onStatus: (st) {
             if (!_speaking) _set(_CallState.thinking, st);
           },
         );
         finalText = result.markdown;
         feed(_spoken(finalText), flush: true);
-        for (final m in RegExp(r'!\[[^\]]*\]\(nmfile:([^)]+)\)').allMatches(finalText)) {
+        for (final m in RegExp(
+          r'!\[[^\]]*\]\(nmfile:([^)]+)\)',
+        ).allMatches(finalText)) {
           final f = await agentFile(m.group(1)!);
           if (f != null && mounted) setState(() => _shots.add(f));
         }
       }
-      await ctl.close();
-
-      final clean = _spoken(finalText);
-      _history
-        ..add({'role': 'user', 'content': heard})
-        ..add({'role': 'assistant', 'content': clean});
-      if (liveIdx == null && clean.isNotEmpty && mounted) {
-        setState(() => _lines.add((me: false, text: clean)));
+      unawaited(ctl.close());
+      await speakingDone.timeout(
+        const Duration(seconds: 180),
+        onTimeout: () {
+          unawaited(_voice.stopSpeaking());
+        },
+      );
+      final clean = (_ended || _interrupted)
+          ? (liveIdx == null ? '' : _lines[liveIdx!].text)
+          : finalText;
+      if (clean.trim().isNotEmpty) {
+        await _chat.saveVoiceMessage(sessionId, 'assistant', clean);
+        _history.add({'role': 'assistant', 'content': stripToolTrace(clean)});
       }
-      // Never wait forever for the voice to finish: a lost completion callback
-      // used to leave the call deaf to every later question.
-      await speakingDone.timeout(const Duration(seconds: 180), onTimeout: () {
-        _voice.stopSpeaking();
-      });
-    } catch (e) {
-      // Show the problem but keep the call alive so the next question works.
-      if (mounted) setState(() => _lines.add((me: false, text: '⚠️ $e')));
+      if (liveIdx == null && clean.isNotEmpty && mounted) {
+        setState(() => _lines.add((me: false, text: _spoken(clean))));
+      }
+    } finally {
+      if (!ctl.isClosed) unawaited(ctl.close());
     }
+  }
+
+  void _finishTurn() {
+    final continuation = Float64List.fromList(_interruptionAudio);
+    _interruptionAudio.clear();
     _afterTurn();
-    if (_pending.isNotEmpty && !_ended) {
-      final next = _pending.removeAt(0);
-      unawaited(_turn(next));
+    if (_ended) return;
+    if (continuation.isNotEmpty) {
+      if (_vad != null) {
+        _onAudioVad(continuation);
+      } else {
+        _inSpeech = true;
+        _speech.addAll(continuation);
+      }
+    } else if (_pending.isNotEmpty) {
+      unawaited(_turn(_pending.removeAt(0)));
     }
   }
 
@@ -768,6 +957,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     _inSpeech = false;
     _silentSamples = 0;
     _bargeFrames = 0;
+    _bargeAudio.clear();
     _speech.clear();
     _preRoll.clear();
     _vadBuf.clear();
@@ -785,21 +975,29 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       noiseSuppress: true);
   DateTime _lastAudio = DateTime.now();
   Timer? _micWatchdog;
+  bool _micRestarting = false;
 
   /// Android can silently stop the microphone when the voice starts playing.
   /// If no audio arrives for a few seconds, open the microphone again.
   void _startMicWatchdog() {
     _micWatchdog?.cancel();
     _micWatchdog = Timer.periodic(const Duration(seconds: 3), (_) async {
-      if (_ended || _muted) return;
+      if (_ended || _muted || _micRestarting) return;
       if (DateTime.now().difference(_lastAudio) < const Duration(seconds: 4)) return;
+      _micRestarting = true;
       try {
         await _sub?.cancel();
+        if (_ended) return;
         await _rec.stop();
+        if (_ended) return;
         final stream = await _rec.startStream(_recConfig);
+        if (_ended) return;
         _lastAudio = DateTime.now();
         _sub = stream.listen(_onAudio);
-      } catch (_) {}
+      } catch (_) {
+      } finally {
+        _micRestarting = false;
+      }
     });
   }
 
@@ -826,17 +1024,24 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   }
 
   Future<void> _chooseCallVoice() async {
-    final voices = kVoiceModels.where((model) =>
-        model.kind == VoiceKind.tts && !model.clone &&
-        _store.installed.contains(model.id) &&
-        (model.lang == _lang || model.lang == 'multi')).toList();
-    if (voices.isEmpty) {
+    final voices = kVoiceModels
+        .where(
+          (model) =>
+              model.kind == VoiceKind.tts &&
+              !model.clone &&
+              _store.installed.contains(model.id) &&
+              (model.lang == _lang || model.lang == 'multi'),
+        )
+        .toList();
+    if (voices.isEmpty && _lang != 'en') {
       await Get.to(() => const VoiceModelsView());
       return;
     }
+    final clones = Get.find<VoiceCloneStore>();
+    final cloneModel = voiceModelById('pocket-tts-clone');
     final current = _ttsChoice(_lang);
-    var model = voices.contains(current) ? current! : voices.first;
-    var speaker = VoiceService.savedSpeaker(model);
+    var model = voices.contains(current) ? current! : voices.firstOrNull;
+    var speaker = model == null ? 0 : VoiceService.savedSpeaker(model);
     final selected = await showAppSheet<(VoiceModelInfo, int)>(
       context,
       title: 'Speaking voice',
@@ -844,32 +1049,65 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         builder: (context, update) => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            DropdownButtonFormField<VoiceModelInfo>(
-              initialValue: model,
-              isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Model'),
-              items: [for (final choice in voices)
-                DropdownMenuItem(value: choice, child: Text(choice.title))],
-              onChanged: (choice) {
-                if (choice != null) update(() {
-                  model = choice;
-                  speaker = VoiceService.savedSpeaker(choice);
-                });
-              },
-            ),
-            if (model.speakers.isNotEmpty)
+            if (_lang == 'en') ...[
+              if (cloneModel != null &&
+                  _store.installed.contains(cloneModel.id))
+                for (final name in clones.voices)
+                  ListTile(
+                    leading: const Icon(Icons.record_voice_over_outlined),
+                    title: Text(name),
+                    subtitle: const Text('Cloned voice'),
+                    selected:
+                        clones.active.value == name && current == cloneModel,
+                    onTap: () async {
+                      await clones.select(name);
+                      if (context.mounted)
+                        Navigator.of(context).pop((cloneModel, 0));
+                    },
+                  ),
+              TextButton.icon(
+                icon: const Icon(Icons.graphic_eq),
+                label: const Text('Open voice cloner'),
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  Get.to(() => const VoiceCloneView(allowCall: false));
+                },
+              ),
+            ],
+            if (voices.isNotEmpty)
+              DropdownButtonFormField<VoiceModelInfo>(
+                initialValue: model,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Model'),
+                items: [
+                  for (final choice in voices)
+                    DropdownMenuItem(value: choice, child: Text(choice.title)),
+                ],
+                onChanged: (choice) {
+                  if (choice != null)
+                    update(() {
+                      model = choice;
+                      speaker = VoiceService.savedSpeaker(choice);
+                    });
+                },
+              ),
+            if (model?.speakers.isNotEmpty == true)
               DropdownButtonFormField<int>(
-                key: ValueKey(model.id),
+                key: ValueKey(model!.id),
                 initialValue: speaker,
                 isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Speaker'),
-                items: [for (var i = 0; i < model.speakers.length; i++)
-                  DropdownMenuItem(value: i, child: Text(model.speakers[i]))],
+                items: [
+                  for (var i = 0; i < model!.speakers.length; i++)
+                    DropdownMenuItem(value: i, child: Text(model!.speakers[i])),
+                ],
                 onChanged: (value) => update(() => speaker = value ?? 0),
               ),
             const SizedBox(height: 12),
             FilledButton(
-              onPressed: () => Navigator.of(context).pop((model, speaker)),
+              onPressed: model == null
+                  ? null
+                  : () => Navigator.of(context).pop((model!, speaker)),
               child: const Text('Use this voice'),
             ),
           ],
@@ -918,6 +1156,11 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     return Scaffold(
       appBar: AppBar(title: const Text('Voice call'), actions: [
         IconButton(
+          tooltip: 'Agent workspace',
+          icon: const Icon(Icons.folder_open_outlined),
+          onPressed: () => Get.to(() => const AgentWorkspaceView()),
+        ),
+        IconButton(
           tooltip: 'Choose speaking voice',
           icon: const Icon(Icons.record_voice_over_outlined),
           onPressed: _busy || _speaking ? null : _chooseCallVoice,
@@ -934,7 +1177,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
               await _hive.setSetting(_kBargeIn, _bargeIn);
             }),
         TextButton(
-            onPressed: _toggleLang,
+            onPressed: _busy ? null : _toggleLang,
             child: Text(_lang == 'en' ? 'English' : 'العربية')),
       ]),
       body: SafeArea(
@@ -943,7 +1186,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
             SizedBox(height: 150, child: ClipRRect(
                 borderRadius: BorderRadius.circular(12), child: CameraPreview(_cam!))),
           Expanded(
-            child: ListView(padding: const EdgeInsets.all(16), children: [
+            child: ListView(controller: _callScroll, padding: const EdgeInsets.all(16), children: [
               if (_vad == null && _state == _CallState.listening)
                 const Padding(
                     padding: EdgeInsets.only(bottom: 8),
@@ -962,6 +1205,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                     child: Text(l.text),
                   ),
                 ),
+              if (_steps.isNotEmpty)
+                AgentStepsView(steps: _steps, messageId: 'voice-$_turnNumber', live: _busy),
               if (_shots.isNotEmpty)
                 Wrap(spacing: 8, runSpacing: 8, children: [
                   for (final f in _shots)
@@ -976,7 +1221,20 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                 ]),
             ]),
           ),
-          Icon(Icons.graphic_eq_rounded, size: 56, color: color),
+          if (_attachedFile case final name?)
+            InputChip(
+              avatar: const Icon(Icons.attach_file),
+              label: Text(name, overflow: TextOverflow.ellipsis),
+              onPressed: _busy ? null : _sendAttachment,
+              onDeleted: _busy ? null : () => setState(() => _attachedFile = null),
+            ),
+          if (_speaking && !_interrupted)
+            TextButton.icon(
+              icon: const Icon(Icons.mic),
+              label: const Text('Interrupt and talk'),
+              onPressed: _interrupt,
+            ),
+          Icon(Icons.graphic_eq_rounded, size: 48, color: color),
           Padding(
               padding: const EdgeInsets.all(8),
               child: Text(_status, textAlign: TextAlign.center)),
@@ -988,6 +1246,11 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                   onPressed: () => setState(() => _muted = !_muted),
                   icon: Icon(_muted ? Icons.mic_off : Icons.mic)),
               const SizedBox(width: 16),
+              IconButton.filledTonal(
+                  tooltip: 'Attach a file',
+                  onPressed: _busy || _addingFile ? null : _attachFile,
+                  icon: const Icon(Icons.attach_file)),
+              const SizedBox(width: 12),
               IconButton.filledTonal(
                   iconSize: 28,
                   tooltip: 'Video call (vision models)',

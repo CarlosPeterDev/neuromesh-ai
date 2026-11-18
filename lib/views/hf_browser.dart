@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../controllers/model_controller.dart';
+import '../controllers/settings_controller.dart';
 import '../core/ui.dart';
 import '../models/ai_model.dart';
 import '../services/download_service.dart';
@@ -620,7 +621,8 @@ class _RepoFilesState extends State<_RepoFiles> {
                   icon: Icons.insert_drive_file_outlined,
                   title: f.quant.isEmpty ? f.filename : f.quant,
                   subtitle:
-                      '${DownloadService.formatBytes(f.size)} · ${f.filename}',
+                      '${DownloadService.formatBytes(f.size)} · ${f.filename}'
+                      '${widget.images ? '' : '\nEst. RAM at ${Get.find<SettingsController>().contextSize.value} tokens: ${(needGBForBytes(f.size) + contextHeadroomGB(needGBForBytes(f.size))).toStringAsFixed(1)} GiB'}',
                   trailing: controller.downloadedFiles.contains(f.filename)
                       ? Text('On phone', style: t.small)
                       : controller.isDownloadingModel(f.filename)

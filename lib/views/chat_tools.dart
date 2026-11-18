@@ -1,3 +1,5 @@
+import 'dart:io' show FileSystemEntityType;
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../services/sandbox_service.dart';
@@ -6,6 +8,7 @@ import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/ui.dart';
+import '../widgets/agent_steps.dart';
 import '../services/agent_service.dart';
 import '../services/mcp_client.dart';
 import '../services/mcp_presets.dart';
@@ -681,6 +684,129 @@ class _PolicyRow extends StatelessWidget {
   }
 }
 
+class AgentWorkspaceView extends StatelessWidget {
+  const AgentWorkspaceView({super.key});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: appScreenBar(context, title: 'Agent workspace', showBack: true),
+        body: ListView(padding: kPagePadding, children: [
+          _Workspace(agent: Get.find<AgentService>()),
+          if (SandboxService.supported)
+            AppGroup(children: [
+              AppRow(
+                icon: Icons.terminal_rounded,
+                title: 'Alpine terminal',
+                chevron: true,
+                onTap: () => Get.to(() => const _AlpineTerminalView()),
+              ),
+            ]),
+        ]),
+      );
+}
+
+class _AlpineTerminalView extends StatefulWidget {
+  const _AlpineTerminalView();
+
+  @override
+  State<_AlpineTerminalView> createState() => _AlpineTerminalViewState();
+}
+
+class _AlpineTerminalViewState extends State<_AlpineTerminalView> {
+  final _sandbox = Get.find<SandboxService>();
+  final _input = TextEditingController();
+  final _output = ScrollController();
+  final _entries = <String>[];
+  bool _running = false;
+
+  @override
+  void dispose() {
+    _input.dispose();
+    _output.dispose();
+    super.dispose();
+  }
+
+  Future<void> _run() async {
+    final command = _input.text.trim();
+    if (_running || command.isEmpty || !_sandbox.installed.value) return;
+    setState(() {
+      _running = true;
+      _entries.add('\$ $command');
+      _input.clear();
+    });
+    try {
+      final result = await _sandbox.run(command);
+      if (mounted) setState(() => _entries.add(result));
+    } finally {
+      if (mounted) {
+        setState(() => _running = false);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _output.hasClients) {
+            _output.jumpTo(_output.position.maxScrollExtent);
+          }
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: appScreenBar(context, title: 'Alpine terminal', showBack: true),
+        body: SafeArea(child: Obx(() {
+          if (!_sandbox.installed.value) {
+            return Center(
+              child: FilledButton(
+                onPressed: _sandbox.busy.value ? null : () async {
+                  try {
+                    await _sandbox.install();
+                  } catch (error) {
+                    if (context.mounted) showToast('Install failed', '$error');
+                  }
+                },
+                child: Text(_sandbox.busy.value ? _sandbox.status.value : 'Install Alpine Linux'),
+              ),
+            );
+          }
+          return Column(children: [
+            const ListTile(
+              title: Text('/workspace'),
+              subtitle: Text('Commands start here and share files with the agent. Use cd and commands together on one line.'),
+            ),
+            Expanded(
+              child: ListView.builder(
+                controller: _output,
+                padding: const EdgeInsets.all(16),
+                itemCount: _entries.length,
+                itemBuilder: (_, index) => SelectableText(
+                  _entries[index],
+                  style: const TextStyle(fontFamily: 'monospace'),
+                ),
+              ),
+            ),
+            if (_running) const LinearProgressIndicator(),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: _input,
+                    decoration: const InputDecoration(labelText: 'Command'),
+                    autocorrect: false,
+                    onSubmitted: (_) => _run(),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Run command',
+                  onPressed: _running ? null : _run,
+                  icon: const Icon(Icons.play_arrow_rounded),
+                ),
+              ]),
+            ),
+          ]);
+        })),
+      );
+}
+
 /// Files in the AI's private workspace (attachments land here too).
 class _Workspace extends StatefulWidget {
   final AgentService agent;
@@ -702,9 +828,10 @@ class _WorkspaceState extends State<_Workspace> {
   Future<void> _load() async {
     final dir = await widget.agent.filesDir();
     final out = <FileSystemEntityInfo>[];
-    for (final f in dir.listSync()) {
-      final st = f.statSync();
-      out.add(FileSystemEntityInfo(f.path, f.path.split('/').last, st.size));
+    await for (final f in dir.list(followLinks: false)) {
+      final st = await f.stat();
+      if (st.type != FileSystemEntityType.file) continue;
+      out.add(FileSystemEntityInfo(f.path, f.uri.pathSegments.last, st.size));
     }
     out.sort((a, b) => a.name.compareTo(b.name));
     if (mounted) setState(() => _items = out);
@@ -717,6 +844,7 @@ class _WorkspaceState extends State<_Workspace> {
         AppRow(
           icon: Icons.insert_drive_file_outlined,
           title: f.name,
+          onTap: () => openAgentFile(context, Uri.encodeComponent(f.name)),
           subtitle: '${(f.size / 1024).toStringAsFixed(f.size < 10240 ? 1 : 0)} KB · AI workspace',
           trailing: IconButton(
               tooltip: 'Delete',
@@ -726,6 +854,11 @@ class _WorkspaceState extends State<_Workspace> {
                 _load();
               }),
         ),
+      AppRow(
+        icon: Icons.refresh_rounded,
+        title: 'Refresh files',
+        onTap: _load,
+      ),
       AppRow(
         icon: Icons.upload_file_rounded,
         title: 'Add a file to the AI workspace',
@@ -760,7 +893,8 @@ class _SandboxCard extends StatelessWidget {
     return Obx(() => AppGroup(children: [
           AppRow(
             icon: Icons.terminal_rounded,
-            title: sb.installed.value ? 'Alpine Linux is installed' : 'Install Alpine Linux',
+            title: sb.installed.value ? 'Alpine terminal' : 'Install Alpine Linux',
+            onTap: sb.installed.value ? () => Get.to(() => const _AlpineTerminalView()) : null,
             subtitle: sb.busy.value
                 ? sb.status.value
                 : sb.installed.value
