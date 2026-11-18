@@ -271,14 +271,12 @@ class InferenceEngine {
     final backendLabel = backend == LiteLmBackend.gpu ? 'GPU' : 'CPU';
 
     try {
-      onProgress?.call(0.05);
       if (clearCache && await cacheDir.exists()) {
         try {
           await cacheDir.delete(recursive: true);
         } catch (_) {}
       }
       await cacheDir.create(recursive: true);
-      onProgress?.call(0.18);
 
       _liteEngine = await _createLiteRtEngine(
         modelPath: modelPath,
@@ -288,7 +286,6 @@ class InferenceEngine {
         enableVision: enableVision,
       );
       _hasLoadedModel = true;
-      onProgress?.call(0.92);
       print(
           '[Inference] LiteRT-LM loaded with $backendLabel backend, ctx=$contextSize');
       return LoadResult(
@@ -321,7 +318,6 @@ class InferenceEngine {
             enableVision: false,
           );
           _hasLoadedModel = true;
-          onProgress?.call(0.92);
           return LoadResult(
             success: true,
             message:

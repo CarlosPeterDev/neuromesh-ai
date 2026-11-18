@@ -290,7 +290,9 @@ class _ModelCard extends StatelessWidget {
           title = _prettyModel(inf.loadedModelName.value.isNotEmpty
               ? inf.loadedModelName.value
               : models.lastLoadedModelName);
-          meta = 'Loading · ${(inf.modelLoadProgress.value * 100).round()}%';
+          meta = inf.modelLoadProgress.value > 0
+              ? 'Loading · ${(inf.modelLoadProgress.value * 100).round()}%'
+              : 'Preparing model…';
           dot = t.orange;
         case _ModelState.readyText:
           final runtime =
@@ -403,7 +405,7 @@ class _ModelCard extends StatelessWidget {
             ClipRRect(
               borderRadius: BorderRadius.circular(2),
               child: LinearProgressIndicator(
-                value: inf.modelLoadProgress.value,
+                value: inf.modelLoadProgress.value > 0 ? inf.modelLoadProgress.value : null,
                 minHeight: 3,
                 color: t.accent,
                 backgroundColor: t.hairline,

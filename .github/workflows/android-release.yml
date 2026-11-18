@@ -17,7 +17,8 @@ permissions:
 
 env:
   NEUROMESH_REPORT_ENDPOINT: ${{ vars.NEUROMESH_REPORT_ENDPOINT }}
-  BASE_VERSION: "1.0"   # MAJOR.MINOR; PATCH and versionCode come from the CI run number (never committed back)
+  BASE_VERSION: "1.0"   # MAJOR.MINOR; patch comes from the CI run number
+  ANDROID_VERSION_CODE_BASE: 2000   # Preserve upgrades from builds such as 1.0.56+2056
 
 jobs:
   build:
@@ -55,7 +56,7 @@ jobs:
         id: ver
         run: |
           echo "name=${BASE_VERSION}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-          echo "code=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "code=$((ANDROID_VERSION_CODE_BASE + GITHUB_RUN_NUMBER))" >> "$GITHUB_OUTPUT"
 
       - name: Prepare signing
         id: sign
@@ -385,7 +386,7 @@ jobs:
         run: |
           V="${BASE_VERSION}.${GITHUB_RUN_NUMBER}"
           SUF=""; [ '${{ steps.sign.outputs.production }}' = 'true' ] || SUF="-dev"
-          flutter build apk --release "--dart-define=NEUROMESH_REPORT_ENDPOINT=$NEUROMESH_REPORT_ENDPOINT" --target-platform android-arm64 --dart-define=PRO_BUILD=true --build-name=$V --build-number=${GITHUB_RUN_NUMBER}
+          flutter build apk --release "--dart-define=NEUROMESH_REPORT_ENDPOINT=$NEUROMESH_REPORT_ENDPOINT" --target-platform android-arm64 --dart-define=PRO_BUILD=true --build-name=$V --build-number=$((ANDROID_VERSION_CODE_BASE + GITHUB_RUN_NUMBER))
           cp build/app/outputs/flutter-apk/app-release.apk "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.apk"
           unzip -tq "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.apk"
           unzip -l "NeuroMesh-AI-Pro-v${V}-arm64${SUF}.apk" | grep -E 'libproot|libtalloc'

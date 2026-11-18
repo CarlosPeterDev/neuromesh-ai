@@ -661,7 +661,7 @@ class ModelController extends GetxController {
       _inference.isLoadingModel.value ||
       _localImage.isLoadingModel.value;
 
-  Future<void> loadModel(String filename) async {
+  Future<void> loadModel(String filename, {bool safeRetry = false}) async {
     if (_modelOperationInProgress) {
       showToast('Model loading', 'Wait for the current model load.',
           tone: ToastTone.warning);
@@ -678,7 +678,7 @@ class ModelController extends GetxController {
       ..set('file', filename)
       ..stage('file check');
     try {
-      await _loadModel(filename, report);
+      await _loadModel(filename, report, safeRetry: safeRetry);
     } catch (error, stack) {
       report
         ..set('exceptionType', error.runtimeType.toString())
@@ -694,7 +694,7 @@ class ModelController extends GetxController {
     }
   }
 
-  Future<void> _loadModel(String filename, ModelLoadDiagnostics report) async {
+  Future<void> _loadModel(String filename, ModelLoadDiagnostics report, {required bool safeRetry}) async {
     final model =
         availableModels.firstWhereOrNull((m) => m.filename == filename);
     final name = model?.name ?? filename;
@@ -879,6 +879,7 @@ class ModelController extends GetxController {
             : null);
       final result = await _inference.loadModel(
         path,
+        safeRetry: safeRetry,
         diagnostics: report,
         modelName: filename,
         modelRuntime: model?.runtime,
@@ -1804,6 +1805,20 @@ class ModelController extends GetxController {
                     : const SizedBox(width: double.infinity),
               ),
               const SizedBox(height: 20),
+              if ((filename.toLowerCase().endsWith('.gguf') ||
+                  filename.toLowerCase().endsWith('.litertlm')) &&
+                  !isFastMtpDraft(filename) &&
+                  !friendlyMsg.contains('draft companion') &&
+                  !friendlyMsg.contains('incomplete') &&
+                  !friendlyMsg.contains('Invalid'))
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.restart_alt),
+                  label: const Text('Retry with CPU and smaller context'),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    loadModel(filename, safeRetry: true);
+                  },
+                ),
               FilledButton.icon(
                 icon: const Icon(Icons.bug_report_outlined),
                 label: const Text('Report an error'),

@@ -9,6 +9,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../core/ui.dart';
 import '../services/cluster_service.dart';
 import 'workload_placement_view.dart';
+import 'model_transfer_view.dart';
 
 /// Phone cluster: pick Master (runs the model) or Worker (lends this phone),
 /// and pair them by scanning the worker's QR code.
@@ -63,6 +64,13 @@ class _ClusterViewState extends State<ClusterView> {
             ),
             const SizedBox(height: 16),
             AppGroup(children: [
+              AppRow(
+                icon: Icons.sync_alt_rounded,
+                title: 'Cluster backup & transfer',
+                subtitle: 'Choose data to send or receive on this Wi-Fi',
+                chevron: true,
+                onTap: () => Get.to(() => const ModelTransferView(clusterBackup: true)),
+              ),
               AppRow(
                 icon: Icons.devices_other_rounded,
                 title: 'Workload placement',

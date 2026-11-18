@@ -821,6 +821,42 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
         g_capture_load_error = true;
     }
 
+    struct LoadProgress {
+        JNIEnv * env;
+        jobject callback;
+        jclass double_class;
+        jmethodID constructor;
+        jmethodID invoke;
+        int last_percent = 0;
+
+        bool emit(float value) {
+            if (!invoke || !constructor) return true;
+            jobject number = env->NewObject(double_class, constructor, (jdouble)value);
+            if (!number) return false;
+            jobject response = env->CallObjectMethod(callback, invoke, number);
+            if (response) env->DeleteLocalRef(response);
+            env->DeleteLocalRef(number);
+            return !env->ExceptionCheck();
+        }
+    } progress{env, progress_callback, nullptr, nullptr, nullptr};
+
+    if (progress_callback) {
+        progress.double_class = env->FindClass("java/lang/Double");
+        jclass callback_class = env->GetObjectClass(progress_callback);
+        progress.constructor = env->GetMethodID(progress.double_class, "<init>", "(D)V");
+        progress.invoke = env->GetMethodID(callback_class, "invoke", "(Ljava/lang/Object;)Ljava/lang/Object;");
+        env->DeleteLocalRef(callback_class);
+        model_params.progress_callback_user_data = &progress;
+        model_params.progress_callback = [](float fraction, void * data) -> bool {
+            auto & state = *static_cast<LoadProgress *>(data);
+            // Reserve 1.0 for successful context and vocabulary initialization.
+            const int percent = std::min(99, static_cast<int>(fraction * 100.0f));
+            if (percent <= state.last_percent) return true;
+            state.last_percent = percent;
+            return state.emit(percent / 100.0f);
+        };
+    }
+
     // Load model
     g_model = llama_model_load_from_file(model_path, model_params);
     env->ReleaseStringUTFChars(path, model_path);
@@ -900,20 +936,7 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     g_n_past = 0;
     g_cached_tokens.clear();
 
-    // Report progress completion
-    if (progress_callback) {
-        jclass callbackClass = env->GetObjectClass(progress_callback);
-        jmethodID invokeMethod = env->GetMethodID(callbackClass, "invoke", "(Ljava/lang/Object;)Ljava/lang/Object;");
-        
-        // Create Double object for 1.0
-        jclass doubleClass = env->FindClass("java/lang/Double");
-        jmethodID doubleConstructor = env->GetMethodID(doubleClass, "<init>", "(D)V");
-        jobject doubleObj = env->NewObject(doubleClass, doubleConstructor, 1.0);
-        
-        env->CallObjectMethod(progress_callback, invokeMethod, doubleObj);
-        env->DeleteLocalRef(doubleObj);
-        env->DeleteLocalRef(callbackClass);
-    }
+    if (progress_callback) progress.emit(1.0f);
 
     LOGI("Model loaded successfully");
 }
