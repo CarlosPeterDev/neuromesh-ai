@@ -318,10 +318,19 @@ class ClusterService extends GetxService {
   /// Finds saved workers that no longer answer at their address (they moved
   /// to another Wi-Fi, a hotspot, or got a new IP) by their device ID on
   /// the network, and updates them. Returns the ones still unreachable.
+  final lastWorkerReply = <String, DateTime>{}.obs;
+  final unreachableWorkers = <String>{}.obs;
+
   Future<List<ClusterWorker>> relocateWorkers() async {
     final missing = <ClusterWorker>[];
     for (final w in workers) {
-      if (!await LlamaCluster.probe(w.endpoint)) missing.add(w);
+      if (await LlamaCluster.probe(w.endpoint)) {
+        lastWorkerReply[w.endpoint] = DateTime.now();
+        unreachableWorkers.remove(w.endpoint);
+      } else {
+        missing.add(w);
+        unreachableWorkers.add(w.endpoint);
+      }
     }
     if (missing.isEmpty) return const [];
     final seen = await LlamaCluster.discover();
@@ -335,6 +344,9 @@ class ClusterService extends GetxService {
         continue;
       }
       workers[i] = w.movedTo(match.host, match.port);
+      lastWorkerReply.remove(w.endpoint);
+      unreachableWorkers.remove(w.endpoint);
+      lastWorkerReply[match.endpoint] = DateTime.now();
       moved++;
     }
     if (moved > 0) {
@@ -351,6 +363,8 @@ class ClusterService extends GetxService {
     }
     workers.removeWhere((w) => w.endpoint == worker.endpoint);
     workers.add(worker);
+    lastWorkerReply[worker.endpoint] = DateTime.now();
+    unreachableWorkers.remove(worker.endpoint);
     found.removeWhere((w) => w.endpoint == worker.endpoint);
     await _save();
     return null;
@@ -358,6 +372,8 @@ class ClusterService extends GetxService {
 
   Future<void> remove(ClusterWorker w) async {
     workers.removeWhere((s) => s.endpoint == w.endpoint);
+    lastWorkerReply.remove(w.endpoint);
+    unreachableWorkers.remove(w.endpoint);
     await _save();
   }
 

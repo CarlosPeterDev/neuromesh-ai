@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 
 import '../core/ui.dart';
 import '../services/download_service.dart';
+import '../services/device_bridge.dart';
 import '../services/inference_service.dart';
 
 /// Measures tokens per second for the currently loaded model.
@@ -81,28 +82,44 @@ class _CompareViewState extends State<CompareView> {
     final inf = Get.find<InferenceService>();
     setState(() => _status = 'Loading $label…');
     final err = await inf.loadModel(await dl.modelPath(file), modelName: file);
+    if (!mounted) return;
     if (err.startsWith('ERROR')) {
       setState(() => r.text = err);
       return;
     }
+    if (!mounted) return;
     setState(() => _status = 'Running $label…');
     final sw = Stopwatch()..start();
     var tokens = 0;
+    int? firstTokenMs;
     final out = await inf.generate(
       prompt: _prompt.text.trim(),
       systemPrompt: 'You are a helpful assistant.',
       source: 'compare',
       maxTokens: 256,
       onToken: (t) {
+        firstTokenMs ??= sw.elapsedMilliseconds;
         tokens++;
         if (mounted) setState(() => r.text += t);
       },
     );
     sw.stop();
+    final status = Get.isRegistered<DeviceBridge>()
+        ? await Get.find<DeviceBridge>().status()
+        : const <String, dynamic>{};
+    if (!mounted) return;
+    final free = status['ramFree'];
+    final first = firstTokenMs;
+    final speed = first == null
+        ? 0.0
+        : (tokens - 1) * 1000 / (sw.elapsedMilliseconds - first).clamp(1, 1 << 30);
     setState(() {
       if (r.text.isEmpty) r.text = out;
-      r.stats =
-          '${(tokens * 1000 / sw.elapsedMilliseconds.clamp(1, 1 << 30)).toStringAsFixed(1)} tok/s · ${(sw.elapsedMilliseconds / 1000).toStringAsFixed(1)} s';
+      r.stats = [
+        if (first != null) 'First token: ${first}ms',
+        if (tokens > 1) '${speed.toStringAsFixed(1)} tok/s',
+        if (free is num) '${(free / 1073741824).toStringAsFixed(1)} GiB device RAM free',
+      ].join(' · ');
     });
   }
 
@@ -121,12 +138,12 @@ class _CompareViewState extends State<CompareView> {
     });
     try {
       await _runOne(_a!, _ra, 'model A');
-      await _runOne(_b!, _rb, 'model B');
+      if (mounted) await _runOne(_b!, _rb, 'model B');
     } finally {
       if (mounted) {
         setState(() {
           _running = false;
-          _status = 'Done. Model B is now loaded.';
+          _status = 'Comparison finished.';
         });
       }
     }

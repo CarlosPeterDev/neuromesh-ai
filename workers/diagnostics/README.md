@@ -1,6 +1,6 @@
 # Diagnostic report relay
 
-The relay is optional. For a privately configured installation, open **Report an error → Telegram delivery settings** and enter the bot token and destination Chat ID. That device sends reports directly to Telegram.
+The release owner configures delivery once for all installations. The app uses the public HTTPS relay address and does not ask users for bot credentials.
 
 The app sends the preview over HTTPS after the user taps **Send report**. The Worker creates a ZIP containing only `diagnostics.txt` and sends it to one configured Telegram chat. It rejects malformed and oversized reports and applies per-sender and per-location limits. The chat and bot credentials stay in Worker secrets.
 

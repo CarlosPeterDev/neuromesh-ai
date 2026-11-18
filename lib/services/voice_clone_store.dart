@@ -32,7 +32,7 @@ class VoiceCloneStore extends GetxService {
         .listSync()
         .whereType<File>()
         .where((f) => f.path.endsWith('.wav'))
-        .map((f) => f.path.split('/').last.replaceAll('.wav', ''))
+        .map((f) => f.uri.pathSegments.last.replaceFirst(RegExp(r'\.wav$'), ''))
         .toList()
       ..sort();
     voices.assignAll(names);

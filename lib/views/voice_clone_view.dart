@@ -1,3 +1,4 @@
+import 'voice_views.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
@@ -25,7 +26,8 @@ VoiceModelInfo get _cloneModel => voiceModelById('pocket-tts-clone')!;
 
 /// Record or import a short sample of your voice, then let the app speak in it.
 class VoiceCloneView extends StatefulWidget {
-  const VoiceCloneView({super.key});
+  final bool allowCall;
+  const VoiceCloneView({super.key, this.allowCall = true});
 
   @override
   State<VoiceCloneView> createState() => _VoiceCloneViewState();
@@ -297,6 +299,13 @@ class _VoiceCloneViewState extends State<VoiceCloneView> {
                 style: t.small),
           ),
           AppGroup(children: [
+            if (widget.allowCall && _store.active.value.isNotEmpty)
+              AppRow(
+                icon: Icons.call_outlined,
+                title: 'Call with selected voice',
+                chevron: true,
+                onTap: _busy ? null : () => Get.to(() => const VoiceCallView(useSelectedClone: true)),
+              ),
             AppRow(
               icon: Icons.record_voice_over_rounded,
               title: 'Serve my voice to other phones',

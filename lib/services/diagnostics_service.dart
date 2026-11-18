@@ -16,7 +16,6 @@ import 'hive_service.dart';
 import 'inference_service.dart';
 import 'local_image_service.dart';
 import 'model_load_diagnostics.dart';
-import 'telegram_report_delivery.dart';
 
 class DiagnosticsService {
   static const repoIssues =
@@ -174,10 +173,10 @@ class DiagnosticsService {
   }
 
   static Future<void> sendReport(
-    String preview, {TelegramReportDelivery? direct}
+    String preview,
   ) async {
     final uri = _submissionEndpoint;
-    if (uri == null && direct == null) {
+    if (uri == null) {
       throw const ReportSubmissionError(
           'Report delivery is not configured in this build.');
     }
@@ -189,18 +188,13 @@ class DiagnosticsService {
 
     final client = http.Client();
     try {
-      final delivery = direct == null
-          ? client.send(http.Request('POST', uri!)
-              ..followRedirects = false
-              ..headers['Content-Type'] = 'text/plain; charset=utf-8'
-              ..bodyBytes = bytes).then(http.Response.fromStream)
-          : direct.send(preview, client);
-      final response = await delivery.timeout(const Duration(seconds: 25));
-      if (direct != null &&
-          const [400, 401, 403, 404].contains(response.statusCode)) {
-        throw const ReportSubmissionError(
-            'Telegram rejected delivery. Check the bot token, chat ID, and that the recipient started the bot.');
-      }
+      final response = await client
+          .send(http.Request('POST', uri)
+            ..followRedirects = false
+            ..headers['Content-Type'] = 'text/plain; charset=utf-8'
+            ..bodyBytes = bytes)
+          .then(http.Response.fromStream)
+          .timeout(const Duration(seconds: 25));
       if (response.statusCode == 429) {
         throw const ReportSubmissionError(
             'Too many reports were sent. Try again in a minute.');

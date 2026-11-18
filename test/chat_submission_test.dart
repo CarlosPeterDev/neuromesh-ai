@@ -123,6 +123,27 @@ void main() {
     expect(hive.getMessagesForChat(session.id), hasLength(2));
   });
 
+  test('voice messages and attachments remain in the originating chat',
+      () async {
+    chat.createNewChat();
+    final voiceChat = chat.currentSessionId.value;
+    await chat.saveVoiceMessage(
+      voiceChat,
+      'user',
+      'Read this\n\nAttached file: notes.txt',
+      fileName: 'notes.txt',
+    );
+    chat.createNewChat();
+    await chat.saveVoiceMessage(voiceChat, 'assistant', 'Summary');
+    expect(chat.messages, isEmpty);
+
+    chat.openChat(voiceChat);
+    expect(chat.messages.map((m) => m.role), ['user', 'assistant']);
+    expect(chat.messages.first.visibleUserText, 'Read this');
+    expect(chat.messages.first.fileName, 'notes.txt');
+    expect(chat.messages.last.content, 'Summary');
+  });
+
   test('a damaged saved image leaves the rest of the message readable', () {
     final message = ChatMessage(
       id: 'broken',

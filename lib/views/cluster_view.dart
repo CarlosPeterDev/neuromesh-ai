@@ -216,7 +216,13 @@ class _ClusterViewState extends State<ClusterView> {
         icon: Icons.qr_code_scanner_rounded,
         onPressed: _scanQr,
       ),
-      SectionHeader('Workers (${cluster.workers.length})'),
+      SectionHeader(
+        'Workers (${cluster.workers.length})',
+        trailing: cluster.workers.isEmpty ? null : TextButton(
+          onPressed: cluster.relocateWorkers,
+          child: const Text('Check connection'),
+        ),
+      ),
       if (cluster.workers.isEmpty)
         const AppGroup(children: [
           EmptyState(
@@ -234,6 +240,9 @@ class _ClusterViewState extends State<ClusterView> {
               title: w.model ?? w.name,
               subtitle: [
                 w.endpoint,
+                if (cluster.unreachableWorkers.contains(w.endpoint)) 'Unreachable',
+                if (cluster.lastWorkerReply[w.endpoint] case final reply?)
+                  'Last reply ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(reply))}',
                 if (w.ramMb != null) '${_gb(w.ramMb!)} free',
                 if (w.bandwidth != null) '${w.bandwidth!.toStringAsFixed(1)} GB/s',
               ].join(' · '),

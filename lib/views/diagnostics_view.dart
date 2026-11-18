@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../services/diagnostics_service.dart';
 import '../services/model_load_diagnostics.dart';
-import '../services/telegram_report_delivery.dart';
 
 class DiagnosticsView extends StatefulWidget {
   const DiagnosticsView({super.key});
@@ -18,102 +17,17 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
   bool _sent = false;
   String? _sendError;
   String _description = '';
-  TelegramReportDelivery? _direct;
-  bool _loadingDelivery = true;
 
   @override
   void initState() {
     super.initState();
     _refresh();
-    _loadDelivery();
   }
 
   void _refresh() {
     _report = DiagnosticsService.buildReport(
       includeRecentErrors: _includeErrors,
     );
-  }
-
-  Future<void> _loadDelivery() async {
-    try {
-      final delivery = await TelegramReportDelivery.load();
-      if (mounted) setState(() => _direct = delivery);
-    } catch (_) {
-      if (mounted)
-        setState(() => _sendError = 'Could not read saved Telegram settings.');
-    } finally {
-      if (mounted) setState(() => _loadingDelivery = false);
-    }
-  }
-
-  Future<void> _editDelivery() async {
-    var token = '';
-    var chat = _direct?.chatId ?? '';
-    bool remove = false;
-    try {
-      final delivery = await showDialog<TelegramReportDelivery>(
-        context: context,
-        builder: (context) => StatefulBuilder(
-          builder: (context, update) {
-            final parsed = TelegramReportDelivery.parse(token, chat);
-            return AlertDialog(
-              title: const Text('Direct Telegram delivery'),
-              content: SingleChildScrollView(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  const Text(
-                      'These credentials are saved on this device. This destination receives your diagnostic ZIP.'),
-                  TextFormField(
-                      obscureText: true,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      decoration: const InputDecoration(labelText: 'Bot token'),
-                      onChanged: (value) => update(() => token = value)),
-                  TextFormField(
-                      initialValue: chat,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(signed: true),
-                      decoration: const InputDecoration(labelText: 'Chat ID'),
-                      onChanged: (value) => update(() => chat = value)),
-                ]),
-              ),
-              actions: [
-                if (_direct != null)
-                  TextButton(
-                      onPressed: () {
-                        remove = true;
-                        Navigator.pop(context);
-                      },
-                      child: const Text('Remove')),
-                TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Cancel')),
-                FilledButton(
-                    onPressed: parsed == null
-                        ? null
-                        : () => Navigator.pop(context, parsed),
-                    child: const Text('Save')),
-              ],
-            );
-          },
-        ),
-      );
-      if (remove) {
-        await TelegramReportDelivery.clear();
-      } else if (delivery != null) {
-        await delivery.save();
-      } else {
-        return;
-      }
-      if (mounted)
-        setState(() {
-          _direct = delivery;
-          _sendError = null;
-        });
-    } catch (_) {
-      if (mounted)
-        setState(
-            () => _sendError = 'Could not save credentials to secure storage.');
-    }
   }
 
   Future<void> _send(String preview) async {
@@ -123,7 +37,7 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
       _sendError = null;
     });
     try {
-      await DiagnosticsService.sendReport(preview, direct: _direct);
+      await DiagnosticsService.sendReport(preview);
       if (mounted) setState(() => _sent = true);
     } on ReportSubmissionError catch (error) {
       if (mounted) setState(() => _sendError = error.message);
@@ -134,14 +48,7 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Report an error'), actions: [
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Telegram delivery settings',
-            onPressed:
-                _loadingDelivery || _sending || _sent ? null : _editDelivery,
-          ),
-        ]),
+        appBar: AppBar(title: const Text('Report an error')),
         body: SafeArea(
           child: FutureBuilder<String>(
             future: _report,
@@ -149,8 +56,7 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
               final ready = snapshot.connectionState == ConnectionState.done;
               final report = ready ? snapshot.data : null;
               final note = diagnosticText(_description.trim());
-              final needsDelivery =
-                  _direct == null && !DiagnosticsService.canSendReport;
+              final canSend = DiagnosticsService.canSendReport;
               final preview = report == null || note.isEmpty
                   ? report
                   : 'Problem description\n$note\n\n$report';
@@ -227,26 +133,22 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
                                 style: TextStyle(
                                     color:
                                         Theme.of(context).colorScheme.error)),
-                          if (needsDelivery && !_loadingDelivery)
-                            FilledButton.icon(
-                              icon: const Icon(Icons.settings_outlined),
-                              label: const Text('Set up direct delivery'),
-                              onPressed: _editDelivery,
-                            )
-                          else
-                            FilledButton.icon(
-                              icon: Icon(_sent
-                                  ? Icons.check_rounded
-                                  : Icons.send_outlined),
-                              label: Text(_sent
-                                  ? 'Report sent'
-                                  : _sending
-                                      ? 'Sending…'
-                                      : 'Send report'),
-                              onPressed: _loadingDelivery || _sending || _sent
-                                  ? null
-                                  : () => _send(preview),
-                            ),
+                          if (!canSend)
+                            const Text(
+                                'Support uploads are unavailable in this build.'),
+                          FilledButton.icon(
+                            icon: Icon(_sent
+                                ? Icons.check_rounded
+                                : Icons.send_outlined),
+                            label: Text(_sent
+                                ? 'Report sent'
+                                : _sending
+                                    ? 'Sending…'
+                                    : 'Send report'),
+                            onPressed: !canSend || _sending || _sent
+                                ? null
+                                : () => _send(preview),
+                          ),
                         ],
                       ),
                     ),

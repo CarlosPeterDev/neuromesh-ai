@@ -14,7 +14,7 @@ The app uses the network only when you ask it to:
 - Searching and downloading models from Hugging Face (huggingface.co) and voice models from GitHub.
 - Optional features you turn on: a cloud provider with your own API key, MCP servers you add, the agent's "fetch web page" tool (asks first unless you choose Always allow), the local API server (reachable on your local network only while you run it), and Phone cluster over your Wi-Fi. If you assign a worker phone, that phone receives the text, audio or image prompt needed for that workload over your local network.
 - Opening a public GitHub issue draft with the description you write when you choose "Send feedback".
-- When you tap "Send report", the app sends your description and diagnostic preview over HTTPS. With direct Telegram delivery configured on your device, the app sends a ZIP to the chat you select and stores the bot token in the device’s secure storage. Builds with a support relay send reports to that relay for delivery via Telegram. The preview can include app version, device and memory information, model-load details, and recent app logs if you choose to include them.
+- When you tap "Send report", the app sends your description and diagnostic preview over HTTPS. The configured support relay delivers the report to the support team. The preview can include app version, device and memory information, model-load details, and recent app logs if you choose to include them.
 
 ## Permissions
 - Microphone: voice calls and voice typing.
