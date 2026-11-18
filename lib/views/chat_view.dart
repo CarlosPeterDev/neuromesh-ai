@@ -544,6 +544,7 @@ class ChatView extends GetView<ChatController> {
             steps: steps,
             messageId: 'live-${controller.messages.lastOrNull?.id}',
             live: true,
+            traceSource: controller.streamingResponse,
           ),
         if (hasText && !isImageGen)
           Obx(() {

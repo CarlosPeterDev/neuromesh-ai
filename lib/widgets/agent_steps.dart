@@ -100,11 +100,13 @@ class AgentStepsView extends StatefulWidget {
   final List<AgentStep> steps;
   final String messageId;
   final bool live;
+  final RxString? traceSource;
   const AgentStepsView(
       {super.key,
       required this.steps,
       required this.messageId,
-      this.live = false});
+      this.live = false,
+      this.traceSource});
   @override
   State<AgentStepsView> createState() => _AgentStepsViewState();
 }
@@ -129,6 +131,13 @@ class _AgentStepsViewState extends State<AgentStepsView> {
 
   Future<void> showSteps() async {
     open = true;
+    final source = widget.traceSource;
+    final worker = source == null
+        ? null
+        : ever<String>(source, (text) {
+            final current = splitSteps(text).$1;
+            if (current.isNotEmpty) changes.value = current;
+          });
     await showDialog<void>(
         context: context,
         builder: (ctx) => Dialog(
@@ -159,6 +168,7 @@ class _AgentStepsViewState extends State<AgentStepsView> {
                         ])),
               ),
             ));
+    worker?.dispose();
     open = false;
     if (!mounted) changes.dispose();
   }

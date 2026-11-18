@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
 import 'package:neuromesh_ai/widgets/agent_steps.dart';
 
 void main() {
@@ -74,6 +75,28 @@ void main() {
     await tester.pumpWidget(view(false));
     await tester.pump();
     expect(find.text('Read file'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('live trace completes even before the chat widget rebuilds',
+      (tester) async {
+    final source = ''.obs;
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: AgentStepsView(
+      messageId: 'direct-call',
+      live: true,
+      traceSource: source,
+      steps: const [AgentStep('write_file', 'Writing file', {}, '', true, 0)],
+    ))));
+    await tester.tap(find.textContaining('Working…'));
+    await tester.pump(const Duration(milliseconds: 300));
+    source.value =
+        '> 🔧 {"n":"write_file","l":"Saved file","a":{},"r":"done","run":false,"ms":12}';
+    await tester.pump();
+    expect(find.text('Saved file'), findsOneWidget);
+    expect(find.text('Writing file'), findsNothing);
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 }
