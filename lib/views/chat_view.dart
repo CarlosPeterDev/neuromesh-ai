@@ -18,6 +18,7 @@ import '../services/local_image_service.dart';
 import '../ffi/sd_ffi_bindings.dart';
 import '../utils/thought_parser.dart';
 import '../widgets/agent_steps.dart';
+import '../widgets/context_mentions.dart';
 import '../widgets/attachment_preview.dart';
 import '../widgets/chat_bubble.dart';
 import '../widgets/chat_drawer.dart';
@@ -890,6 +891,7 @@ class ChatView extends GetView<ChatController> {
                       context: context,
                     );
                   }),
+                  ContextMentionButton(controller: controller),
                   // Text field
                   // Same 40px base height as the buttons so a single line sits
                   // centred; taller multi-line input keeps buttons at the bottom.

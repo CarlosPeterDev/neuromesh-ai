@@ -36,7 +36,7 @@ void main() {
         );
 
     await tester.pumpWidget(chat(true));
-    expect(find.text('Working…'), findsOneWidget);
+    expect(find.textContaining('Working…'), findsOneWidget);
     expect(find.text('Input'), findsNothing);
 
     await tester.pumpWidget(chat(false));
@@ -53,6 +53,27 @@ void main() {
     expect(find.text('Input'), findsOneWidget);
     expect(find.text('Text'), findsOneWidget);
     expect(tester.getSize(find.byType(BottomSheet)).height, lessThan(500));
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('open activity dialog updates while the agent runs',
+      (tester) async {
+    Widget view(bool running) => MaterialApp(
+            home: Scaffold(
+                body: AgentStepsView(
+          messageId: 'same-turn',
+          live: true,
+          steps: [
+            AgentStep('read_file', running ? 'Reading file' : 'Read file',
+                {'name': 'notes.md'}, running ? '' : 'notes', running, 12)
+          ],
+        )));
+    await tester.pumpWidget(view(true));
+    await tester.tap(find.textContaining('Working…'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Reading file'), findsOneWidget);
+    await tester.pumpWidget(view(false));
+    await tester.pump();
+    expect(find.text('Read file'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

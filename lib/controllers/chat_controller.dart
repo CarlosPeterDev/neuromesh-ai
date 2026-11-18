@@ -25,6 +25,7 @@ import '../services/local_image_service.dart';
 import '../services/app_log_service.dart';
 import '../services/image_generation_notification_service.dart';
 import '../services/document_extractor_service.dart';
+import '../services/skills_service.dart';
 import '../services/rag_service.dart';
 import '../services/agent_service.dart';
 import '../services/download_service.dart';
@@ -142,7 +143,8 @@ class ChatController extends GetxController {
       }
       if (!sttAvailable.value) await _initSpeech();
       if (!sttAvailable.value) {
-        showToast('Dictation unavailable', 'Check microphone permission and speech recognition on this device.',
+        showToast('Dictation unavailable',
+            'Check microphone permission and speech recognition on this device.',
             tone: ToastTone.warning);
         return;
       }
@@ -157,7 +159,8 @@ class ChatController extends GetxController {
       isListening.value = _speech.isListening;
     } catch (_) {
       isListening.value = false;
-      showToast('Dictation could not start', 'Try again.', tone: ToastTone.warning);
+      showToast('Dictation could not start', 'Try again.',
+          tone: ToastTone.warning);
     }
   }
 
@@ -201,7 +204,8 @@ class ChatController extends GetxController {
     try {
       await inference.resetConversation();
     } catch (error) {
-      Get.find<AppLogService>().warning('Could not reset chat context', details: error);
+      Get.find<AppLogService>()
+          .warning('Could not reset chat context', details: error);
     }
   }
 
@@ -461,7 +465,8 @@ class ChatController extends GetxController {
       // A text-only model cannot look at pictures or listen, but the agent can
       // work on the file with its tools (transcribe_audio, the sandbox, ...).
       if (documentsOnly && (fileType == 'image' || fileType == 'audio')) {
-        if (kIsWeb || Get.find<AgentService>().mode.value == AgentChatMode.off) {
+        if (kIsWeb ||
+            Get.find<AgentService>().mode.value == AgentChatMode.off) {
           showToast(
             'Not supported by this model',
             'This model reads text only. Attach a PDF, DOCX, or text/code file, or turn tools on so the AI can process this file.',
@@ -473,7 +478,8 @@ class ChatController extends GetxController {
       }
 
       if (fileType == 'file' &&
-          (kIsWeb || Get.find<AgentService>().mode.value == AgentChatMode.off)) {
+          (kIsWeb ||
+              Get.find<AgentService>().mode.value == AgentChatMode.off)) {
         showToast(
           'Tools are off',
           kIsWeb
@@ -696,13 +702,15 @@ class ChatController extends GetxController {
     final old = history.sublist(0, history.length - keep);
     final tail = history.sublist(history.length - keep);
     var transcript = old
-        .map((m) => '${m['role'] == 'user' ? 'User' : 'Assistant'}: ${m['content']}')
+        .map((m) =>
+            '${m['role'] == 'user' ? 'User' : 'Assistant'}: ${m['content']}')
         .join('\n');
     final maxChars = (ctx * 1.4).toInt();
     if (transcript.length > maxChars) {
       transcript = transcript.substring(transcript.length - maxChars);
     }
-    streamingResponse.value = '> ⏳ Summarising the earlier conversation so the chat can keep going…';
+    streamingResponse.value =
+        '> ⏳ Summarising the earlier conversation so the chat can keep going…';
     try {
       final summary = (await inf.generate(
         prompt:
@@ -711,7 +719,8 @@ class ChatController extends GetxController {
             'numbers, decisions made, files created (with names), results of tools, preferences, and open tasks or '
             'questions. If the text already starts with an earlier summary, merge its bullets with the new points and '
             'drop anything outdated. At most 25 bullets, no introduction, no closing sentence — only the bullets.\n\n$transcript',
-        systemPrompt: 'You write faithful, compact bullet-point summaries of conversations.',
+        systemPrompt:
+            'You write faithful, compact bullet-point summaries of conversations.',
         conversationHistory: const [],
         source: 'summary',
         stopSequences: const [],
@@ -719,7 +728,8 @@ class ChatController extends GetxController {
       ))
           .trim();
       if (generationId != _generationSerial ||
-          summary.isEmpty || summary.startsWith('ERROR')) {
+          summary.isEmpty ||
+          summary.startsWith('ERROR')) {
         return;
       }
       final newCovered = covered + (old.length - prefix);
@@ -736,8 +746,15 @@ class ChatController extends GetxController {
   }
 
   List<Map<String, String>> _summaryPair(String summary) => [
-        {'role': 'user', 'content': '[Key points of our earlier conversation — the older messages were dropped, continue from these]\n$summary'},
-        {'role': 'assistant', 'content': 'Understood. I will continue from that.'},
+        {
+          'role': 'user',
+          'content':
+              '[Key points of our earlier conversation — the older messages were dropped, continue from these]\n$summary'
+        },
+        {
+          'role': 'assistant',
+          'content': 'Understood. I will continue from that.'
+        },
       ];
 
   Future<void> sendMessage() => _submitMessage();
@@ -752,35 +769,28 @@ class ChatController extends GetxController {
     final text = previous == null
         ? draftText.trim()
         : editedText ?? previous.visibleUserText;
-    final fileName = previous == null
-        ? selectedFileName.value
-        : previous.fileName;
-    final fileContent = previous == null
-        ? selectedFileContent.value
-        : previous.fileContent;
-    final filePath = previous == null
-        ? selectedFilePath.value
-        : previous.filePath;
-    final fileType = previous == null
-        ? selectedFileType.value
-        : previous.fileType;
+    final fileName =
+        previous == null ? selectedFileName.value : previous.fileName;
+    final fileContent =
+        previous == null ? selectedFileContent.value : previous.fileContent;
+    final filePath =
+        previous == null ? selectedFilePath.value : previous.filePath;
+    final fileType =
+        previous == null ? selectedFileType.value : previous.fileType;
     final fileSize =
         (previous == null ? selectedFileSize.value : previous.fileSize) ?? 0;
-    final imagePath = previous == null
-        ? selectedImagePath.value
-        : previous.imagePath;
-    final imageBase64 = previous == null
-        ? selectedImageBase64.value
-        : previous.imageBase64;
+    final imagePath =
+        previous == null ? selectedImagePath.value : previous.imagePath;
+    final imageBase64 =
+        previous == null ? selectedImageBase64.value : previous.imageBase64;
     if (text.isEmpty &&
         imagePath == null &&
         imageBase64 == null &&
         fileName == null) {
       return;
     }
-    final visibleText = text.isEmpty
-        ? _defaultAttachmentPrompt(fileType)
-        : text;
+    final visibleText =
+        text.isEmpty ? _defaultAttachmentPrompt(fileType) : text;
 
     if (currentSessionId.value.isEmpty) createNewChat();
     final sessionId = currentSessionId.value;
@@ -811,8 +821,8 @@ class ChatController extends GetxController {
           Get.isRegistered<AgentService>()) {
         try {
           final agent = Get.find<AgentService>();
-          workspaceName = await agent.inProject(project,
-              () => agent.importToWorkspace(filePath, fileName));
+          workspaceName = await agent.inProject(
+              project, () => agent.importToWorkspace(filePath, fileName));
         } on FileSystemException {
           if (fileContent == null || fileContent.trim().isEmpty) rethrow;
         }
@@ -823,12 +833,11 @@ class ChatController extends GetxController {
           ? '$visibleText\n\nAttached file: $fileName\n```text\n$fileContent\n```'
           : visibleText;
       if (workspaceName != null && (!hasInline || truncated)) {
-        final size = fileSize > 0
-            ? ' (${DownloadService.formatBytes(fileSize)})'
-            : '';
+        final size =
+            fileSize > 0 ? ' (${DownloadService.formatBytes(fileSize)})' : '';
         final fnm = fileName ?? '';
-        final ext = (fnm.contains('.') ? fnm.split('.').last : '')
-            .toLowerCase();
+        final ext =
+            (fnm.contains('.') ? fnm.split('.').last : '').toLowerCase();
         const audioExt = {
           'mp3',
           'm4a',
@@ -845,8 +854,8 @@ class ChatController extends GetxController {
         final hint = audioExt.contains(ext)
             ? 'It is audio/video: use transcribe_audio to get the text.'
             : imageExt.contains(ext)
-            ? 'It is a picture: you cannot see it, but you can read text in it with the sandbox (tesseract OCR) when available, or convert it with convert_file.'
-            : 'Use file_info, read_file and search_in_file to look inside it; for archives, spreadsheets or other formats use unzip_file, convert_file or the sandbox.';
+                ? 'It is a picture: you cannot see it, but you can read text in it with the sandbox (tesseract OCR) when available, or convert it with convert_file.'
+                : 'Use file_info, read_file and search_in_file to look inside it; for archives, spreadsheets or other formats use unzip_file, convert_file or the sandbox.';
         final note =
             'The attached file "$fileName"$size is saved in your workspace as '
             '"$workspaceName". $hint';
@@ -860,10 +869,10 @@ class ChatController extends GetxController {
       final needsFileTools = previous == null
           ? workspaceName != null && (!hasInline || truncated)
           : fileName != null &&
-                fileType != 'image' &&
-                fileType != 'audio' &&
-                (!hasInline || truncated) &&
-                effectiveText.contains('saved in your workspace');
+              fileType != 'image' &&
+              fileType != 'audio' &&
+              (!hasInline || truncated) &&
+              effectiveText.contains('saved in your workspace');
       if (generationId != _generationSerial) return;
 
       // Encode image to base64 if it's not already pre-encoded, so the message
@@ -874,8 +883,7 @@ class ChatController extends GetxController {
       }
 
       if (generationId != _generationSerial) return;
-      final userMsg =
-          previous?.withUserText(visibleText) ??
+      final userMsg = previous?.withUserText(visibleText) ??
           ChatMessage(
             id: _uuid.v4(),
             chatId: sessionId,
@@ -936,6 +944,12 @@ class ChatController extends GetxController {
         }
       }
 
+      final contextAgent = Get.find<AgentService>();
+      final skillContext = Get.isRegistered<SkillsService>()
+          ? await Get.find<SkillsService>().prepare(visibleText,
+              await contextAgent.inProject(project, contextAgent.filesDir))
+          : null;
+
       // Add the best-matching passages from the user's documents (if enabled).
       final genPrompt = Get.isRegistered<RagService>()
           ? await Get.find<RagService>().augment(effectiveText, visibleText)
@@ -943,9 +957,8 @@ class ChatController extends GetxController {
 
       if (generationId != _generationSerial) return;
       isStreaming.value = true;
-      streamingAttachmentType.value = (imagePath != null || fileType == 'audio')
-          ? fileType
-          : null;
+      streamingAttachmentType.value =
+          (imagePath != null || fileType == 'audio') ? fileType : null;
       streamingResponse.value = '';
       _followStreaming = true;
       _scrollToBottom(force: true);
@@ -957,8 +970,8 @@ class ChatController extends GetxController {
       // pre-search so the web is not searched twice.
       final agentResearches =
           Get.find<SettingsController>().inferenceMode.value == 'local' &&
-          Get.find<AgentService>().wantsTools(visibleText) &&
-          Get.find<AgentService>().needsResearch(visibleText);
+              Get.find<AgentService>().wantsTools(visibleText) &&
+              Get.find<AgentService>().needsResearch(visibleText);
       if (!agentResearches &&
           Get.isRegistered<WebSearchService>() &&
           Get.find<WebSearchService>().shouldSearch(visibleText)) {
@@ -1118,34 +1131,47 @@ class ChatController extends GetxController {
           // Explicit "remember that …" is handled directly, without the model.
           final saved = await agent.rememberDirect(visibleText);
           if (generationId != _generationSerial) return;
-          final useTools =
-              agent.wantsTools(visibleText, hasFile: needsFileTools);
-          final system = agent.composeSystem(_effectiveSystemPrompt,
-              withTools: useTools, request: visibleText, withFiles: needsFileTools);
+          final useTools = agent.wantsTools(visibleText,
+              hasFile: needsFileTools ||
+                  (skillContext?.documents.isNotEmpty ?? false));
+          final contextSize = inference.contextTokensTotal.value > 0
+              ? inference.contextTokensTotal.value
+              : 2048;
+          String buildSystem() => [
+                agent.composeSystem(_effectiveSystemPrompt,
+                    withTools: useTools,
+                    request: visibleText,
+                    withFiles: needsFileTools,
+                    contextSize: contextSize),
+                if (skillContext != null && skillContext.documents.isNotEmpty)
+                  skillContext.prompt(contextSize ~/ 4),
+              ].join('\n\n');
+          final system = buildSystem();
 
           // LiteRT models can consume image/audio attachments. GGUF currently
           // returns a clear unsupported message from the inference layer.
-          Future<String> generateOnce(
-                  String prompt,
-                  List<Map<String, String>> hist,
-                  void Function(String) onTok) {
+          Future<String> generateOnce(String prompt,
+              List<Map<String, String>> hist, void Function(String) onTok) {
             // Never send more than the context can hold: an overflow makes
             // small models fail or answer nothing.
+            final currentSystem =
+                '${buildSystem()}${prompt == finalPrompt ? '' : '\n\nCurrent user request: $visibleText'}';
             prompt = AgentService.fitToContext(
-                system, hist, prompt, inference.contextTokensTotal.value);
+                currentSystem, hist, prompt, contextSize);
             return inference.generate(
-                prompt: prompt,
-                systemPrompt: system,
-                conversationHistory: hist,
-                source: 'chat',
-                imagePath: imagePath,
-                audioPath: fileType == 'audio' ? filePath : null,
-                stopSequences: stops,
-                onToken: onTok,
-              );
+              prompt: prompt,
+              systemPrompt: currentSystem,
+              conversationHistory: hist,
+              source: 'chat',
+              imagePath: imagePath,
+              audioPath: fileType == 'audio' ? filePath : null,
+              stopSequences: stops,
+              onToken: onTok,
+            );
           }
 
-          await _compactHistory(history, system, finalPrompt, inference, generationId);
+          await _compactHistory(
+              history, system, finalPrompt, inference, generationId);
           if (generationId != _generationSerial) return;
 
           if (!useTools) {
@@ -1166,39 +1192,45 @@ class ChatController extends GetxController {
                 if (traceMd.isNotEmpty) traceMd,
                 if (status.isNotEmpty) '> ⏳ $status',
               ];
-              streamingResponse.value =
-                  [if (parts.isNotEmpty) parts.join('\n'), visible]
-                      .where((e) => e.isNotEmpty)
-                      .join('\n\n');
+              streamingResponse.value = [
+                if (parts.isNotEmpty) parts.join('\n'),
+                visible
+              ].where((e) => e.isNotEmpty).join('\n\n');
               trackThoughtTiming();
               _scrollToBottom();
             }
 
+            Future<ToolLoopResult> runAgentLoop() => agent.runToolLoop(
+                  generate: generateOnce,
+                  allowDirectActions:
+                      skillContext == null || skillContext.documents.isEmpty,
+                  prompt: finalPrompt,
+                  history: history,
+                  confirm: confirmToolCall,
+                  userText: visibleText,
+                  researchQuestion:
+                      agent.needsResearch(visibleText) ? visibleText : null,
+                  cancelled: () => generationId != _generationSerial,
+                  onVisible: (v) {
+                    visible = v;
+                    render();
+                  },
+                  onStatus: (st) {
+                    status = st;
+                    render();
+                  },
+                  onTrace: (t) {
+                    traceMd = t.join('\n');
+                    visible = '';
+                    status = '';
+                    render();
+                  },
+                );
             final result = await agent.inProject(
-              project,
-              () => agent.runToolLoop(
-              generate: generateOnce,
-              prompt: finalPrompt,
-              history: history,
-              confirm: confirmToolCall,
-              userText: visibleText,
-              researchQuestion: agent.needsResearch(visibleText) ? visibleText : null,
-              cancelled: () => generationId != _generationSerial,
-              onVisible: (v) {
-                visible = v;
-                render();
-              },
-              onStatus: (st) {
-                status = st;
-                render();
-              },
-              onTrace: (t) {
-                traceMd = t.join('\n');
-                visible = '';
-                status = '';
-                render();
-              },
-            ));
+                project,
+                () => skillContext == null
+                    ? runAgentLoop()
+                    : SkillsService.inTurn(skillContext, runAgentLoop));
             rawResponse = result.markdown;
           }
           if (saved != null && !rawResponse.startsWith('ERROR')) {
@@ -1208,13 +1240,17 @@ class ChatController extends GetxController {
       } else {
         final cloud = Get.find<CloudService>();
         if (webCtx != null && history.isNotEmpty) {
-          history.last['content'] = '${webCtx.block}\n\n${history.last['content']}';
+          history.last['content'] =
+              '${webCtx.block}\n\n${history.last['content']}';
         }
         final apiMessages = [
           {
             'role': 'system',
             'content': Get.find<AgentService>()
-                .composeSystem(_effectiveSystemPrompt, withTools: false)
+                    .composeSystem(_effectiveSystemPrompt, withTools: false) +
+                (skillContext == null || skillContext.documents.isEmpty
+                    ? ''
+                    : '\n\n${skillContext.prompt(2048)}')
           },
           ...history,
         ];
@@ -1418,7 +1454,8 @@ class ChatController extends GetxController {
     }
     _updateSession(session.copyWith(
       title: title,
-      lastMessage: role == 'user' ? message.visibleUserText : stripToolTrace(content),
+      lastMessage:
+          role == 'user' ? message.visibleUserText : stripToolTrace(content),
     ));
     await _hive.saveMessage(message.id, message.toMap());
   }

@@ -24,10 +24,18 @@ Anything not listed here is not implemented yet.
 
 Download the APK from the [Releases](../../releases) page.
 
-The full Pro APK and Pro AAB include the native Linux launcher. Alpine Linux downloads when you choose **Install Alpine Linux** in Chat tools or the terminal. The standard Play AAB uses the restricted Play configuration. Google Play distribution of the full Linux build requires policy review.
+The normal APK and AAB include the small ARM64 native Linux launcher. Alpine itself is an optional download from **Install Alpine Linux** in Chat tools or the terminal; it is not bundled with the app. The normal standalone APK uses the same Play build flags and restricted manifest as the AAB. Other Android ABIs can use chat features; the Alpine launcher currently requires ARM64. Store distribution of downloadable runtime packages still requires policy review.
 
 In **Models**, filter **Main models** or **Helpers**. Open a model and choose **Find model helpers** to inspect its original repository. Downloaded vision helpers can be linked to a matching installed model. Reload the main model after the helper download completes. File-role detection uses names, and each helper shows its runtime and compatibility requirements.
 Builds without production signing secrets are **development builds** and are labeled as pre-releases. They are not production-ready.
+
+## Skills and context
+
+Open **Settings → Skills** to create a skill or import `SKILL.md` / a ZIP containing one skill folder, including `references`, `scripts` and `assets`. The format follows [Agent Skills](https://agentskills.io/specification). Imports validate metadata, reject links and unsafe archive paths, and never run scripts automatically. Enable or disable each skill locally. Tap **@** in the chat composer to pick a skill or a current-workspace file, or type `@skill:code-review` / `@file:"docs/notes.md"`.
+
+For local agent chat, relevant enabled skills are selected using BM25 keyword ranking over names and descriptions. Selected documents are divided into overlapping pages. `read_context`, `search_context` and `list_skill_files` load the next relevant resources; active pages are rebuilt in the system prompt on each tool turn, separately from history compaction. This is bounded retrieval, not a guarantee that a small model follows arbitrarily long instructions. The app preserves the current user request and reports a capacity error instead of silently cutting mandatory instructions. Cloud text chat receives selected excerpts; paged agent tools currently require local agent chat. Skill tasks never become cross-chat user memories.
+
+Agent activity appears as a compact row. Open it for a live tool list and tap a step for request/result details. These show actual tool activity, not hidden model reasoning.
 
 ## Build
 

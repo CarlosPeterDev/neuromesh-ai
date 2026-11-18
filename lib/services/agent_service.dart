@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
 import '../utils/bm25.dart';
+import '../utils/skill_context.dart';
 import '../utils/memory_text.dart';
 import '../utils/page_text.dart';
 import '../utils/web_search_parse.dart';
@@ -63,7 +64,8 @@ class ToolLoopResult {
   /// the model on later turns.
   static const traceMark = '> 🔧 ';
 
-  String get markdown => trace.isEmpty ? answer : '${trace.join('\n')}\n\n$answer';
+  String get markdown =>
+      trace.isEmpty ? answer : '${trace.join('\n')}\n\n$answer';
 }
 
 /// Removes tool-trace lines from a saved assistant message.
@@ -76,7 +78,7 @@ String stripToolTrace(String content) => content
 enum AgentChatMode { auto, always, off }
 
 /// Lets the chat model use tools: files, memory, the web, MCP servers and
-/// (in the Pro build) a Linux sandbox. It is part of normal chat: when the
+/// an optional Linux sandbox. It is part of normal chat: when the
 /// model needs a tool it calls it, then keeps answering.
 class AgentService extends GetxService {
   static const _serversKey = 'mcp_servers';
@@ -95,6 +97,7 @@ class AgentService extends GetxService {
   final _tools = <String, List<McpTool>>{};
   final toolsVersion = 0.obs; // bumps when a server's tool list changes
   final memory = <String>[].obs;
+
   /// Per-tool choice: 'allow' (never ask), 'ask' (always ask) or 'block'.
   /// Key is "server::tool". Tools with no entry use their default.
   final policy = <String, String>{}.obs;
@@ -124,7 +127,8 @@ class AgentService extends GetxService {
       runZoned(action, zoneValues: {_workspaceKey: project});
 
   String get _project => Zone.current[_workspaceKey] as String? ?? '';
-  String get _projectId => base64Url.encode(utf8.encode(_project)).replaceAll('=', '');
+  String get _projectId =>
+      base64Url.encode(utf8.encode(_project)).replaceAll('=', '');
 
   Future<Directory> filesDir() async {
     final base = await getApplicationDocumentsDirectory();
@@ -138,7 +142,8 @@ class AgentService extends GetxService {
   Future<Directory> _versionDir(String name) async {
     final base = await getApplicationDocumentsDirectory();
     final key = base64Url.encode(utf8.encode(name)).replaceAll('=', '');
-    return Directory('${base.path}/agent_revisions/${_project.isEmpty ? "_" : _projectId}/$key');
+    return Directory(
+        '${base.path}/agent_revisions/${_project.isEmpty ? "_" : _projectId}/$key');
   }
 
   Future<void> _keepFileVersion(File file) async {
@@ -155,7 +160,11 @@ class AgentService extends GetxService {
 
   Future<List<File>> _versions(Directory dir) async {
     if (!await dir.exists()) return [];
-    return (await dir.list(followLinks: false).where((entry) => entry is File).cast<File>().toList())
+    return (await dir
+        .list(followLinks: false)
+        .where((entry) => entry is File)
+        .cast<File>()
+        .toList())
       ..sort((a, b) => b.path.compareTo(a.path));
   }
 
@@ -166,7 +175,8 @@ class AgentService extends GetxService {
     await for (final dir in root.list(followLinks: false)) {
       if (dir is! Directory) continue;
       try {
-        names.add(utf8.decode(base64Url.decode(base64Url.normalize(dir.uri.pathSegments.where((part) => part.isNotEmpty).last))));
+        names.add(utf8.decode(base64Url.decode(base64Url.normalize(
+            dir.uri.pathSegments.where((part) => part.isNotEmpty).last))));
       } on FormatException {
         continue;
       }
@@ -187,7 +197,8 @@ class AgentService extends GetxService {
     final dir = await _versionDir(name);
     final source = File('${dir.path}/$version');
     if (!await source.exists()) return false;
-    final temp = File('${file.path}.restore-${DateTime.now().microsecondsSinceEpoch}');
+    final temp =
+        File('${file.path}.restore-${DateTime.now().microsecondsSinceEpoch}');
     await source.copy(temp.path);
     try {
       await _keepFileVersion(file);
@@ -203,7 +214,8 @@ class AgentService extends GetxService {
     final n = name.split('/').last.split('\\').last;
     if (n.isEmpty || n.startsWith('.')) throw Exception('Invalid file name');
     final path = '${(await filesDir()).path}/$n';
-    if (await FileSystemEntity.type(path, followLinks: false) == FileSystemEntityType.link) {
+    if (await FileSystemEntity.type(path, followLinks: false) ==
+        FileSystemEntityType.link) {
       throw ArgumentError('Workspace tools cannot open symbolic links.');
     }
     return File(path);
@@ -212,7 +224,12 @@ class AgentService extends GetxService {
   /// Copies a file the user attached into the workspace so tools can read it.
   /// Returns the name it can be read by.
   Future<String> importToWorkspace(String sourcePath, String name) async {
-    var clean = name.split('/').last.split('\\').last.replaceAll(RegExp(r'[^\w.\- ]'), '_');
+    var clean = name
+        .split('/')
+        .last
+        .split('\\')
+        .last
+        .replaceAll(RegExp(r'[^\w.\- ]'), '_');
     if (clean.isEmpty || clean.startsWith('.')) clean = 'file_$clean';
     final dir = await filesDir();
     var dest = File('${dir.path}/$clean');
@@ -277,11 +294,14 @@ class AgentService extends GetxService {
             caseSensitive: false,
             dotAll: true)
         .firstMatch(text);
-    final ar = RegExp(r'^\s*(?:تذكر|افتكر|احفظ في الذاكرة)(?:\s+إن|\s+ان|\s+أن)?[\s:،-]+(.{3,300})$',
+    final ar = RegExp(
+            r'^\s*(?:تذكر|افتكر|احفظ في الذاكرة)(?:\s+إن|\s+ان|\s+أن)?[\s:،-]+(.{3,300})$',
             dotAll: true)
         .firstMatch(text);
     final note = (m ?? ar)?.group(1)?.trim();
-    if (note == null || note.endsWith('?') || note.endsWith('؟') ||
+    if (note == null ||
+        note.endsWith('?') ||
+        note.endsWith('؟') ||
         isMemoryTask(note)) return null;
     await addNote(note);
     return note;
@@ -355,12 +375,14 @@ class AgentService extends GetxService {
 
   void removeTool(String name) => _extra.removeWhere((e) => e.name == name);
 
-  bool hasTool(String name) => _extra.any((e) => e.name == name) || _builtIns.any((e) => e.name == name);
+  bool hasTool(String name) =>
+      _extra.any((e) => e.name == name) || _builtIns.any((e) => e.name == name);
 
   // ── built-in tools ───────────────────────────────────────────────────
 
-  UserFilesService? get _user =>
-      Get.isRegistered<UserFilesService>() ? Get.find<UserFilesService>() : null;
+  UserFilesService? get _user => Get.isRegistered<UserFilesService>()
+      ? Get.find<UserFilesService>()
+      : null;
 
   bool get _hasFolders => _user != null && _user!.folders.isNotEmpty;
 
@@ -376,7 +398,8 @@ class AgentService extends GetxService {
 
   static String _magic(List<int> b) {
     bool starts(List<int> m) =>
-        b.length >= m.length && List.generate(m.length, (i) => b[i] == m[i]).every((x) => x);
+        b.length >= m.length &&
+        List.generate(m.length, (i) => b[i] == m[i]).every((x) => x);
     if (starts([0x25, 0x50, 0x44, 0x46])) return 'PDF document';
     if (starts([0x50, 0x4B, 3, 4])) return 'ZIP archive (or docx/xlsx/apk/jar)';
     if (starts([0x89, 0x50, 0x4E, 0x47])) return 'PNG image';
@@ -397,16 +420,24 @@ class AgentService extends GetxService {
       return DocumentExtractorService.extractText(f.path, ext);
     }
     final bytes = await f.readAsBytes();
-    if (ext == 'zip' || ext == 'jar' || ext == 'apk' || ext == 'xlsx' || ext == 'pptx') {
+    if (ext == 'zip' ||
+        ext == 'jar' ||
+        ext == 'apk' ||
+        ext == 'xlsx' ||
+        ext == 'pptx') {
       final arch = ZipDecoder().decodeBytes(bytes);
       final b = StringBuffer('Archive with ${arch.files.length} entries:\n');
       for (final e in arch.files.take(200)) {
-        b.writeln('${e.isFile ? '' : '[dir] '}${e.name}${e.isFile ? ' (${e.size} bytes)' : ''}');
+        b.writeln(
+            '${e.isFile ? '' : '[dir] '}${e.name}${e.isFile ? ' (${e.size} bytes)' : ''}');
       }
       return b.toString();
     }
     if (looksBinary(bytes)) {
-      final head = bytes.take(48).map((x) => x.toRadixString(16).padLeft(2, '0')).join(' ');
+      final head = bytes
+          .take(48)
+          .map((x) => x.toRadixString(16).padLeft(2, '0'))
+          .join(' ');
       return '(${_magic(bytes)}, ${bytes.length} bytes; not readable as text)\nFirst bytes: $head';
     }
     return utf8.decode(bytes, allowMalformed: true);
@@ -417,7 +448,8 @@ class AgentService extends GetxService {
       'calculator',
       'Evaluate an arithmetic expression exactly.',
       '{"expression":"string, e.g. (12+3)*4/5"}',
-      (args) => formatNumber(evaluateExpression((args['expression'] ?? '').toString())),
+      (args) => formatNumber(
+          evaluateExpression((args['expression'] ?? '').toString())),
     ),
     AgentTool(
       'current_time',
@@ -436,7 +468,6 @@ class AgentService extends GetxService {
         }
         await addNote(note);
         return 'Saved.';
-
       },
     ),
     AgentTool(
@@ -450,7 +481,9 @@ class AgentService extends GetxService {
         for (final n in hits) {
           await removeNote(n);
         }
-        return hits.isEmpty ? 'Nothing matched.' : 'Forgot ${hits.length} note(s).';
+        return hits.isEmpty
+            ? 'Nothing matched.'
+            : 'Forgot ${hits.length} note(s).';
       },
     ),
     AgentTool(
@@ -474,7 +507,8 @@ class AgentService extends GetxService {
       (args) async {
         final m = await Get.find<DeviceBridge>().status();
         if (m.isEmpty) return 'Phone status is not available.';
-        String gb(num? b) => b == null ? '?' : '${(b / 1073741824).toStringAsFixed(1)} GB';
+        String gb(num? b) =>
+            b == null ? '?' : '${(b / 1073741824).toStringAsFixed(1)} GB';
         return [
           'Device: ${m['model']} (Android ${m['android']}, ${m['cores']} cores)',
           'Battery: ${m['level']}%${m['charging'] == true ? ' (charging)' : ''}${m['saver'] == true ? ', battery saver on' : ''}',
@@ -493,10 +527,9 @@ class AgentService extends GetxService {
       (args) async {
         final f = await _safeFile((args['name'] ?? '').toString());
         if (!await f.exists()) return 'Error: file not found. Use list_files.';
-        final t = await Get.find<VoiceService>()
-            .transcribeFile(f.path,
-                language: (args['language'] ?? '').toString(),
-                modelId: (args['model_id'] ?? '').toString());
+        final t = await Get.find<VoiceService>().transcribeFile(f.path,
+            language: (args['language'] ?? '').toString(),
+            modelId: (args['model_id'] ?? '').toString());
         return t.isEmpty ? '(no speech found)' : _page(t, 0);
       },
     ),
@@ -544,7 +577,8 @@ class AgentService extends GetxService {
         final s = Get.find<SchedulerService>();
         if (s.tasks.isEmpty) return '(no scheduled tasks)';
         return s.tasks
-            .map((t) => '${t.id}: ${t.title} — ${t.whenText}${t.enabled ? '' : ' (off)'}')
+            .map((t) =>
+                '${t.id}: ${t.title} — ${t.whenText}${t.enabled ? '' : ' (off)'}')
             .join('\n');
       },
     ),
@@ -572,12 +606,15 @@ class AgentService extends GetxService {
         final img = Get.find<LocalImageService>();
         final inf = Get.find<InferenceService>();
         final imgName = img.lastModelName ?? '';
-        final remote = WorkloadPlacement.forWorkload(PhoneWorkload.image) != null;
+        final remote =
+            WorkloadPlacement.forWorkload(PhoneWorkload.image) != null;
         if (!remote && (imgName.isEmpty || !mc.isDownloaded(imgName))) {
           return 'Error: no image model is installed. Ask the user to download one in Models → Image models.';
         }
         final textName = mc.lastLoadedModelName;
-        var name = (args['name'] ?? 'image_${DateTime.now().millisecondsSinceEpoch}.png').toString();
+        var name = (args['name'] ??
+                'image_${DateTime.now().millisecondsSinceEpoch}.png')
+            .toString();
         if (!name.toLowerCase().endsWith('.png')) name = '$name.png';
         try {
           if (!remote) {
@@ -658,7 +695,9 @@ class AgentService extends GetxService {
         final chunks = chunkText(text, size: 700, overlap: 80);
         final top = bm25Top(chunks, (args['query'] ?? '').toString(), k: 4);
         if (top.isEmpty) return 'No matching passages.';
-        return top.map((i) => '[passage ${i + 1}/${chunks.length}]\n${chunks[i]}').join('\n\n');
+        return top
+            .map((i) => '[passage ${i + 1}/${chunks.length}]\n${chunks[i]}')
+            .join('\n\n');
       },
     ),
     AgentTool(
@@ -671,7 +710,8 @@ class AgentService extends GetxService {
           try {
             await f.create(exclusive: true);
           } on FileSystemException {
-            if (await f.exists()) return 'A file with that name already exists.';
+            if (await f.exists())
+              return 'A file with that name already exists.';
             rethrow;
           }
         } else {
@@ -688,7 +728,8 @@ class AgentService extends GetxService {
       (args) async {
         final f = await _safeFile((args['name'] ?? '').toString());
         await _keepFileVersion(f);
-        await f.writeAsString((args['content'] ?? '').toString(), mode: FileMode.append);
+        await f.writeAsString((args['content'] ?? '').toString(),
+            mode: FileMode.append);
         return 'Appended to ${f.path.split('/').last}.';
       },
     ),
@@ -698,17 +739,22 @@ class AgentService extends GetxService {
       '{"name":"string","old":"exact text to find","new":"replacement text","all":"optional true"}',
       (args) async {
         final f = await _safeFile((args['name'] ?? '').toString());
-        if (!await f.exists()) return 'Error: no such file. Use list_files to see the names.';
+        if (!await f.exists())
+          return 'Error: no such file. Use list_files to see the names.';
         final old = (args['old'] ?? '').toString();
         final nw = (args['new'] ?? '').toString();
-        if (old.isEmpty) return 'Error: "old" must be the exact text to replace.';
+        if (old.isEmpty)
+          return 'Error: "old" must be the exact text to replace.';
         final text = await f.readAsString();
         final n = text.split(old).length - 1;
-        if (n == 0) return 'Error: that text was not found. Use read_file and copy the exact text.';
+        if (n == 0)
+          return 'Error: that text was not found. Use read_file and copy the exact text.';
         final all = '${args['all'] ?? ''}' == 'true';
-        if (n > 1 && !all) return 'Error: the text appears $n times. Add more surrounding text, or set "all":"true".';
+        if (n > 1 && !all)
+          return 'Error: the text appears $n times. Add more surrounding text, or set "all":"true".';
         await _keepFileVersion(f);
-        await f.writeAsString(all ? text.replaceAll(old, nw) : text.replaceFirst(old, nw));
+        await f.writeAsString(
+            all ? text.replaceAll(old, nw) : text.replaceFirst(old, nw));
         return 'Edited ${f.path.split('/').last} ($n replacement${n == 1 ? '' : 's'}).';
       },
     ),
@@ -732,17 +778,22 @@ class AgentService extends GetxService {
       (args) async {
         final u = _user!;
         final f = u.find(args['folder']?.toString());
-        if (f == null) return 'Error: unknown folder. Shared folders: ${u.folders.map((x) => x.name).join(', ')}';
+        if (f == null)
+          return 'Error: unknown folder. Shared folders: ${u.folders.map((x) => x.name).join(', ')}';
         final path = (args['path'] ?? '').toString();
         final old = (args['old'] ?? '').toString();
         final nw = (args['new'] ?? '').toString();
-        if (old.isEmpty) return 'Error: "old" must be the exact text to replace.';
+        if (old.isEmpty)
+          return 'Error: "old" must be the exact text to replace.';
         final text = await u.readText(f, path, maxChars: 2000000);
         final n = text.split(old).length - 1;
-        if (n == 0) return 'Error: that text was not found. Use read_user_file and copy the exact text.';
+        if (n == 0)
+          return 'Error: that text was not found. Use read_user_file and copy the exact text.';
         final all = '${args['all'] ?? ''}' == 'true';
-        if (n > 1 && !all) return 'Error: the text appears $n times. Add more surrounding text, or set "all":"true".';
-        await u.writeText(f, path, all ? text.replaceAll(old, nw) : text.replaceFirst(old, nw));
+        if (n > 1 && !all)
+          return 'Error: the text appears $n times. Add more surrounding text, or set "all":"true".';
+        await u.writeText(f, path,
+            all ? text.replaceAll(old, nw) : text.replaceFirst(old, nw));
         return 'Edited $path ($n replacement${n == 1 ? '' : 's'}).';
       },
       needsConfirm: true,
@@ -754,10 +805,17 @@ class AgentService extends GetxService {
       '{"name":"optional tool name"}',
       (args) async {
         final q = (args['name'] ?? '').toString().trim();
-        final all = [..._allBuiltIns, ..._enabledMcpTools.map((t) => AgentTool(t.qualifiedName, t.description, t.signature, (_) => ''))];
-        final hit = q.isEmpty ? all : all.where((t) => t.name.contains(q)).toList();
+        final all = [
+          ..._allBuiltIns,
+          ..._enabledMcpTools.map((t) =>
+              AgentTool(t.qualifiedName, t.description, t.signature, (_) => ''))
+        ];
+        final hit =
+            q.isEmpty ? all : all.where((t) => t.name.contains(q)).toList();
         if (hit.isEmpty) return 'No tool matches "$q".';
-        return hit.map((t) => '${t.name}: ${t.description}\narguments: ${t.params}').join('\n\n');
+        return hit
+            .map((t) => '${t.name}: ${t.description}\narguments: ${t.params}')
+            .join('\n\n');
       },
     ),
     AgentTool(
@@ -767,10 +825,14 @@ class AgentService extends GetxService {
       (args) async {
         final u = _user!;
         final f = u.find(args['folder']?.toString());
-        if (f == null) return 'Error: unknown folder. Shared folders: ${u.folders.map((x) => x.name).join(', ')}';
+        if (f == null)
+          return 'Error: unknown folder. Shared folders: ${u.folders.map((x) => x.name).join(', ')}';
         final items = await u.list(f, (args['path'] ?? '').toString());
         if (items.isEmpty) return '(empty)';
-        return items.map((e) => '${e.isDir ? '[dir] ' : ''}${e.name}${e.isDir ? '' : ' (${e.size} bytes)'}').join('\n');
+        return items
+            .map((e) =>
+                '${e.isDir ? '[dir] ' : ''}${e.name}${e.isDir ? '' : ' (${e.size} bytes)'}')
+            .join('\n');
       },
       available: () => _hasFolders,
     ),
@@ -781,9 +843,11 @@ class AgentService extends GetxService {
       (args) async {
         final u = _user!;
         final f = u.find(args['folder']?.toString());
-        if (f == null) return 'Error: unknown folder. Shared folders: ${u.folders.map((x) => x.name).join(', ')}';
+        if (f == null)
+          return 'Error: unknown folder. Shared folders: ${u.folders.map((x) => x.name).join(', ')}';
         final start = int.tryParse('${args['start'] ?? 0}') ?? 0;
-        final text = await u.readText(f, (args['path'] ?? '').toString(), maxChars: start + 4000);
+        final text = await u.readText(f, (args['path'] ?? '').toString(),
+            maxChars: start + 4000);
         return _page(text, start);
       },
       available: () => _hasFolders,
@@ -795,8 +859,10 @@ class AgentService extends GetxService {
       (args) async {
         final u = _user!;
         final f = u.find(args['folder']?.toString());
-        if (f == null) return 'Error: unknown folder. Shared folders: ${u.folders.map((x) => x.name).join(', ')}';
-        await u.writeText(f, (args['path'] ?? '').toString(), (args['content'] ?? '').toString());
+        if (f == null)
+          return 'Error: unknown folder. Shared folders: ${u.folders.map((x) => x.name).join(', ')}';
+        await u.writeText(f, (args['path'] ?? '').toString(),
+            (args['content'] ?? '').toString());
         return 'Wrote ${args['path']}.';
       },
       needsConfirm: true,
@@ -807,7 +873,8 @@ class AgentService extends GetxService {
       'Search the web and return the top results (title, url, snippet).',
       '{"query":"string"}',
       (args) async {
-        final r = await Get.find<WebSearchService>().search((args['query'] ?? '').toString());
+        final r = await Get.find<WebSearchService>()
+            .search((args['query'] ?? '').toString());
         if (r.isEmpty) return 'No results.';
         return r.map((e) => '${e.title}\n${e.url}\n${e.snippet}').join('\n\n');
       },
@@ -824,7 +891,8 @@ class AgentService extends GetxService {
         final res = await http.get(uri, headers: {
           'User-Agent': 'Mozilla/5.0 (Linux; Android 14) NeuroMeshAI'
         }).timeout(const Duration(seconds: 20));
-        if (res.statusCode != 200) return 'Error: server answered ${res.statusCode}.';
+        if (res.statusCode != 200)
+          return 'Error: server answered ${res.statusCode}.';
         final ct = res.headers['content-type'] ?? '';
         final body = utf8.decode(res.bodyBytes, allowMalformed: true);
         final text = ct.contains('html') ? readableText(body) : body;
@@ -865,7 +933,8 @@ class AgentService extends GetxService {
 
   Iterable<AgentTool> get _allBuiltIns sync* {
     for (final t in [..._builtIns, ..._extra]) {
-      if (policyFor('built-in', t.name, needsConfirm: t.needsConfirm) == 'block') continue;
+      if (policyFor('built-in', t.name, needsConfirm: t.needsConfirm) ==
+          'block') continue;
       if (t.available == null || t.available!()) yield t;
     }
   }
@@ -883,7 +952,9 @@ class AgentService extends GetxService {
         .toList();
     final saved = _hive.getSetting<Map>(_policyKey);
     if (saved != null) {
-      policy.addAll({for (final e in saved.entries) e.key.toString(): e.value.toString()});
+      policy.addAll({
+        for (final e in saved.entries) e.key.toString(): e.value.toString()
+      });
     }
     for (final e in (_hive.getSetting<List>(_allowKey) ?? const [])) {
       policy.putIfAbsent(e.toString(), () => 'allow');
@@ -943,7 +1014,8 @@ class AgentService extends GetxService {
     toolsVersion.value++;
   }
 
-  Future<void> setToolEnabled(String serverId, String tool, bool enabled) async {
+  Future<void> setToolEnabled(
+      String serverId, String tool, bool enabled) async {
     final i = servers.indexWhere((s) => s.id == serverId);
     if (i < 0) return;
     final off = {...servers[i].disabledTools};
@@ -1040,7 +1112,8 @@ class AgentService extends GetxService {
       case AgentChatMode.always:
         return true;
       case AgentChatMode.auto:
-        if (hasFile) return true;
+        if (hasFile || text.contains('@skill:') || text.contains('@file:'))
+          return true;
         if (_intent.hasMatch(text) || _gVoiceAction.hasMatch(text)) return true;
         if (needsResearch(text)) return true;
         for (final s in servers.where((s) => s.enabled)) {
@@ -1051,26 +1124,62 @@ class AgentService extends GetxService {
   }
 
   static const _coreTools = {
-    'web_search', 'fetch_url', 'list_files', 'read_file', 'write_file', 'edit_file',
-    'ask_user', 'calculator', 'current_time', 'tool_help',
+    'web_search',
+    'fetch_url',
+    'list_files',
+    'read_file',
+    'write_file',
+    'edit_file',
+    'ask_user',
+    'calculator',
+    'current_time',
+    'tool_help',
+    'read_context',
+    'search_context',
+    'list_skill_files',
   };
-  static final _gVoice = RegExp(r'\b(speak|voice|audio|say|read aloud|aloud|transcrib(?:e|ing)|transcription|mp3|wav|m4a|podcast|speech|tts|stt|subtitle)\b|صوت|انطق|فرغ|اقرا بصوت|سجل', caseSensitive: false);
+  static final _gVoice = RegExp(
+      r'\b(speak|voice|audio|say|read aloud|aloud|transcrib(?:e|ing)|transcription|mp3|wav|m4a|podcast|speech|tts|stt|subtitle)\b|صوت|انطق|فرغ|اقرا بصوت|سجل',
+      caseSensitive: false);
   static final _gVoiceAction = RegExp(
     r'\b(?:tts|stt|transcrib(?:e|ing)|text.to.speech|speech.to.text|read aloud)\b|انطق|فرغ الصوت',
     caseSensitive: false,
   );
-  static final _gImage = RegExp(r'\b(draw|image|picture|photo|logo|illustration|wallpaper|generate an? )\b|صورة|ارسم|رسم|لوجو', caseSensitive: false);
-  static final _gFiles = RegExp(r'\b(file|files|attached|attachment|zip|unzip|archive|download|copy|rename|append|delete|folder|csv|pdf|docx|json|save)\b|ملف|احفظ|حمل', caseSensitive: false);
-  static final _gMemory = RegExp(r'\b(remember|forget|memory|note)\b|تذكر|انسى|فاكر', caseSensitive: false);
-  static final _gSched = RegExp(r'\b(remind|schedule|every|daily|weekly|later|automat|timer|alarm)\b|ذكرني|جدول|كل يوم|بعد', caseSensitive: false);
-  static final _gDevice = RegExp(r'\b(battery|storage|ram|phone status|temperature|network|wifi)\b|بطارية|ذاكرة', caseSensitive: false);
-  static final _gHttp = RegExp(r'\b(api|http|request|webhook|endpoint|rest|post|curl)\b', caseSensitive: false);
-  static final _gSandbox = RegExp(r'\b(run|execute|command|shell|terminal|install|python|pip|node|npm|script|compile|build|apk|ffmpeg|convert|git|sandbox|linux|tool|program|bash|scrape|ocr|pandoc|imagemagick)\b|شغل|نفذ|ثبت|برنامج|سكربت', caseSensitive: false);
-  static final _gFolders = RegExp(r'\b(folder|directory|project|repo|shared)\b|مجلد|مشروع', caseSensitive: false);
+  static final _gImage = RegExp(
+      r'\b(draw|image|picture|photo|logo|illustration|wallpaper|generate an? )\b|صورة|ارسم|رسم|لوجو',
+      caseSensitive: false);
+  static final _gFiles = RegExp(
+      r'\b(file|files|attached|attachment|zip|unzip|archive|download|copy|rename|append|delete|folder|csv|pdf|docx|json|save)\b|ملف|احفظ|حمل',
+      caseSensitive: false);
+  static final _gMemory = RegExp(
+      r'\b(remember|forget|memory|note)\b|تذكر|انسى|فاكر',
+      caseSensitive: false);
+  static final _gSched = RegExp(
+      r'\b(remind|schedule|every|daily|weekly|later|automat|timer|alarm)\b|ذكرني|جدول|كل يوم|بعد',
+      caseSensitive: false);
+  static final _gDevice = RegExp(
+      r'\b(battery|storage|ram|phone status|temperature|network|wifi)\b|بطارية|ذاكرة',
+      caseSensitive: false);
+  static final _gHttp = RegExp(
+      r'\b(api|http|request|webhook|endpoint|rest|post|curl)\b',
+      caseSensitive: false);
+  static final _gSandbox = RegExp(
+      r'\b(run|execute|command|shell|terminal|install|python|pip|node|npm|script|compile|build|apk|ffmpeg|convert|git|sandbox|linux|tool|program|bash|scrape|ocr|pandoc|imagemagick)\b|شغل|نفذ|ثبت|برنامج|سكربت',
+      caseSensitive: false);
+  static final _gFolders = RegExp(
+      r'\b(folder|directory|project|repo|shared)\b|مجلد|مشروع',
+      caseSensitive: false);
 
   static bool _isSandboxTool(String n) =>
-      n == 'run_shell' || n.startsWith('sandbox_') || n == 'install_packages' || n == 'run_script' ||
-      n == 'convert_file' || n == 'create_tool' || n == 'list_my_tools' || n == 'delete_my_tool' || n.startsWith('x_');
+      n == 'run_shell' ||
+      n.startsWith('sandbox_') ||
+      n == 'install_packages' ||
+      n == 'run_script' ||
+      n == 'convert_file' ||
+      n == 'create_tool' ||
+      n == 'list_my_tools' ||
+      n == 'delete_my_tool' ||
+      n.startsWith('x_');
 
   /// Which tools to describe for this request. Describing all of them costs a
   /// small phone model a minute of reading, so only the likely ones are listed;
@@ -1079,19 +1188,41 @@ class AgentService extends GetxService {
     final r = request;
     final on = <String>{..._coreTools};
     if (RegExp(r'model|helper|projector|mmproj|fastmtp|موديل|مساعد|رؤية',
-        caseSensitive: false).hasMatch(r)) {
-      on.addAll(const {'models_status', 'find_model_helpers', 'attach_model_helper'});
+            caseSensitive: false)
+        .hasMatch(r)) {
+      on.addAll(
+          const {'models_status', 'find_model_helpers', 'attach_model_helper'});
     }
-    if (_gVoice.hasMatch(r)) on.addAll(const {'text_to_speech', 'transcribe_audio', 'models_status'});
-    if (_gImage.hasMatch(r)) on.addAll(const {'generate_image', 'models_status'});
+    if (_gVoice.hasMatch(r))
+      on.addAll(const {'text_to_speech', 'transcribe_audio', 'models_status'});
+    if (_gImage.hasMatch(r))
+      on.addAll(const {'generate_image', 'models_status'});
     if (withFiles || _gFiles.hasMatch(r)) {
-      on.addAll(const {'append_file', 'delete_file', 'search_in_file', 'file_info', 'copy_file', 'rename_file', 'zip_files', 'unzip_file', 'download_file', 'search_workspace'});
+      on.addAll(const {
+        'append_file',
+        'delete_file',
+        'search_in_file',
+        'file_info',
+        'copy_file',
+        'rename_file',
+        'zip_files',
+        'unzip_file',
+        'download_file',
+        'search_workspace'
+      });
     }
     if (_gMemory.hasMatch(r)) on.addAll(const {'remember', 'forget'});
-    if (_gSched.hasMatch(r)) on.addAll(const {'schedule_task', 'list_schedules', 'cancel_schedule'});
+    if (_gSched.hasMatch(r))
+      on.addAll(const {'schedule_task', 'list_schedules', 'cancel_schedule'});
     if (_gDevice.hasMatch(r)) on.add('device_status');
     if (_gHttp.hasMatch(r)) on.add('http_request');
-    if (_gFolders.hasMatch(r)) on.addAll(const {'list_folder', 'read_user_file', 'write_user_file', 'edit_user_file'});
+    if (_gFolders.hasMatch(r))
+      on.addAll(const {
+        'list_folder',
+        'read_user_file',
+        'write_user_file',
+        'edit_user_file'
+      });
     if (_gSandbox.hasMatch(r)) {
       for (final t in _allBuiltIns) {
         if (_isSandboxTool(t.name)) on.add(t.name);
@@ -1109,25 +1240,54 @@ class AgentService extends GetxService {
 
   /// Tool instructions appended to the chat's system prompt. Kept short on
   /// purpose: every character is read by the model before each answer.
-  String toolPrompt({String request = '', bool withFiles = false}) {
+  String toolPrompt(
+      {String request = '', bool withFiles = false, int contextSize = 8192}) {
     final on = _toolsFor(request, withFiles: withFiles);
+    if (contextSize <= 4096) {
+      final compact = StringBuffer(
+          'Use tools only as <tool_call>{"name":"NAME","arguments":{...}}</tool_call>. Read the result, then answer. Never claim unconfirmed actions. Use tool_help(name) for argument details.\n');
+      final priority = [
+        'tool_help',
+        'read_context',
+        'search_context',
+        ...on.where((n) => !_coreTools.contains(n)),
+        'write_file',
+        'read_file',
+        'tool_help'
+      ];
+      for (final name in priority.toSet()) {
+        final tool = _allBuiltIns.where((t) => t.name == name).firstOrNull;
+        if (tool == null) continue;
+        final line = '$name ${tool.params}\n';
+        if (contextTokens('$compact$line') < contextSize ~/ 4)
+          compact.write(line);
+      }
+      return compact.toString();
+    }
     final b = StringBuffer()
-      ..writeln('You are an AGENT inside the NeuroMesh AI app on the user\'s device. Your tools really run.')
-      ..writeln('To use a tool reply with ONLY: <tool_call>{"name":"TOOL","arguments":{...}}</tool_call>')
-      ..writeln('Then read the result and continue. When the task is done, answer in plain text with NO tool call.')
-      ..writeln('Rules: 1) Never claim you did something unless a tool result confirms it; to create a file call write_file, never just print it. '
+      ..writeln(
+          'You are an AGENT inside the NeuroMesh AI app on the user\'s device. Your tools really run.')
+      ..writeln(
+          'To use a tool reply with ONLY: <tool_call>{"name":"TOOL","arguments":{...}}</tool_call>')
+      ..writeln(
+          'Then read the result and continue. When the task is done, answer in plain text with NO tool call.')
+      ..writeln(
+          'Rules: 1) Never claim you did something unless a tool result confirms it; to create a file call write_file, never just print it. '
           '2) For facts, news, versions or prices search first (web_search, then fetch_url), answer only from what you found and cite [1]. '
           '3) Show files with [📎 name](nmfile:name) and images with ![desc](nmfile:name). '
           '4) After an error change the arguments; never repeat the same call; use ask_user if only the user knows. '
           '5) Do big jobs step by step.')
-      ..writeln('Example: create notes.txt saying hi -> <tool_call>{"name":"write_file","arguments":{"name":"notes.txt","content":"hi"}}</tool_call>')
+      ..writeln(
+          'Example: create notes.txt saying hi -> <tool_call>{"name":"write_file","arguments":{"name":"notes.txt","content":"hi"}}</tool_call>')
       ..writeln('Tools:');
     final listed = <String>{};
     for (final t in _allBuiltIns) {
       if (!on.contains(t.name)) continue;
       listed.add(t.name);
-      final params = t.params.length > 160 ? '${t.params.substring(0, 160)}…' : t.params;
-      b.writeln('- ${t.name}: ${_firstSentence(t.description, 170)} ${t.params == '{}' ? '' : params}');
+      final params =
+          t.params.length > 160 ? '${t.params.substring(0, 160)}…' : t.params;
+      b.writeln(
+          '- ${t.name}: ${_firstSentence(t.description, 170)} ${t.params == '{}' ? '' : params}');
     }
     final mentioned = <String>{};
     final lower = request.toLowerCase();
@@ -1135,10 +1295,12 @@ class AgentService extends GetxService {
     for (final t in mcp) {
       final srv = servers.where((s) => s.id == t.serverId);
       final name = srv.isEmpty ? '' : srv.first.name.toLowerCase();
-      if (mode.value == AgentChatMode.always && mcp.length <= 8 || (name.isNotEmpty && lower.contains(name))) {
+      if (mode.value == AgentChatMode.always && mcp.length <= 8 ||
+          (name.isNotEmpty && lower.contains(name))) {
         mentioned.add(t.qualifiedName);
         final d = t.description.replaceAll('\n', ' ');
-        b.writeln('- ${t.qualifiedName}: ${d.length > 140 ? '${d.substring(0, 140)}…' : d} ${t.signature}');
+        b.writeln(
+            '- ${t.qualifiedName}: ${d.length > 140 ? '${d.substring(0, 140)}…' : d} ${t.signature}');
       }
     }
     final others = [
@@ -1149,51 +1311,54 @@ class AgentService extends GetxService {
     ];
     if (others.isNotEmpty) {
       final shown = others.take(40).join(', ');
-      b.writeln('Also available (call tool_help with a name for details, or just call them): $shown${others.length > 40 ? ', …' : ''}');
+      b.writeln(
+          'Also available (call tool_help with a name for details, or just call them): $shown${others.length > 40 ? ', …' : ''}');
     }
-    if (_hasFolders) b.writeln('Shared folders: ${_user!.folders.map((f) => f.name).join(', ')}');
+    if (_hasFolders)
+      b.writeln(
+          'Shared folders: ${_user!.folders.map((f) => f.name).join(', ')}');
     if (on.any(_isSandboxTool)) {
-      b.writeln('The sandbox is one shared Linux for all chats: install what you need (install_packages), run code with run_script, and save reusable tools with create_tool.');
+      b.writeln(
+          'The sandbox is one shared Linux for all chats: install what you need (install_packages), run code with run_script, and save reusable tools with create_tool.');
     }
     return b.toString().trimRight();
   }
 
   /// Trims [hist] and [prompt] so the whole request fits the model's context
   /// with room left to answer; an overflow makes small models fail or go silent.
-  /// Returns the (possibly shortened) prompt.
-  static String fitToContext(String system, List<Map<String, String>> hist, String prompt, int ctxTokens) {
+  /// Keeps the latest request intact; reports an oversized mandatory context.
+  static String fitToContext(String system, List<Map<String, String>> hist,
+      String prompt, int ctxTokens) {
     if (ctxTokens <= 0) return prompt;
-    int est(String t) => (t.length / 2.8).ceil();
-    final budget = (ctxTokens * 0.68).floor() - 120;
-    int total() => est(system) + hist.fold<int>(0, (a, m) => a + est(m['content'] ?? ''));
-    // Drop the oldest turns first (keep the last message).
+    final budget = (ctxTokens * 0.72).floor() - 64;
+    int total() =>
+        contextTokens(system) +
+        hist.fold<int>(0, (a, m) => a + contextTokens(m['content'] ?? ''));
     while (total() > budget && hist.length > 1) {
       hist.removeAt(0);
-      if (hist.length > 1 && hist.first['role'] != 'user') hist.removeAt(0);
     }
-    if (total() > budget && hist.isNotEmpty) {
-      final over = ((total() - budget) * 2.8).ceil();
-      final cur = hist.last['content'] ?? '';
-      // Preserve short requests intact, even when the system prompt is large.
-      final minimum = cur.length < 400 ? cur.length : 400;
-      final keep = (cur.length - over).clamp(minimum, cur.length);
-      if (keep < cur.length) {
-        final head = (keep * 0.55).floor();
-        final cut = '${cur.substring(0, head)}\n…(shortened to fit memory)…\n${cur.substring(cur.length - (keep - head))}';
-        if (hist.last['content'] == prompt) prompt = cut;
-        hist.last['content'] = cut;
-      }
+    // User instructions are mandatory: never silently crop the current request.
+    if (total() > budget ||
+        contextTokens(system) + contextTokens(prompt) > budget) {
+      throw StateError(
+          'The current instructions and message exceed this model’s context. Use @file: references for large documents, shorten the pinned rules, or increase context size.');
     }
     return prompt;
   }
 
   /// System prompt for a chat turn: the chat's own prompt, saved memory, and
   /// (when [withTools]) the tool instructions.
-  String composeSystem(String base, {required bool withTools, String request = '', bool withFiles = false}) {
+  String composeSystem(String base,
+      {required bool withTools,
+      String request = '',
+      bool withFiles = false,
+      int contextSize = 8192}) {
     final b = StringBuffer(base);
     final mem = memoryBlock();
     if (mem.isNotEmpty) b.write('\n\n$mem');
-    if (withTools) b.write('\n\n${toolPrompt(request: request, withFiles: withFiles)}');
+    if (withTools)
+      b.write(
+          '\n\n${toolPrompt(request: request, withFiles: withFiles, contextSize: contextSize)}');
     return b.toString();
   }
 
@@ -1215,6 +1380,7 @@ class AgentService extends GetxService {
     required String prompt,
     required List<Map<String, String>> history,
     required ToolConfirm confirm,
+    bool allowDirectActions = true,
     required void Function(String visible) onVisible,
     required void Function(String status) onStatus,
     required bool Function() cancelled,
@@ -1238,21 +1404,28 @@ class AgentService extends GetxService {
     final speech = literalSpeechText(request);
     final fileName = namedWorkspaceFile(request);
     final directCall = speech != null
-        ? ParsedToolCall('text_to_speech', {
-            'text': speech,
-            'name': 'speech-${DateTime.now().microsecondsSinceEpoch}.wav',
-          }, '')
+        ? ParsedToolCall(
+            'text_to_speech',
+            {
+              'text': speech,
+              'name': 'speech-${DateTime.now().microsecondsSinceEpoch}.wav',
+            },
+            '')
         : fileName != null
-            ? ParsedToolCall('write_file', {'name': fileName, 'create_empty': true}, '')
+            ? ParsedToolCall(
+                'write_file', {'name': fileName, 'create_empty': true}, '')
             : null;
-    if (directCall != null && !cancelled()) {
+    if (allowDirectActions && directCall != null && !cancelled()) {
       final tool = directCall.name;
       final args = directCall.arguments;
-      final label = speech != null ? 'Creating an audio file' : stepLabel(tool, args);
+      final label =
+          speech != null ? 'Creating an audio file' : stepLabel(tool, args);
       final timer = Stopwatch()..start();
       onTrace?.call([stepLine(tool, args, label, null, running: true)]);
       final result = await executeTool(directCall, confirm);
-      final steps = [stepLine(tool, args, label, result, ms: timer.elapsedMilliseconds)];
+      final steps = [
+        stepLine(tool, args, label, result, ms: timer.elapsedMilliseconds)
+      ];
       onTrace?.call(steps);
       return ToolLoopResult(
         _autoLinkFiles(result.replaceFirst('Show it with ', ''), steps),
@@ -1267,8 +1440,10 @@ class AgentService extends GetxService {
         ranTool = true;
         hist.add({
           'role': 'assistant',
-          'content':
-              '<tool_call>${jsonEncode({'name': 'web_search', 'arguments': {'query': searchQuery(researchQuestion)}})}</tool_call>'
+          'content': '<tool_call>${jsonEncode({
+                'name': 'web_search',
+                'arguments': {'query': searchQuery(researchQuestion)}
+              })}</tool_call>'
         });
         hist.add({'role': 'user', 'content': msg});
         current = msg;
@@ -1291,7 +1466,8 @@ class AgentService extends GetxService {
         } else {
           // Hold back a partial opening tag so it never flashes on screen.
           final tail = text.lastIndexOf('<');
-          final partial = tail >= 0 && '<tool_call>'.startsWith(text.substring(tail));
+          final partial =
+              tail >= 0 && '<tool_call>'.startsWith(text.substring(tail));
           onVisible(partial ? text.substring(0, tail) : text);
         }
       });
@@ -1316,7 +1492,8 @@ class AgentService extends GetxService {
           }
         }
         if (!ranTool) {
-          final fb = await _fallbackFile(request, last, confirm, trace, onTrace);
+          final fb =
+              await _fallbackFile(request, last, confirm, trace, onTrace);
           if (fb != null) return fb;
         }
         if (last.trim().isEmpty && ranTool && nudges < 3) {
@@ -1324,7 +1501,8 @@ class AgentService extends GetxService {
           nudges++;
           onStatus('Writing the answer…');
           hist.add({'role': 'assistant', 'content': '(no answer)'});
-          current = 'Write the final answer for the user now, in plain text, using the tool results above. Do not call a tool.';
+          current =
+              'Write the final answer for the user now, in plain text, using the tool results above. Do not call a tool.';
           hist.add({'role': 'user', 'content': current});
           continue;
         }
@@ -1344,11 +1522,13 @@ class AgentService extends GetxService {
       final key = '${call.name}${jsonEncode(call.arguments)}';
       final idx = trace.length;
       final sw = Stopwatch()..start();
-      trace.add(stepLine(call.name, call.arguments, label, null, running: true));
+      trace
+          .add(stepLine(call.name, call.arguments, label, null, running: true));
       onTrace?.call(List.of(trace));
       String result;
       if (!seen.add(key)) {
-        result = 'You already ran this exact call. Use a different query or argument, or answer now.';
+        result =
+            'You already ran this exact call. Use a different query or argument, or answer now.';
       } else {
         result = await executeTool(call, confirm);
       }
@@ -1404,9 +1584,14 @@ class AgentService extends GetxService {
 
   /// Last resort for tiny models: they were asked to make a file and only
   /// printed its content, so save that content ourselves.
-  Future<ToolLoopResult?> _fallbackFile(String request, String reply,
-      ToolConfirm confirm, List<String> trace, void Function(List<String>)? onTrace) async {
-    if (!_wantsFile.hasMatch(request) || _wantsAudioFile.hasMatch(request)) return null;
+  Future<ToolLoopResult?> _fallbackFile(
+      String request,
+      String reply,
+      ToolConfirm confirm,
+      List<String> trace,
+      void Function(List<String>)? onTrace) async {
+    if (!_wantsFile.hasMatch(request) || _wantsAudioFile.hasMatch(request))
+      return null;
     final fn = _fileName.firstMatch(request)?.group(1);
     if (fn == null) return null;
     var content = reply;
@@ -1420,19 +1605,24 @@ class AgentService extends GetxService {
     final sw = Stopwatch()..start();
     trace.add(stepLine('write_file', args, label, null, running: true));
     onTrace?.call(List.of(trace));
-    final result = await executeTool(ParsedToolCall('write_file', args, ''), confirm);
-    trace[idx] = stepLine('write_file', args, label, result, ms: sw.elapsedMilliseconds);
+    final result =
+        await executeTool(ParsedToolCall('write_file', args, ''), confirm);
+    trace[idx] =
+        stepLine('write_file', args, label, result, ms: sw.elapsedMilliseconds);
     onTrace?.call(List.of(trace));
     final ok = result.startsWith('Wrote');
     return ToolLoopResult(
-        ok ? 'Done — I created **$fn**.\n\n[📎 $fn](nmfile:$fn)' : result, trace, false);
+        ok ? 'Done — I created **$fn**.\n\n[📎 $fn](nmfile:$fn)' : result,
+        trace,
+        false);
   }
 
   String _withSources(String answer, List<WebResult> sources) {
     if (sources.isEmpty || answer.contains('Sources:')) return answer;
     final b = StringBuffer(answer.trimRight())..write('\n\nSources:\n');
     for (var i = 0; i < sources.length; i++) {
-      b.writeln('${i + 1}. [${sources[i].title.replaceAll(RegExp(r'[\[\]]'), '')}](${sources[i].url})');
+      b.writeln(
+          '${i + 1}. [${sources[i].title.replaceAll(RegExp(r'[\[\]]'), '')}](${sources[i].url})');
     }
     return b.toString().trimRight();
   }
@@ -1444,7 +1634,8 @@ class AgentService extends GetxService {
     for (final line in trace) {
       if (!line.startsWith(ToolLoopResult.traceMark)) continue;
       try {
-        final m = jsonDecode(line.substring(ToolLoopResult.traceMark.length)) as Map;
+        final m =
+            jsonDecode(line.substring(ToolLoopResult.traceMark.length)) as Map;
         final n = m['n'];
         final res = '${m['r'] ?? ''}';
         final success = switch (n) {
@@ -1457,10 +1648,14 @@ class AgentService extends GetxService {
         if (success) {
           final a = m['a'];
           var name = a is Map ? '${a['name'] ?? ''}' : '';
-          if (n == 'text_to_speech' && name.isNotEmpty && !name.toLowerCase().endsWith('.wav')) {
+          if (n == 'text_to_speech' &&
+              name.isNotEmpty &&
+              !name.toLowerCase().endsWith('.wav')) {
             name = '$name.wav';
           }
-          if (name.isNotEmpty && !answer.contains('nmfile:$name') && !extra.contains(name)) {
+          if (name.isNotEmpty &&
+              !answer.contains('nmfile:$name') &&
+              !extra.contains(name)) {
             extra.add(name);
           }
         }
@@ -1494,8 +1689,13 @@ class AgentService extends GetxService {
       onTrace?.call(List.of(trace));
       final r = await web.search(q, max: 6, freshness: fresh);
       all.addAll(r);
-      trace[idx] = stepLine('web_search', args, label,
-          r.isEmpty ? 'No results.' : r.map((e) => '${e.title}\n${e.url}\n${e.snippet}').join('\n\n'),
+      trace[idx] = stepLine(
+          'web_search',
+          args,
+          label,
+          r.isEmpty
+              ? 'No results.'
+              : r.map((e) => '${e.title}\n${e.url}\n${e.snippet}').join('\n\n'),
           ms: sw.elapsedMilliseconds);
       onTrace?.call(List.of(trace));
     }
@@ -1514,7 +1714,8 @@ class AgentService extends GetxService {
       onTrace?.call(List.of(trace));
       final t = await web.pageText(r.url, query, maxChars: 1300);
       texts.add(t);
-      trace[idx] = stepLine('fetch_url', args, label, t.isEmpty ? '(could not read this page)' : t,
+      trace[idx] = stepLine('fetch_url', args, label,
+          t.isEmpty ? '(could not read this page)' : t,
           ms: sw.elapsedMilliseconds);
       onTrace?.call(List.of(trace));
     }
@@ -1523,10 +1724,13 @@ class AgentService extends GetxService {
         'Web research done for the user\'s question. Today is ${DateTime.now().toIso8601String().substring(0, 10)}.\n');
     for (var i = 0; i < results.length; i++) {
       final r = results[i];
-      final body = i < texts.length && texts[i].length > r.snippet.length ? texts[i] : r.snippet;
+      final body = i < texts.length && texts[i].length > r.snippet.length
+          ? texts[i]
+          : r.snippet;
       b.writeln('\n[${i + 1}] ${r.title} (${r.url})\n$body');
     }
-    b.writeln('\nAnswer in the user\'s language, specific (names, versions, dates, numbers from the sources), newest information first, cite [1]. '
+    b.writeln(
+        '\nAnswer in the user\'s language, specific (names, versions, dates, numbers from the sources), newest information first, cite [1]. '
         'If the sources lack the answer, search again with other words; do not guess.');
     return b.toString();
   }
@@ -1586,18 +1790,20 @@ class AgentService extends GetxService {
   }
 
   /// One saved trace line: the marker followed by a JSON step.
-  static String stepLine(String name, Map<String, dynamic> args, String label, String? result,
+  static String stepLine(
+      String name, Map<String, dynamic> args, String label, String? result,
       {bool running = false, int ms = 0}) {
     var r = result ?? '';
-    if (r.length > 3000) r = '${r.substring(0, 3000)}\n… (${result!.length - 3000} more characters)';
+    if (r.length > 3000)
+      r = '${r.substring(0, 3000)}\n… (${result!.length - 3000} more characters)';
     return '${ToolLoopResult.traceMark}${jsonEncode({
-      'n': name,
-      'l': label,
-      'a': args,
-      'r': r,
-      'run': running,
-      'ms': ms,
-    })}';
+          'n': name,
+          'l': label,
+          'a': args,
+          'r': r,
+          'run': running,
+          'ms': ms,
+        })}';
   }
 
   static String stripCall(String reply) {
@@ -1610,13 +1816,17 @@ class AgentService extends GetxService {
     for (final t in _allBuiltIns) {
       if (t.name == call.name) {
         try {
-          final pol = policyFor('built-in', t.name, needsConfirm: t.needsConfirm);
+          final pol =
+              policyFor('built-in', t.name, needsConfirm: t.needsConfirm);
           if (pol == 'block') return 'The user has blocked this tool.';
-          if (pol == 'ask' && !await confirm(t.name, 'built-in', call.arguments)) {
+          if (pol == 'ask' &&
+              !await confirm(t.name, 'built-in', call.arguments)) {
             return 'The user denied this tool call.';
           }
           final out = await t.run(call.arguments);
-          return out.length > 6000 ? '${out.substring(0, 6000)}\n…(truncated)' : out;
+          return out.length > 6000
+              ? '${out.substring(0, 6000)}\n…(truncated)'
+              : out;
         } catch (e) {
           return 'Error: $e';
         }
@@ -1638,7 +1848,9 @@ class AgentService extends GetxService {
     final client = McpClient(cfg);
     try {
       final out = await client.callTool(tool.name, call.arguments);
-      return out.length > 4000 ? '${out.substring(0, 4000)}\n…(truncated)' : out;
+      return out.length > 4000
+          ? '${out.substring(0, 4000)}\n…(truncated)'
+          : out;
     } catch (e) {
       return 'Error: $e';
     } finally {

@@ -8,14 +8,13 @@ import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
-import '../core/build_flavor.dart';
 import 'agent_service.dart';
 import 'device_bridge.dart';
 import 'hive_service.dart';
 
-/// A small Alpine Linux that the AI can run commands in (Pro build only).
+/// A small Alpine Linux that the AI can run commands in (optional download).
 /// It runs through proot, with no root and no extra Android permissions.
-/// Not part of the Google Play build: it downloads packages and runs them.
+/// The root filesystem is downloaded only after the user chooses Install.
 class SandboxService extends GetxService {
   static const rootfsUrl =
       'https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.9-aarch64.tar.gz';
@@ -33,7 +32,7 @@ class SandboxService extends GetxService {
 
   String _libDir = '';
 
-  static bool get supported => kProBuild && !kIsWeb && Platform.isAndroid;
+  static bool get supported => !kIsWeb && Platform.isAndroid;
 
   Future<Directory> _root() async {
     final base = await getApplicationSupportDirectory();
@@ -144,12 +143,12 @@ class SandboxService extends GetxService {
           ['tar', '-xzf', archive.path, '-C', staging.path]);
       final output = process.stdout.drain<void>();
       final errors = process.stderr.transform(utf8.decoder).join();
-      final exitCode = await process.exitCode.timeout(const Duration(minutes: 2),
-          onTimeout: () async {
-            process.kill(ProcessSignal.sigkill);
-            await process.exitCode;
-            return -1;
-          });
+      final exitCode = await process.exitCode
+          .timeout(const Duration(minutes: 2), onTimeout: () async {
+        process.kill(ProcessSignal.sigkill);
+        await process.exitCode;
+        return -1;
+      });
       await output;
       final errorText = await errors;
       if (exitCode != 0) throw Exception('Alpine unpack failed: $errorText');
@@ -307,28 +306,43 @@ class CustomTool {
   final String params;
   final String language; // python, node or sh
   final String code;
-  const CustomTool(this.name, this.description, this.params, this.language, this.code);
+  const CustomTool(
+      this.name, this.description, this.params, this.language, this.code);
 
-  Map<String, dynamic> toMap() =>
-      {'name': name, 'description': description, 'params': params, 'language': language, 'code': code};
+  Map<String, dynamic> toMap() => {
+        'name': name,
+        'description': description,
+        'params': params,
+        'language': language,
+        'code': code
+      };
 
-  static CustomTool fromMap(Map m) => CustomTool('${m['name']}', '${m['description']}',
-      '${m['params']}', '${m['language']}', '${m['code']}');
+  static CustomTool fromMap(Map m) => CustomTool(
+      '${m['name']}',
+      '${m['description']}',
+      '${m['params']}',
+      '${m['language']}',
+      '${m['code']}');
 
   String get toolName => 'x_$name';
-  String get ext => language == 'python' ? 'py' : language == 'node' ? 'js' : 'sh';
+  String get ext => language == 'python'
+      ? 'py'
+      : language == 'node'
+          ? 'js'
+          : 'sh';
 }
 
 extension SandboxAgentTools on SandboxService {
   static const _customKey = 'sandbox_custom_tools';
 
   List<CustomTool> loadCustomTools() {
-    final raw = Get.find<HiveService>().getSetting<List>(_customKey) ?? const [];
+    final raw =
+        Get.find<HiveService>().getSetting<List>(_customKey) ?? const [];
     return raw.whereType<Map>().map(CustomTool.fromMap).toList();
   }
 
-  Future<void> saveCustomTools(List<CustomTool> l) =>
-      Get.find<HiveService>().setSetting(_customKey, [for (final t in l) t.toMap()]);
+  Future<void> saveCustomTools(List<CustomTool> l) => Get.find<HiveService>()
+      .setSetting(_customKey, [for (final t in l) t.toMap()]);
 
   /// Command that makes sure the language runtime exists, then runs [file].
   String runnerFor(String lang, String file, [String args = '']) {
@@ -346,7 +360,8 @@ extension SandboxAgentTools on SandboxService {
   Future<String> installPackages(String spec) async {
     final apk = <String>[], pip = <String>[], npm = <String>[];
     for (final w in spec.split(RegExp(r'[\s,]+')).where((e) => e.isNotEmpty)) {
-      if (!RegExp(r'^[A-Za-z0-9_.@/:+=<>~\-]+$').hasMatch(w)) return 'Error: invalid package name "$w".';
+      if (!RegExp(r'^[A-Za-z0-9_.@/:+=<>~\-]+$').hasMatch(w))
+        return 'Error: invalid package name "$w".';
       if (w.startsWith('pip:')) {
         pip.add(w.substring(4));
       } else if (w.startsWith('npm:')) {
@@ -356,7 +371,9 @@ extension SandboxAgentTools on SandboxService {
       }
     }
     final out = StringBuffer();
-    if (apk.isNotEmpty) out.writeln(await run('apk add --no-cache ${apk.join(' ')}', timeoutSec: 900));
+    if (apk.isNotEmpty)
+      out.writeln(
+          await run('apk add --no-cache ${apk.join(' ')}', timeoutSec: 900));
     if (pip.isNotEmpty) {
       out.writeln(await run(
           'command -v pip3 >/dev/null 2>&1 || apk add --no-cache python3 py3-pip; pip3 install ${pip.join(' ')}',
@@ -371,7 +388,8 @@ extension SandboxAgentTools on SandboxService {
   }
 
   Future<String> toolsDir() async {
-    final d = Directory('${(await Get.find<AgentService>().filesDir()).path}/_tools');
+    final d =
+        Directory('${(await Get.find<AgentService>().filesDir()).path}/_tools');
     if (!await d.exists()) await d.create(recursive: true);
     return d.path;
   }
@@ -385,10 +403,12 @@ extension SandboxAgentTools on SandboxService {
         '[your own tool] ${t.description}',
         t.params,
         (args) async {
-          if (!installed.value) return 'Error: the sandbox is not installed. Call sandbox_setup.';
+          if (!installed.value)
+            return 'Error: the sandbox is not installed. Call sandbox_setup.';
           await writeToolFile(t);
           final dir = await toolsDir();
-          await File('$dir/${t.name}.args.json').writeAsString(jsonEncode(args));
+          await File('$dir/${t.name}.args.json')
+              .writeAsString(jsonEncode(args));
           return run(
               'cd /workspace && ${runnerFor(t.language, '/workspace/_tools/${t.name}.${t.ext}', '/workspace/_tools/${t.name}.args.json')}',
               timeoutSec: 300);
@@ -437,7 +457,9 @@ void registerSandboxShell(AgentService agent) {
       s.busy.value = true;
       s.status.value = 'Installing tools…';
       try {
-        final out = await s.run('apk update >/dev/null 2>&1; apk add --no-cache $pk', timeoutSec: 1500);
+        final out = await s.run(
+            'apk update >/dev/null 2>&1; apk add --no-cache $pk',
+            timeoutSec: 1500);
         final ok = out.endsWith('[exit code 0]');
         return '${ok ? 'Sandbox profile installed' : 'Sandbox package setup failed'}.\n${out.length > 800 ? out.substring(out.length - 800) : out}';
       } finally {
@@ -462,14 +484,24 @@ void registerSandboxShell(AgentService agent) {
     '{"language":"python|node|sh","code":"full script","name":"optional file name","args":"optional arguments"}',
     (args) async {
       final lang = (args['language'] ?? 'python').toString().toLowerCase();
-      if (!const ['python', 'node', 'sh'].contains(lang)) return 'Error: language must be python, node or sh.';
+      if (!const ['python', 'node', 'sh'].contains(lang))
+        return 'Error: language must be python, node or sh.';
       final code = (args['code'] ?? '').toString();
       if (code.trim().isEmpty) return 'Error: "code" is empty.';
-      final base = (args['name'] ?? '').toString().replaceAll(RegExp(r'[^\w\-]'), '').trim();
-      final ext = lang == 'python' ? 'py' : lang == 'node' ? 'js' : 'sh';
-      final dir = Directory('${(await Get.find<AgentService>().filesDir()).path}/scripts');
+      final base = (args['name'] ?? '')
+          .toString()
+          .replaceAll(RegExp(r'[^\w\-]'), '')
+          .trim();
+      final ext = lang == 'python'
+          ? 'py'
+          : lang == 'node'
+              ? 'js'
+              : 'sh';
+      final dir = Directory(
+          '${(await Get.find<AgentService>().filesDir()).path}/scripts');
       if (!await dir.exists()) await dir.create(recursive: true);
-      final fname = '${base.isEmpty ? 'script_${DateTime.now().millisecondsSinceEpoch}' : base}.$ext';
+      final fname =
+          '${base.isEmpty ? 'script_${DateTime.now().millisecondsSinceEpoch}' : base}.$ext';
       await File('${dir.path}/$fname').writeAsString(code);
       return sb().run(
           'cd /workspace && ${sb().runnerFor(lang, '/workspace/scripts/$fname', (args['args'] ?? '').toString())}',
@@ -490,20 +522,39 @@ void registerSandboxShell(AgentService agent) {
       final out = await agent.newWorkspaceFile(outName);
       String q(String x) => "'${x.replaceAll("'", "'\\''")}'";
       final i = q('/workspace/$inName'), o = q('/workspace/$outName');
-      final ie = inName.split('.').last.toLowerCase(), oe = outName.split('.').last.toLowerCase();
+      final ie = inName.split('.').last.toLowerCase(),
+          oe = outName.split('.').last.toLowerCase();
       final opts = (args['options'] ?? '').toString();
-      const media = {'mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'mp4', 'mkv', 'webm', 'mov', 'avi', 'gif'};
+      const media = {
+        'mp3',
+        'wav',
+        'm4a',
+        'ogg',
+        'flac',
+        'aac',
+        'mp4',
+        'mkv',
+        'webm',
+        'mov',
+        'avi',
+        'gif'
+      };
       const img = {'png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tiff'};
       const docs = {'docx', 'md', 'html', 'txt', 'odt', 'rtf', 'epub'};
       String cmd;
       if (ie == 'pdf' && (oe == 'txt' || oe == 'md')) {
-        cmd = 'command -v pdftotext >/dev/null || apk add --no-cache poppler-utils; pdftotext -layout $opts $i $o';
+        cmd =
+            'command -v pdftotext >/dev/null || apk add --no-cache poppler-utils; pdftotext -layout $opts $i $o';
       } else if (media.contains(ie) && media.contains(oe)) {
-        cmd = 'command -v ffmpeg >/dev/null || apk add --no-cache ffmpeg; ffmpeg -y -i $i $opts $o';
+        cmd =
+            'command -v ffmpeg >/dev/null || apk add --no-cache ffmpeg; ffmpeg -y -i $i $opts $o';
       } else if (img.contains(ie) && (img.contains(oe) || oe == 'pdf')) {
-        cmd = 'command -v convert >/dev/null || apk add --no-cache imagemagick; convert $i $opts $o';
-      } else if ((docs.contains(ie) || ie == 'pdf') && (docs.contains(oe) || oe == 'pdf')) {
-        cmd = 'command -v pandoc >/dev/null || apk add --no-cache pandoc; pandoc $i $opts -o $o';
+        cmd =
+            'command -v convert >/dev/null || apk add --no-cache imagemagick; convert $i $opts $o';
+      } else if ((docs.contains(ie) || ie == 'pdf') &&
+          (docs.contains(oe) || oe == 'pdf')) {
+        cmd =
+            'command -v pandoc >/dev/null || apk add --no-cache pandoc; pandoc $i $opts -o $o';
       } else if (ie == 'csv' && oe == 'json') {
         cmd = 'command -v python3 >/dev/null || apk add --no-cache python3; '
             'python3 -c "import csv,json,sys;print(json.dumps(list(csv.DictReader(open(sys.argv[1],encoding=\'utf-8-sig\'))),ensure_ascii=False,indent=1))" $i > $o';
@@ -523,7 +574,8 @@ void registerSandboxShell(AgentService agent) {
     '{}',
     (args) async {
       final s = sb();
-      if (!s.installed.value) return 'The sandbox is NOT installed yet. Call sandbox_setup.';
+      if (!s.installed.value)
+        return 'The sandbox is NOT installed yet. Call sandbox_setup.';
       final r = await s.run(
           'cat /etc/alpine-release; df -h /workspace | tail -1; for c in python3 pip3 node npm git curl ffmpeg convert pandoc pdftotext sqlite3 gcc rg tesseract; do command -v \$c >/dev/null 2>&1 && echo "have: \$c" || echo "missing: \$c"; done',
           timeoutSec: 60);
@@ -538,19 +590,28 @@ void registerSandboxShell(AgentService agent) {
     '{"name":"lowercase_with_underscores","description":"what it does","params":"example JSON of its arguments","language":"python|node|sh","code":"full script","requires":"optional packages, e.g. pip:requests ffmpeg"}',
     (args) async {
       final s = sb();
-      if (!s.installed.value) return 'Error: the sandbox is not installed. Call sandbox_setup first.';
-      final name = (args['name'] ?? '').toString().toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '_');
-      if (name.isEmpty || name.length > 40) return 'Error: give a short "name" (letters, digits, underscore).';
+      if (!s.installed.value)
+        return 'Error: the sandbox is not installed. Call sandbox_setup first.';
+      final name = (args['name'] ?? '')
+          .toString()
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^a-z0-9_]'), '_');
+      if (name.isEmpty || name.length > 40)
+        return 'Error: give a short "name" (letters, digits, underscore).';
       final lang = (args['language'] ?? 'python').toString().toLowerCase();
-      if (!const ['python', 'node', 'sh'].contains(lang)) return 'Error: language must be python, node or sh.';
+      if (!const ['python', 'node', 'sh'].contains(lang))
+        return 'Error: language must be python, node or sh.';
       final code = (args['code'] ?? '').toString();
       if (code.trim().isEmpty) return 'Error: "code" is empty.';
       final desc = (args['description'] ?? '').toString().trim();
       if (desc.isEmpty) return 'Error: add a "description".';
       final req = (args['requires'] ?? '').toString().trim();
       var note = '';
-      if (req.isNotEmpty) note = '\nInstalled: ${(await s.installPackages(req)).split('\n').last}';
-      final t = CustomTool(name, desc, (args['params'] ?? '{}').toString(), lang, code);
+      if (req.isNotEmpty)
+        note =
+            '\nInstalled: ${(await s.installPackages(req)).split('\n').last}';
+      final t = CustomTool(
+          name, desc, (args['params'] ?? '{}').toString(), lang, code);
       await s.writeToolFile(t);
       final all = s.loadCustomTools()..removeWhere((e) => e.name == name);
       all.add(t);
@@ -569,7 +630,10 @@ void registerSandboxShell(AgentService agent) {
     (args) async {
       final l = sb().loadCustomTools();
       if (l.isEmpty) return 'You have not created any tools yet.';
-      return l.map((t) => '${t.toolName} [${t.language}] ${t.description}  arguments: ${t.params}').join('\n');
+      return l
+          .map((t) =>
+              '${t.toolName} [${t.language}] ${t.description}  arguments: ${t.params}')
+          .join('\n');
     },
   ));
 
@@ -579,9 +643,11 @@ void registerSandboxShell(AgentService agent) {
     '{"name":"tool name"}',
     (args) async {
       final s = sb();
-      final n = (args['name'] ?? '').toString().replaceFirst(RegExp(r'^x_'), '');
+      final n =
+          (args['name'] ?? '').toString().replaceFirst(RegExp(r'^x_'), '');
       final all = s.loadCustomTools();
-      if (!all.any((t) => t.name == n)) return 'Error: no such tool. Use list_my_tools.';
+      if (!all.any((t) => t.name == n))
+        return 'Error: no such tool. Use list_my_tools.';
       all.removeWhere((t) => t.name == n);
       await s.saveCustomTools(all);
       agent.removeTool('x_$n');
