@@ -76,6 +76,15 @@ jobs:
             } > android/key.properties
             echo "production=true" >> "$GITHUB_OUTPUT"
           else
+            # AAB-only builds do not reliably create Gradle's default debug key.
+            # Use one explicit ephemeral signer for both the AAB and its APKs.
+            keytool -genkeypair -noprompt -keystore android/release.jks -storetype PKCS12 -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=NeuroMesh Development,O=NeuroMesh,C=US"
+            {
+              echo "storePassword=android"
+              echo "keyPassword=android"
+              echo "keyAlias=androiddebugkey"
+              echo "storeFile=$GITHUB_WORKSPACE/android/release.jks"
+            } > android/key.properties
             echo "production=false" >> "$GITHUB_OUTPUT"
             echo "::warning::No signing secrets: building DEVELOPMENT-signed artifacts (published as pre-release)."
           fi
@@ -154,7 +163,7 @@ jobs:
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          KS="$HOME/.android/debug.keystore"
+          KS="$GITHUB_WORKSPACE/android/release.jks"
           ALIAS=androiddebugkey
           printf '%s' android > "$RUNNER_TEMP/ks-pass"
           printf '%s' android > "$RUNNER_TEMP/key-pass"
@@ -174,6 +183,8 @@ jobs:
           diff <(grep 'certificate SHA-256 digest' "$RUNNER_TEMP/universal-signature.txt") <(grep 'certificate SHA-256 digest' "$RUNNER_TEMP/arm64-signature.txt")
           unzip -l build/app/outputs/bundle/release/app-release.aab | grep -F 'base/lib/arm64-v8a/libproot.so'
           rm -f "$RUNNER_TEMP/ks-pass" "$RUNNER_TEMP/key-pass"
+          # The compiler is no longer needed; leave room for the emulator image.
+          rm -rf "$RUNNER_TEMP/vksdk"
 
       - name: Collect and verify artifacts
         id: art
