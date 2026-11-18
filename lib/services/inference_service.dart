@@ -58,6 +58,7 @@ class InferenceService extends GetxService {
   String _sessionNativeRuntime = '';
   bool _unloadingModel = false;
   String? _loadedProjector;
+  static final _clusterRetry = Object();
 
   String get sessionNativeRuntime => _sessionNativeRuntime;
 
@@ -325,7 +326,6 @@ class InferenceService extends GetxService {
     int? maxTokens,
     List<String> stopSequences = const [],
     void Function(String token)? onToken,
-    bool allowClusterRecovery = true,
   }) async {
     final engine = _engine;
     if (!supportsLocalInference || engine == null || !isModelLoaded.value) {
@@ -375,7 +375,7 @@ class InferenceService extends GetxService {
     var stopSequenceHit = false;
 
     Future<String?> recoverCluster() async {
-      if (!allowClusterRecovery || !isCurrent() || firstVisibleTokenAt != null ||
+      if (Zone.current[_clusterRetry] == true || !isCurrent() || firstVisibleTokenAt != null ||
           !Get.isRegistered<ClusterService>()) return null;
       final cluster = Get.find<ClusterService>();
       final path = _hive.getSetting<String>(AppConstants.keyLocalModelPath);
@@ -393,17 +393,19 @@ class InferenceService extends GetxService {
         return 'ERROR: A cluster worker disconnected and this model could not be reloaded. $loaded';
       }
       if (stopCount != expectedStops || isGenerating.value) return null;
-      return generate(
-        prompt: prompt,
-        systemPrompt: systemPrompt,
-        conversationHistory: conversationHistory,
-        source: source,
-        imagePath: imagePath,
-        audioPath: audioPath,
-        maxTokens: maxTokens,
-        stopSequences: stopSequences,
-        onToken: onToken,
-        allowClusterRecovery: false,
+      return runZoned(
+        () => generate(
+          prompt: prompt,
+          systemPrompt: systemPrompt,
+          conversationHistory: conversationHistory,
+          source: source,
+          imagePath: imagePath,
+          audioPath: audioPath,
+          maxTokens: maxTokens,
+          stopSequences: stopSequences,
+          onToken: onToken,
+        ),
+        zoneValues: {_clusterRetry: true},
       );
     }
 
