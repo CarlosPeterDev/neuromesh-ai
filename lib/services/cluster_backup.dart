@@ -11,12 +11,15 @@ import 'package:uuid/uuid.dart';
 import '../controllers/chat_controller.dart';
 import '../core/constants.dart';
 import '../utils/chat_io.dart';
+import '../utils/memory_text.dart';
+import 'agent_service.dart';
 import 'hive_service.dart';
 import 'voice_clone_store.dart';
 
 enum ClusterBackupPart {
   chats('Chats'),
   settings('App preferences'),
+  memory('Saved assistant memory'),
   files('Workspace files, revisions and saved voices');
 
   const ClusterBackupPart(this.label);
@@ -34,7 +37,7 @@ class ClusterBackup {
   static final _projectSetting = RegExp(r'^workspace_project_[a-zA-Z0-9_-]+$');
   static const _preferences = {
     'theme_mode',
-    'font_size',
+    AppConstants.keyFontScale,
     'voice_lang',
     'voice_speed',
     'voice_barge_in',
@@ -123,6 +126,11 @@ class ClusterBackup {
             if (hive.settingsBox.containsKey(key))
               key: hive.settingsBox.get(key),
         };
+      case ClusterBackupPart.memory:
+        data['notes'] = (hive.getSetting<List>('agent_memory') ?? const [])
+            .whereType<String>()
+            .where((note) => !isMemoryTask(note))
+            .toList();
       case ClusterBackupPart.files:
         final docs = await getApplicationDocumentsDirectory();
         final files = <String, String>{};
@@ -202,7 +210,7 @@ class ClusterBackup {
                       value > 0 ||
                   (key == AppConstants.keyTemperature ||
                           key == 'voice_speed' ||
-                          key == 'font_size') &&
+                          key == AppConstants.keyFontScale) &&
                       value is double &&
                       value.isFinite ||
                   value is bool &&
@@ -214,6 +222,13 @@ class ClusterBackup {
                       }.contains(key))) {
             await hive.setSetting(key, value);
           }
+        }
+      case ClusterBackupPart.memory:
+        final agent = Get.find<AgentService>();
+        final notes = (data['notes'] as List).whereType<String>();
+        for (final note in notes) {
+          if (agent.memory.length >= AgentService.maxMemory) break;
+          await agent.addNote(note);
         }
       case ClusterBackupPart.files:
         final docs = await getApplicationDocumentsDirectory();
