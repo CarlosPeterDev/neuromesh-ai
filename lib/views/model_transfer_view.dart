@@ -5,11 +5,13 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../services/model_transfer_service.dart';
+import '../services/cluster_backup.dart';
 
 /// Move models (chat, image and voice) to or from another device on the same
 /// Wi-Fi: one device sends, the other scans its code and receives.
 class ModelTransferView extends StatefulWidget {
-  const ModelTransferView({super.key});
+  final bool clusterBackup;
+  const ModelTransferView({super.key, this.clusterBackup = false});
 
   @override
   State<ModelTransferView> createState() => _ModelTransferViewState();
@@ -22,17 +24,18 @@ class _ModelTransferViewState extends State<ModelTransferView> {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Transfer models'),
+          title: Text(widget.clusterBackup ? 'Cluster backup & transfer' : 'Transfer models'),
           bottom: const TabBar(tabs: [Tab(text: 'Send'), Tab(text: 'Receive')]),
         ),
-        body: const TabBarView(children: [_SendTab(), _ReceiveTab()]),
+        body: TabBarView(children: [_SendTab(clusterBackup: widget.clusterBackup), const _ReceiveTab()]),
       ),
     );
   }
 }
 
 class _SendTab extends StatefulWidget {
-  const _SendTab();
+  final bool clusterBackup;
+  const _SendTab({required this.clusterBackup});
 
   @override
   State<_SendTab> createState() => _SendTabState();
@@ -40,6 +43,8 @@ class _SendTab extends StatefulWidget {
 
 class _SendTabState extends State<_SendTab> {
   final _server = ModelTransferServer();
+  final _backupParts = <ClusterBackupPart>{};
+  bool _includeModels = true;
   bool _busy = false;
   String? _error;
 
@@ -67,7 +72,8 @@ class _SendTabState extends State<_SendTab> {
       if (_server.running) {
         await _server.stop();
       } else {
-        await _server.start();
+        await _server.start(includeModels: _includeModels, backupParts: _backupParts);
+        if (!mounted) await _server.stop();
       }
     } catch (e) {
       _error = '$e';
@@ -82,6 +88,27 @@ class _SendTabState extends State<_SendTab> {
       const Text(
           'Start sharing, then open "Receive" on the other device and scan this code (or type the address). Both devices must be on the same Wi-Fi. Nothing goes through the internet.'),
       const SizedBox(height: 16),
+      if (widget.clusterBackup) ...[
+        CheckboxListTile(
+          title: const Text('Installed models'),
+          value: _includeModels,
+          onChanged: on || _busy ? null : (value) =>
+              setState(() => _includeModels = value ?? false),
+        ),
+        for (final part in ClusterBackupPart.values)
+          CheckboxListTile(
+            title: Text(part.label),
+            value: _backupParts.contains(part),
+            onChanged: on || _busy ? null : (value) => setState(() {
+              if (value == true) {
+                _backupParts.add(part);
+              } else {
+                _backupParts.remove(part);
+              }
+            }),
+          ),
+        const Text('Backup categories are encrypted. Share the code only with the device you want to receive this data.'),
+      ],
       if (on) ...[
         Center(
           child: Container(
@@ -111,7 +138,7 @@ class _SendTabState extends State<_SendTab> {
       FilledButton.icon(
         onPressed: _busy ? null : _toggle,
         icon: Icon(on ? Icons.stop_rounded : Icons.send_rounded),
-        label: Text(on ? 'Stop sharing' : 'Share my models'),
+        label: Text(on ? 'Stop sharing' : widget.clusterBackup ? 'Share selected data' : 'Share my models'),
       ),
     ]);
   }
@@ -183,7 +210,7 @@ class _ReceiveTabState extends State<_ReceiveTab> {
           ..addAll(have);
         _picked
           ..clear()
-          ..addAll(items.where((i) => !have.contains(i.id)).map((i) => i.id));
+          ..addAll(items.where((i) => i.kind != 'backup' && !have.contains(i.id)).map((i) => i.id));
       });
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
@@ -206,7 +233,7 @@ class _ReceiveTabState extends State<_ReceiveTab> {
         if (mounted) setState(() => _progress = p);
       });
       if (mounted) setState(() => _result = failed.isEmpty
-          ? 'Done. The models are installed.'
+          ? 'Done. The selected items were received.'
           : 'Finished with problems:\n${failed.join('\n')}');
     } on TransferCancelled {
       if (mounted) setState(() => _result = 'Stopped.');
@@ -221,6 +248,7 @@ class _ReceiveTabState extends State<_ReceiveTab> {
         'image' => 'Image model',
         'vision' => 'Vision file',
         'voice' => 'Voice model',
+        'backup' => 'Encrypted backup',
         _ => k,
       };
 

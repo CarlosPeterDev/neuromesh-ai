@@ -100,8 +100,6 @@ class DesktopEngine {
             return LoadResult(success: true, message: 'Loaded', runtime: 'llama-server', backend: 'cpu');
           }
         } catch (_) {}
-        final secs = DateTime.now().difference(started).inSeconds;
-        onProgress?.call((secs / 60).clamp(0.05, 0.9));
         await Future.delayed(const Duration(milliseconds: 700));
       }
     } finally {

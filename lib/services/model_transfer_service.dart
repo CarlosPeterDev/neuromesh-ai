@@ -13,6 +13,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../controllers/model_controller.dart';
 import 'download_service.dart';
+import 'cluster_backup.dart';
 import 'lan_network.dart';
 import 'voice_models.dart';
 
@@ -172,6 +173,10 @@ class ModelTransferServer {
   String token = '';
   String host = '127.0.0.1';
   final _table = <int, File>{};
+  Directory? _backupDirectory;
+  Uint8List? _backupKey;
+  Map<ClusterBackupPart, File> _backups = {};
+  List<TransferItem> _offer = const [];
   int bytesServed = 0;
   int activeRequests = 0;
   void Function()? onChange;
@@ -181,29 +186,58 @@ class ModelTransferServer {
   int get port => _server?.port ?? 0;
 
   /// What the receiver types or scans.
-  String get url => 'http://$host:$port/?token=$token';
+  String get url => 'http://$host:$port/?token=$token'
+      '${_backupKey == null ? '' : '#backup=${base64Url.encode(_backupKey!).replaceAll('=', '')}'}';
 
-  Future<String> start() async {
+  Future<String> start({
+    bool includeModels = true,
+    Set<ClusterBackupPart> backupParts = const {},
+  }) async {
     await stop();
     token = _randomToken();
     final ip = await lanAddress();
     if (ip == null) throw StateError('Connect to a private Wi-Fi network first.');
     host = ip;
     bytesServed = 0;
-    final s = await HttpServer.bind(InternetAddress(host), 0);
-    _server = s;
-    s.listen((req) => _handle(req), onError: (_) {});
-    return url;
+    try {
+      if (backupParts.isNotEmpty) {
+        final cache = await getTemporaryDirectory();
+        _backupDirectory = await cache.createTemp('cluster-backup-');
+        _backupKey = ClusterBackup.randomBytes(32);
+        for (final part in backupParts) {
+          final packet = await ClusterBackup.build(part, _backupKey!);
+          _backups[part] = await File('${_backupDirectory!.path}/${part.name}.bin')
+              .writeAsBytes(packet, flush: true);
+        }
+      }
+      _offer = await collectItems(includeModels: includeModels);
+      if (_offer.isEmpty) throw StateError('There is nothing selected to share.');
+      final server = await HttpServer.bind(InternetAddress(host), 0);
+      _server = server;
+      server.listen((req) => _handle(req), onError: (_) {});
+      return url;
+    } catch (_) {
+      await stop();
+      rethrow;
+    }
   }
 
   Future<void> stop() async {
     final s = _server;
     _server = null;
     _table.clear();
+    _offer = const [];
     if (s != null) {
       try {
         await s.close(force: true);
       } catch (_) {}
+    }
+    final directory = _backupDirectory;
+    _backupDirectory = null;
+    _backupKey = null;
+    _backups = {};
+    if (directory != null && await directory.exists()) {
+      await directory.delete(recursive: true);
     }
   }
 
@@ -215,7 +249,7 @@ class ModelTransferServer {
   }
 
   /// Everything installed on this device that can be sent.
-  Future<List<TransferItem>> collectItems() async {
+  Future<List<TransferItem>> collectItems({bool includeModels = true}) async {
     final out = <TransferItem>[];
     final table = <int, File>{};
     var fid = 0;
@@ -235,6 +269,7 @@ class ModelTransferServer {
       return list;
     }
 
+    if (includeModels) {
     // Text, vision and image models.
     final dl = Get.find<DownloadService>();
     final modelsDir = Directory(await dl.modelsDir);
@@ -291,6 +326,20 @@ class ModelTransferServer {
           files: files));
     }
 
+    }
+    for (final item in _backups.entries) {
+      final id = fid++;
+      table[id] = item.value;
+      out.add(TransferItem(
+        id: 'backup-${item.key.name}',
+        kind: 'backup',
+        name: item.key.label,
+        voiceId: null,
+        isDir: false,
+        files: [TransferFile('backup.bin', await item.value.length(), id)],
+      ));
+    }
+
     _table
       ..clear()
       ..addAll(table);
@@ -307,10 +356,9 @@ class ModelTransferServer {
       }
       switch (req.uri.path) {
         case '/list':
-          final items = await collectItems();
           final body = utf8.encode(jsonEncode({
             'app': 'neuromesh',
-            'items': items.map((i) => i.toJson()).toList(),
+            'items': _offer.map((i) => i.toJson()).toList(),
           }));
           res.headers.contentType = ContentType.json;
           res.contentLength = body.length;
@@ -418,7 +466,8 @@ class ModelTransferClient {
   void Function(TransferProgress)? _onProgress;
   final _tick = Stopwatch()..start();
 
-  ModelTransferClient._(this.base, this.token);
+  final Uint8List? _backupKey;
+  ModelTransferClient._(this.base, this.token, this._backupKey);
 
   /// Accepts the URL shown on the sender (scanned or typed).
   static ModelTransferClient? parse(String text) {
@@ -430,7 +479,7 @@ class ModelTransferClient {
         u.scheme != 'http' ||
         !isPrivateLanAddress(u.host) ||
         !u.hasPort || u.port < 1 || u.port > 65535 ||
-        u.userInfo.isNotEmpty || u.hasFragment ||
+        u.userInfo.isNotEmpty ||
         (u.path.isNotEmpty && u.path != '/')) {
       return null;
     }
@@ -440,8 +489,18 @@ class ModelTransferClient {
     if (!RegExp(r'^[abcdefghijkmnopqrstuvwxyz23456789]{12}$').hasMatch(t)) {
       return null;
     }
+    Uint8List? key;
+    if (u.hasFragment) {
+      final match = RegExp(r'^backup=([A-Za-z0-9_-]{43})$').firstMatch(u.fragment);
+      if (match == null) return null;
+      try {
+        key = base64Url.decode(base64Url.normalize(match.group(1)!));
+      } on FormatException {
+        return null;
+      }
+    }
     return ModelTransferClient._(
-        Uri(scheme: 'http', host: u.host, port: u.port), t);
+        Uri(scheme: 'http', host: u.host, port: u.port), t, key);
   }
 
   Uri _uri(String path, [Map<String, String> extra = const {}]) =>
@@ -500,6 +559,7 @@ class ModelTransferClient {
 
   /// True when this device already has the model complete.
   Future<bool> haveLocally(TransferItem it) async {
+    if (it.kind == 'backup') return false;
     try {
       final dest = await _destFor(it);
       if (dest == null) return false;
@@ -568,6 +628,23 @@ class ModelTransferClient {
   }
 
   Future<void> _receive(TransferItem it) async {
+    if (it.kind == 'backup') {
+      final key = _backupKey;
+      if (key == null || it.files.length != 1 ||
+          it.size < 28 || it.size > ClusterBackup.maxBytes + 28) {
+        throw const FormatException('Invalid backup or missing backup key.');
+      }
+      final cache = await getTemporaryDirectory();
+      final dir = await cache.createTemp('cluster-restore-');
+      try {
+        final file = File('${dir.path}/backup.bin');
+        await _getFile(it.files.single, file);
+        await ClusterBackup.restore(key, await file.readAsBytes());
+      } finally {
+        await dir.delete(recursive: true);
+      }
+      return;
+    }
     final dest = await _destFor(it);
     if (dest == null) {
       throw Exception(it.voiceId != null

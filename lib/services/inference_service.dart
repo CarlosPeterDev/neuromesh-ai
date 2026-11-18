@@ -73,6 +73,7 @@ class InferenceService extends GetxService {
     String? mmprojPath,
     ModelLoadDiagnostics? diagnostics,
     bool recoveringCluster = false,
+    bool safeRetry = false,
   }) async {
     if (!supportsLocalInference) {
       return 'ERROR: Local inference is not available on this platform. Use Cloud mode.';
@@ -114,7 +115,7 @@ class InferenceService extends GetxService {
       // Auto fast and GPU fast always try it. A crash doesn't pause the GPU
       // for later loads (Auto fast still falls back to CPU if a GPU load
       // itself fails).
-      final cpuOnly = liteRtMode == 'cpu_safe';
+      final cpuOnly = safeRetry || liteRtMode == 'cpu_safe';
       final forceLiteRtCpu = isLiteRt && cpuOnly;
       final shouldTryLiteRtGpu = isLiteRt && !cpuOnly;
       final allowGgufGpu = !isLiteRt && !cpuOnly;
@@ -129,8 +130,9 @@ class InferenceService extends GetxService {
           ) ??
           AppConstants.defaultContextSize;
 
-      var finalContextSize =
-          isLiteRt ? contextSize.clamp(512, 4096) : contextSize;
+      var finalContextSize = safeRetry
+          ? contextSize.clamp(512, 1024)
+          : isLiteRt ? contextSize.clamp(512, 4096) : contextSize;
       // Auto mode: shrink the context if this phone can't hold it. Never raises it.
       if (!isLiteRt &&
           _hive.getSetting<bool>('auto_context', defaultValue: true) == true &&
@@ -621,13 +623,17 @@ class InferenceService extends GetxService {
           enableLiteRtVision: enableLiteRtVision,
           allowGgufGpu: allowGgufGpu,
           mmprojPath: mmprojPath,
-          onProgress: (p) => modelLoadProgress.value = _normalizeProgress(p),
-          onLoadStage: diagnostics == null
-              ? null
-              : (stage, error) async {
-                  diagnostics.set('firstBackendError', error);
-                  await diagnostics.checkpoint(stage);
-                },
+          onProgress: (progress) {
+            final fraction = _normalizeProgress(progress);
+            if (fraction > modelLoadProgress.value) {
+              modelLoadProgress.value = fraction;
+            }
+          },
+          onLoadStage: (stage, error) async {
+            if (stage.startsWith('retry')) modelLoadProgress.value = 0;
+            diagnostics?.set('firstBackendError', error);
+            await diagnostics?.checkpoint(stage);
+          },
         );
       } catch (error, stack) {
         diagnostics

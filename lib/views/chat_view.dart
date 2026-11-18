@@ -267,7 +267,9 @@ class ChatView extends GetView<ChatController> {
     if (inf.isLoadingModel.value) {
       return (
         name: 'Loading model…',
-        meta: '${(inf.modelLoadProgress.value * 100).round()}%',
+        meta: inf.modelLoadProgress.value > 0
+            ? '${(inf.modelLoadProgress.value * 100).round()}%'
+            : 'Preparing…',
         dot: orange,
         canUnload: false,
       );
@@ -467,7 +469,7 @@ class ChatView extends GetView<ChatController> {
                       color: Theme.of(context).hintColor,
                       fontWeight: FontWeight.w500)),
             ),
-            Text('$pct%',
+            if (pct > 0) Text('$pct%',
                 style: GoogleFonts.inter(
                     fontSize: 12.5,
                     color: Theme.of(context).hintColor,
@@ -477,7 +479,7 @@ class ChatView extends GetView<ChatController> {
           ClipRRect(
               borderRadius: BorderRadius.circular(2),
               child: LinearProgressIndicator(
-                  value: inf.modelLoadProgress.value,
+                  value: pct > 0 ? inf.modelLoadProgress.value : null,
                   backgroundColor: _sep(context),
                   color: _appleBlue(context),
                   minHeight: 3)),
