@@ -23,6 +23,7 @@ import '../services/inference_service.dart';
 import '../services/voice_clone_store.dart';
 import '../services/voice_models.dart';
 import '../services/voice_service.dart';
+import '../services/workload_placement.dart';
 
 const _kLang = 'voice_lang';
 const _kSystemTts = 'voice_system_tts';
@@ -45,6 +46,7 @@ class _VoiceModelsViewState extends State<VoiceModelsView> {
   final _hive = Get.find<HiveService>();
   final _store = Get.find<VoiceModelStore>();
   bool _previewing = false;
+  String? _exportingModel;
 
   String get _sttId => _hive.getSetting<String>(_kSttId) ?? '';
   String get _ttsId => _hive.getSetting<String>(_kTtsId) ?? '';
@@ -250,18 +252,24 @@ class _VoiceModelsViewState extends State<VoiceModelsView> {
                   if (!m.clone && m.kind != VoiceKind.vad)
                     IconButton(
                         tooltip: 'Export as .zip (save or send)',
-                        icon: const Icon(Icons.ios_share_rounded),
-                        onPressed: () async {
+                        icon: _exportingModel == m.id
+                            ? const SizedBox(width: 18, height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.ios_share_rounded),
+                        onPressed: _exportingModel != null ? null : () async {
+                          setState(() => _exportingModel = m.id);
                           try {
                             final msg = await store.exportZip(m);
-                            Get.snackbar('Export', msg);
+                            if (mounted) Get.snackbar('Export', msg);
                           } catch (e) {
-                            Get.snackbar('Export failed', '$e');
+                            if (mounted) Get.snackbar('Export failed', '$e');
+                          } finally {
+                            if (mounted) setState(() => _exportingModel = null);
                           }
                         }),
                   IconButton(
                       icon: const Icon(Icons.delete_outline),
-                      onPressed: () {
+                      onPressed: _exportingModel == m.id ? null : () {
                         store.remove(m);
                         setState(() {});
                       }),
@@ -433,8 +441,9 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     _voice.sid = _hive.getSetting<int>(_kSid) ?? 0;
     _voice.speed = _hive.getSetting<double>(_kSpeed) ?? 1.0;
     final stt = _installed(VoiceKind.stt);
-    if (stt == null) {
-      _set(_CallState.error, 'Download a listening model first (Toolbox → Voice models).');
+    final remoteStt = WorkloadPlacement.forWorkload(PhoneWorkload.transcription);
+    if (stt == null && remoteStt == null) {
+      _set(_CallState.error, 'Download a listening model or assign a phone worker.');
       return;
     }
     if (!await Permission.microphone.request().isGranted) {
@@ -443,9 +452,13 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     }
     try {
       _set(_CallState.starting, 'Loading voice…');
-      if (!_voice.sttLoadedFor(stt, _lang)) await _voice.loadStt(stt, language: _lang);
+      if (remoteStt == null && stt != null && !_voice.sttLoadedFor(stt, _lang)) {
+        await _voice.loadStt(stt, language: _lang);
+      }
       final tts = _ttsChoice(_lang);
-      if (tts != null && !_hive.getSetting<bool>(_kSystemTts, defaultValue: false)!) {
+      if (tts != null &&
+          WorkloadPlacement.forWorkload(PhoneWorkload.speech) == null &&
+          !_hive.getSetting<bool>(_kSystemTts, defaultValue: false)!) {
         if (!_voice.ttsLoadedFor(tts)) await _voice.loadTts(tts);
         if (tts.clone && !_voice.hasCloneVoice) {
           await Get.find<VoiceCloneStore>().restoreActive();
@@ -574,7 +587,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     await for (final s in sentences) {
       if (_ended || _interrupted) break;
       onSpoken?.call(s); // the caption grows as each sentence is spoken
-      await _voice.speak(s, systemLang: sysLang);
+      await _voice.speak(s, systemLang: sysLang, workerLanguage: _lang);
     }
   }
 
@@ -600,7 +613,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     try {
       _set(_CallState.thinking, 'Thinking…');
       await Future<void>.delayed(const Duration(milliseconds: 30));
-      var heard = _voice.transcribe(samples);
+      var heard = await _voice.transcribeSamples(samples, language: _lang);
       if (heard.isNotEmpty && _wake.isNotEmpty) {
         final low = heard.toLowerCase();
         final at = low.indexOf(_wake);
@@ -617,8 +630,10 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       if (mounted) setState(() => _lines.add((me: true, text: heard)));
 
       final settings = Get.find<SettingsController>();
-      final workerForEnglish = _voice.workerUrl.isNotEmpty && _lang == 'en';
-      final sys = ((_ttsChoice(_lang) == null && !workerForEnglish) ||
+      final canSpeakRemotely =
+          WorkloadPlacement.forWorkload(PhoneWorkload.speech) != null ||
+          (_voice.workerUrl.isNotEmpty && _lang == 'en');
+      final sys = ((_ttsChoice(_lang) == null && !canSpeakRemotely) ||
               _hive.getSetting<bool>(_kSystemTts, defaultValue: false)!)
           ? (_lang == 'ar' ? 'ar' : 'en-US')
           : null;
@@ -782,7 +797,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     await _hive.setSetting(_kLang, next);
     setState(() => _lang = next);
     final stt = _installed(VoiceKind.stt);
-    if (stt != null) {
+    if (stt != null && WorkloadPlacement.forWorkload(PhoneWorkload.transcription) == null) {
       _busy = true;
       _set(_CallState.starting, 'Switching language…');
       try {

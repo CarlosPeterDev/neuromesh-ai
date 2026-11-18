@@ -9,6 +9,9 @@ class GgufInfo {
   final String? name;
   final String? sizeLabel;
   final int? fileType;
+  final int? parameterCount;
+  final int? tensorCount;
+  final int? splitCount;
   final int layers;
   final int trainedContext;
   final int embeddingLength;
@@ -23,6 +26,9 @@ class GgufInfo {
     required this.name,
     this.sizeLabel,
     this.fileType,
+    this.parameterCount,
+    this.tensorCount,
+    this.splitCount,
     required this.layers,
     required this.trainedContext,
     required this.embeddingLength,
@@ -277,7 +283,7 @@ class _GgufReader {
     }
     final version = await _u32();
     if (version != 2 && version != 3) return null;
-    await _u64(); // tensor count
+    final tensorCount = await _u64();
     final kvCount = await _u64();
     if (kvCount < 0 || kvCount > 65536) return null;
 
@@ -289,6 +295,8 @@ class _GgufReader {
           key == 'general.name' ||
           key == 'general.size_label' ||
           key == 'general.file_type' ||
+          key == 'general.parameter_count' ||
+          key == 'split.count' ||
           key.endsWith('.block_count') ||
           key.endsWith('.context_length') ||
           key.endsWith('.embedding_length') ||
@@ -315,6 +323,11 @@ class _GgufReader {
       name: values['general.name'] as String?,
       sizeLabel: values['general.size_label'] as String?,
       fileType: values['general.file_type'] as int?,
+      parameterCount: values['general.parameter_count'] is int
+          ? values['general.parameter_count'] as int
+          : null,
+      tensorCount: tensorCount >= 0 ? tensorCount : null,
+      splitCount: values['split.count'] as int?,
       layers: layers,
       trainedContext: intOf('context_length') ?? 4096,
       embeddingLength: embedding,

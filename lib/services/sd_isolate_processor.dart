@@ -58,6 +58,7 @@ class SdIsolateProcessor {
   bool _disposed = false;
 
   Future<bool> get modelLoaded => _modelLoadedCompleter.future;
+  String? modelLoadError;
 
   final _progressController = StreamController<ProgressUpdate>.broadcast();
   final _logController = StreamController<LogMessage>.broadcast();
@@ -149,6 +150,7 @@ class SdIsolateProcessor {
       print('[SdIsolateProcessor] Isolate.spawn failed: $e');
       if (!_initCompleter.isCompleted) _initCompleter.complete();
       if (!_modelLoadedCompleter.isCompleted) {
+        modelLoadError = 'Could not start the image runtime isolate: $e';
         _modelLoadedCompleter.complete(false);
       }
       final completer = _activeCompleter;
@@ -189,6 +191,7 @@ class SdIsolateProcessor {
     // init anyway so generate()/dispose() can't wait on it forever.
     if (!_initCompleter.isCompleted) _initCompleter.complete();
     if (!_modelLoadedCompleter.isCompleted) {
+      modelLoadError = error;
       _modelLoadedCompleter.complete(false);
     }
     final completer = _activeCompleter;

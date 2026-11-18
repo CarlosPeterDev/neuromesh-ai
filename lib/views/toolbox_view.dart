@@ -51,10 +51,28 @@ class ToolboxView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = AppTokens.of(context);
-    return Scaffold(
-      backgroundColor: t.bg,
-      appBar: appScreenBar(context, title: 'Toolbox'),
-      body: ListView(padding: kPagePadding, children: [
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        backgroundColor: t.bg,
+        appBar: appScreenBar(context, title: 'Toolbox'),
+        body: Column(children: [
+          const TabBar(tabs: [
+            Tab(text: 'AI tools'),
+            Tab(text: 'Models'),
+            Tab(text: 'Data & support'),
+          ]),
+          Expanded(child: TabBarView(children: [
+            ListView(padding: kPagePadding, children: _aiTools(context)),
+            ListView(padding: kPagePadding, children: _modelTools(context)),
+            ListView(padding: kPagePadding, children: _supportTools(context)),
+          ])),
+        ]),
+      ),
+    );
+  }
+
+  List<Widget> _aiTools(BuildContext context) => [
         Obx(() {
           final adv = Get.find<DeviceBridge>().advisory;
           if (adv == null) return const SizedBox.shrink();
@@ -169,6 +187,78 @@ class ToolboxView extends StatelessWidget {
             ),
           ]);
         }),
+        const SectionHeader('Roles'),
+        AppGroup(dividerIndent: 60, children: [
+          for (final r in kRolePresets)
+            AppRow(
+              leading: Text(r.emoji, style: const TextStyle(fontSize: 22)),
+              title: r.name,
+              subtitle: r.prompt,
+              onTap: () async {
+                await _tb.applyRole(r);
+                _toast('Role "${r.name}" is now the system prompt.');
+              },
+            ),
+        ]),
+        const SectionHeader('Prompt library'),
+        Obx(() => AppGroup(dividerIndent: 60, children: [
+              for (final p in _tb.prompts)
+                AppRow(
+                  icon: Icons.bolt_outlined,
+                  title: '${p['title']}',
+                  subtitle: '${p['text']}'.trim(),
+                  onTap: () {
+                    _tb.usePrompt('${p['text']}');
+                    Get.back();
+                    _toast('Prompt placed in the chat box.');
+                  },
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline, size: 20),
+                    onPressed: () => _tb.removePrompt('${p['id']}'),
+                  ),
+                ),
+              AppRow(
+                icon: Icons.add_rounded,
+                title: 'Add prompt',
+                onTap: () async {
+                  final title = await _ask(context, 'Prompt name', 'e.g. Email reply');
+                  if (title == null || title.isEmpty || !context.mounted) return;
+                  final text = await _ask(context, 'Prompt text', 'The text to insert', lines: 4);
+                  if (text == null || text.isEmpty) return;
+                  await _tb.addPrompt(title, text);
+                },
+              ),
+            ])),
+        const SectionHeader('Model profiles'),
+        Obx(() => AppGroup(dividerIndent: 60, children: [
+              for (final p in _tb.profiles)
+                AppRow(
+                  icon: Icons.tune_rounded,
+                  title: '${p['name']}',
+                  subtitle:
+                      'temp ${p['temperature']} · ${p['maxTokens']} tokens · ctx ${p['contextSize']}',
+                  onTap: () async {
+                    await _tb.applyProfile(p);
+                    _toast('Profile "${p['name']}" applied. Reload the model to use the new context size.');
+                  },
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline, size: 20),
+                    onPressed: () => _tb.removeProfile('${p['id']}'),
+                  ),
+                ),
+              AppRow(
+                icon: Icons.add_rounded,
+                title: 'Save current settings as profile',
+                onTap: () async {
+                  final n = await _ask(context, 'Profile name', 'e.g. Fast & short');
+                  if (n == null || n.isEmpty) return;
+                  await _tb.saveProfile(n);
+                },
+              ),
+            ])),
+      ];
+
+  List<Widget> _modelTools(BuildContext context) => [
         const SectionHeader('Performance & downloads'),
         AppGroup(dividerIndent: 60, children: [
           AppRow(
@@ -261,75 +351,9 @@ class ToolboxView extends StatelessWidget {
             ]);
           }),
         ]),
-        const SectionHeader('Roles'),
-        AppGroup(dividerIndent: 60, children: [
-          for (final r in kRolePresets)
-            AppRow(
-              leading: Text(r.emoji, style: const TextStyle(fontSize: 22)),
-              title: r.name,
-              subtitle: r.prompt,
-              onTap: () async {
-                await _tb.applyRole(r);
-                _toast('Role "${r.name}" is now the system prompt.');
-              },
-            ),
-        ]),
-        const SectionHeader('Prompt library'),
-        Obx(() => AppGroup(dividerIndent: 60, children: [
-              for (final p in _tb.prompts)
-                AppRow(
-                  icon: Icons.bolt_outlined,
-                  title: '${p['title']}',
-                  subtitle: '${p['text']}'.trim(),
-                  onTap: () {
-                    _tb.usePrompt('${p['text']}');
-                    Get.back();
-                    _toast('Prompt placed in the chat box.');
-                  },
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline, size: 20),
-                    onPressed: () => _tb.removePrompt('${p['id']}'),
-                  ),
-                ),
-              AppRow(
-                icon: Icons.add_rounded,
-                title: 'Add prompt',
-                onTap: () async {
-                  final title = await _ask(context, 'Prompt name', 'e.g. Email reply');
-                  if (title == null || title.isEmpty || !context.mounted) return;
-                  final text = await _ask(context, 'Prompt text', 'The text to insert', lines: 4);
-                  if (text == null || text.isEmpty) return;
-                  await _tb.addPrompt(title, text);
-                },
-              ),
-            ])),
-        const SectionHeader('Model profiles'),
-        Obx(() => AppGroup(dividerIndent: 60, children: [
-              for (final p in _tb.profiles)
-                AppRow(
-                  icon: Icons.tune_rounded,
-                  title: '${p['name']}',
-                  subtitle:
-                      'temp ${p['temperature']} · ${p['maxTokens']} tokens · ctx ${p['contextSize']}',
-                  onTap: () async {
-                    await _tb.applyProfile(p);
-                    _toast('Profile "${p['name']}" applied. Reload the model to use the new context size.');
-                  },
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline, size: 20),
-                    onPressed: () => _tb.removeProfile('${p['id']}'),
-                  ),
-                ),
-              AppRow(
-                icon: Icons.add_rounded,
-                title: 'Save current settings as profile',
-                onTap: () async {
-                  final n = await _ask(context, 'Profile name', 'e.g. Fast & short');
-                  if (n == null || n.isEmpty) return;
-                  await _tb.saveProfile(n);
-                },
-              ),
-            ])),
+      ];
+
+  List<Widget> _supportTools(BuildContext context) => [
         const SectionHeader('Chats & data'),
         AppGroup(dividerIndent: 60, children: [
           AppRow(
@@ -401,9 +425,7 @@ class ToolboxView extends StatelessWidget {
             },
           ),
         ]),
-      ]),
-    );
-  }
+      ];
 
   Future<void> _exportCurrent(bool md) async {
     final id = Get.find<ChatController>().currentSessionId.value;

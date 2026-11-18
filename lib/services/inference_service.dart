@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:get/get.dart';
 
 import 'hive_service.dart';
@@ -154,7 +155,10 @@ class InferenceService extends GetxService {
 
       diagnostics
         ?..set('contextActual', finalContextSize)
-        ..set('performanceMode', liteRtMode);
+        ..set('performanceMode', liteRtMode)
+        ..set('autoContextEnabled',
+            _hive.getSetting<bool>('auto_context', defaultValue: true))
+        ..set('deviceTier', _getDeviceTier());
       await diagnostics?.checkpoint(
         isLiteRt ? 'prepare LiteRT-LM' : 'prepare llama.cpp / phone cluster',
       );
@@ -190,7 +194,9 @@ class InferenceService extends GetxService {
       );
 
       if (!result.success) {
-        diagnostics?.set('engineBackend', result.backend);
+        diagnostics
+          ?..set('engineBackend', result.backend.isEmpty ? 'unknown' : result.backend)
+          ..set('progressPercent', (modelLoadProgress.value * 100).round());
         await _releaseEngine();
         return result.message;
       }
@@ -575,7 +581,13 @@ class InferenceService extends GetxService {
                   await diagnostics.checkpoint(stage);
                 },
         );
-      } catch (error) {
+      } catch (error, stack) {
+        diagnostics
+          ?..set('engineExceptionType', error.runtimeType.toString())
+          ..set('engineDartStack', stack.toString().split('\n').take(16).join('\n'));
+        if (error is PlatformException) {
+          diagnostics?.set('enginePlatformErrorCode', error.code);
+        }
         return platform.LoadResult(
           success: false,
           message: 'ERROR: Failed to load model - ${diagnosticText('$error')}',

@@ -32,6 +32,7 @@ import 'services/voice_models.dart';
 import 'services/voice_service.dart';
 import 'services/voice_clone_store.dart';
 import 'services/voice_worker.dart';
+import 'services/mcp_oauth.dart';
 import 'services/hive_service.dart';
 import 'services/inference_service.dart';
 import 'services/cluster_service.dart';
@@ -101,6 +102,9 @@ void main() {
         ));
 
     // Settings controller must be initialized before runApp for theme support
+    unawaited(McpOAuth.prepareSecureStorage().catchError((Object _) {
+      appLog.warning('Could not migrate MCP sign-in to secure storage');
+    }));
     final settingsController = Get.put(SettingsController());
     Get.put(CloudModelController());
 

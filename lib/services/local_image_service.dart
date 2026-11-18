@@ -1,15 +1,17 @@
 import 'dart:async';
-import 'dart:io' show File, Platform;
+import 'dart:io' show Directory, File, Platform;
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:image/image.dart' as img;
 import 'package:sd_flutter_android/sd_flutter_android.dart';
 import '../core/constants.dart';
 import '../core/ui.dart';
+import '../utils/image_bundle.dart';
 import '../ffi/sd_ffi_bindings.dart';
 import 'app_log_service.dart';
 import 'hive_service.dart';
 import 'model_load_diagnostics.dart';
+import 'workload_placement.dart';
 import 'sd_isolate_processor.dart';
 
 class LocalImageService extends GetxService {
@@ -31,6 +33,7 @@ class LocalImageService extends GetxService {
   final currentQuantization = QuantizationType.f16.obs;
 
   SdIsolateProcessor? _processor;
+  String? _backendLoadError;
 
   String? get lastModelPath =>
       _hive.getSetting<String>(AppConstants.keyImageModelPath);
@@ -81,12 +84,18 @@ class LocalImageService extends GetxService {
     required String modelPath,
     required String? taesdPath,
     required double maxVramGb,
+    ImageBundle? bundle,
   }) async {
     final isGpuBackend = backend != Backend.cpu;
     print(
         '[LocalImageService] Creating SdIsolateProcessor (backend=${backend.displayName}, quant=${currentQuantization.value.displayName})...');
+    latestLog.value = '';
+    _backendLoadError = null;
     _processor = SdIsolateProcessor(
-      modelPath: modelPath,
+      modelPath: bundle?.model ?? modelPath,
+      vaePath: bundle?.vae,
+      clipLPath: bundle?.clipL,
+      extraPaths: bundle?.extraPaths ?? const {},
       nThreads: 0,
       flashAttn: !isGpuBackend,
       vaeTiling: true,
@@ -104,8 +113,12 @@ class LocalImageService extends GetxService {
     });
 
     final modelLoaded = await _processor!.modelLoaded
-        .timeout(const Duration(seconds: 120), onTimeout: () => false);
+        .timeout(const Duration(seconds: 120), onTimeout: () {
+      _backendLoadError = 'Image backend initialization timed out after 120 seconds.';
+      return false;
+    });
     if (!modelLoaded) {
+      _backendLoadError ??= _processor?.modelLoadError ?? 'Backend initialization failed.';
       await _processor?.dispose();
       _processor = null;
     }
@@ -161,6 +174,30 @@ class LocalImageService extends GetxService {
       }
 
       int modelSizeMb = 0;
+      ImageBundle? bundle;
+      if (modelPath.toLowerCase().endsWith('.sdbundle')) {
+        final directory = Directory(modelPath);
+        if (!await directory.exists()) {
+          return 'ERROR: The image model folder is missing.';
+        }
+        final files = <String, int>{};
+        await for (final entry in directory.list(recursive: true, followLinks: false)) {
+          if (entry is! File || roleOfFile(entry.path) == BundleRole.other) continue;
+          final length = await entry.length();
+          if (length > 0) files[entry.path] = length;
+        }
+        bundle = resolveBundle(files.keys.toList(), sizes: files);
+        diagnostics?.set('imageBundleComponents', files.keys
+            .map((path) => path.split('/').last).join(', '));
+        if (!bundle.isValid) {
+          return 'ERROR: The image bundle needs a diffusion model or checkpoint.';
+        }
+        if (bundle.diffusion.isNotEmpty && bundle.vae.isEmpty) {
+          diagnostics?.set('imageBundleWarning', 'No separate VAE was found.');
+        }
+        modelSizeMb = (files.values.fold<int>(0, (sum, value) => sum + value) /
+            (1024 * 1024)).round();
+      }
       try {
         final file = File(modelPath);
         final exists = await file.exists();
@@ -298,6 +335,7 @@ class LocalImageService extends GetxService {
           'imageBackendCandidates',
           candidateBackends.map((b) => b.displayName).join(', '),
         );
+      final failures = <String>[];
       for (final backend in candidateBackends) {
         await diagnostics?.checkpoint(
           'initialize image backend: ${backend.displayName}',
@@ -306,10 +344,15 @@ class LocalImageService extends GetxService {
         final modelLoaded = await _tryLoadWithBackend(
           backend: backend,
           modelPath: modelPath,
-          taesdPath: taesdPath,
+          taesdPath: bundle == null ? taesdPath : null,
+          bundle: bundle,
           maxVramGb: backend == Backend.cpu ? 0.0 : maxVramGb,
         );
         if (!modelLoaded) {
+          failures.add('${backend.displayName}: ${_backendLoadError ?? 'Unknown error'}');
+          diagnostics
+            ?..set('imageBackendFailures', failures.join('\n'))
+            ..set('lastNativeImageLog', latestLog.value);
           print(
             '[LocalImageService] Backend failed: ${backend.displayName}; trying fallback',
           );
@@ -342,14 +385,14 @@ class LocalImageService extends GetxService {
         details:
             'All backend candidates failed. model=${modelName ?? modelPath.split('/').last}, vendor=$vendor, sizeMb=$modelSizeMb',
       );
-      return 'Could not load this model. Try CyberRealistic, Realistic Vision, or AbsoluteReality - these work reliably on most devices.\n\nTechnical detail: All backend candidates failed.';
+      return 'ERROR: Every image backend failed. ${failures.join(' | ')}';
     } catch (e) {
       isModelLoaded.value = false;
       Get.find<AppLogService>().error(
         'Image model load exception',
         details: 'model=${modelName ?? modelPath.split('/').last}, error=$e',
       );
-      return 'Could not load this model. Try CyberRealistic, Realistic Vision, or AbsoluteReality - these work reliably on most devices.\n\nTechnical detail: $e';
+      return 'ERROR: Could not load the image model. ${diagnosticText('$e')}';
     } finally {
       isLoadingModel.value = false;
       loadingModelName.value = '';
@@ -423,6 +466,7 @@ class LocalImageService extends GetxService {
   Future<Uint8List?> generateImage({
     required String prompt,
     void Function(int step, int totalSteps)? onProgress,
+    bool allowWorker = true,
   }) async {
     lastFailureReason = null;
     if (_nativeJobRunning) {
@@ -433,6 +477,22 @@ class LocalImageService extends GetxService {
     final jobId = ++_jobId;
     _nativeJobRunning = true;
     try {
+      final worker = allowWorker
+          ? WorkloadPlacement.forWorkload(PhoneWorkload.image)
+          : null;
+      if (worker != null) {
+        isGenerating.value = true;
+        try {
+          final bytes = await worker.request(PhoneWorkload.image.path,
+              payload: {'text': prompt}, timeout: const Duration(minutes: 8));
+          return jobId == _jobId ? bytes : null;
+        } catch (error) {
+          lastFailureReason = 'Image worker failed: ${diagnosticText('$error')}';
+          return null;
+        } finally {
+          isGenerating.value = false;
+        }
+      }
       final bytes = await _generateImage(
         prompt: prompt,
         onProgress: (step, total) {

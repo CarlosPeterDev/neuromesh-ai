@@ -16,7 +16,8 @@ import 'cluster_view.dart';
 import 'log_view.dart';
 import 'toolbox_view.dart';
 import '../core/haptics.dart';
-import '../core/nav_hub.dart';
+import 'diagnostics_view.dart';
+import 'workload_placement_view.dart';
 
 const _tabular = [FontFeature.tabularFigures()];
 
@@ -36,7 +37,7 @@ class SettingsView extends GetView<SettingsController> {
         return ListView(
           padding: kPagePadding,
           children: [
-            const SectionHeader('General',
+            const SectionHeader('Appearance & feedback',
                 padding: EdgeInsets.fromLTRB(4, 8, 4, 8)),
             AppGroup(dividerIndent: 60, children: [
               _navRow(
@@ -57,7 +58,7 @@ class SettingsView extends GetView<SettingsController> {
                     .setHapticsEnabled(!controller.hapticsEnabled.value),
               ),
             ]),
-            const SectionHeader('Chat'),
+            const SectionHeader('Chat & model defaults'),
             AppGroup(dividerIndent: 60, children: [
               _navRow(
                 context,
@@ -92,22 +93,7 @@ class SettingsView extends GetView<SettingsController> {
                     ]),
               ),
             ]),
-            // Every tool and screen of the app, grouped, so nothing lives only
-            // in the chat's top bar or the toolbox.
-            for (final sec in buildNavSections()) ...[
-              SectionHeader(sec.title),
-              AppGroup(dividerIndent: 60, children: [
-                for (final e in sec.entries.where((e) => e.title != 'Settings'))
-                  AppRow(
-                    icon: e.icon,
-                    title: e.title,
-                    subtitle: e.subtitle,
-                    chevron: true,
-                    onTap: e.open,
-                  ),
-              ]),
-            ],
-            const SectionHeader('Performance'),
+            const SectionHeader('On-device performance'),
             AppGroup(dividerIndent: 60, children: [
               _navRow(
                 context,
@@ -129,6 +115,9 @@ class SettingsView extends GetView<SettingsController> {
                     : 'GPU',
                 builder: (ctx) => _buildImageGenerationGroup(ctx),
               ),
+            ]),
+            const SectionHeader('Connected devices'),
+            AppGroup(dividerIndent: 60, children: [
               if (Get.isRegistered<ClusterService>())
                 AppRow(
                   icon: Icons.hub_outlined,
@@ -143,8 +132,15 @@ class SettingsView extends GetView<SettingsController> {
                   chevron: true,
                   onTap: () => Get.to(() => const ClusterView()),
                 ),
+              AppRow(
+                icon: Icons.devices_other_rounded,
+                title: 'Workload placement',
+                subtitle: 'Choose phones for speech, recognition and images',
+                chevron: true,
+                onTap: () => Get.to(() => const WorkloadPlacementView()),
+              ),
             ]),
-            const SectionHeader('Tools'),
+            const SectionHeader('Utilities'),
             AppGroup(dividerIndent: 60, children: [
               AppRow(
                 icon: Icons.handyman_outlined,
@@ -154,7 +150,7 @@ class SettingsView extends GetView<SettingsController> {
                 onTap: () => Get.to(() => const ToolboxView()),
               ),
             ]),
-            const SectionHeader('About'),
+            const SectionHeader('Support & app info'),
             AppGroup(dividerIndent: 60, children: [
               if (showUpdates) _buildUpdatesRow(context),
               _navRow(
@@ -164,6 +160,12 @@ class SettingsView extends GetView<SettingsController> {
                 value: '${device.totalRamGB.value.toStringAsFixed(1)} GB RAM',
                 builder: (ctx) => AppGroup(children: [_buildDeviceCard(ctx)]),
                 reactive: false,
+              ),
+              AppRow(
+                icon: Icons.bug_report_outlined,
+                title: 'Report an error',
+                chevron: true,
+                onTap: () => Get.to(() => const DiagnosticsView()),
               ),
               AppRow(
                 icon: Icons.article_outlined,

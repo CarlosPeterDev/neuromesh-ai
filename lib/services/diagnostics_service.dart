@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../ffi/sd_ffi_bindings.dart';
 import '../core/redact.dart';
+import '../core/build_flavor.dart';
 import 'app_log_service.dart';
 import 'device_bridge.dart';
 import 'hive_service.dart';
@@ -26,6 +27,9 @@ class DiagnosticsService {
   static Future<String> buildReport({bool includeRecentErrors = false}) async {
     final report = StringBuffer()
       ..writeln('NeuroMesh AI diagnostic report')
+      ..writeln('Report format: 2')
+      ..writeln(
+          'Build channel: ${kPlayBuild ? 'Google Play' : kProBuild ? 'Pro' : 'Standard'}')
       ..writeln('Created (UTC): ${DateTime.now().toUtc().toIso8601String()}')
       ..writeln(
         'OS: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}',
@@ -44,7 +48,10 @@ class DiagnosticsService {
           ..writeln('Device: ${android.manufacturer} ${android.model}')
           ..writeln('Android release: ${android.version.release}')
           ..writeln('Android SDK: ${android.version.sdkInt}')
-          ..writeln('ABIs: ${android.supportedAbis.join(', ')}');
+          ..writeln('ABIs: ${android.supportedAbis.join(', ')}')
+          ..writeln('Hardware: ${android.hardware}')
+          ..writeln('Board: ${android.board}')
+          ..writeln('Physical device: ${android.isPhysicalDevice}');
       } catch (_) {
         report.writeln('Android device details: unavailable');
       }
@@ -57,6 +64,7 @@ class DiagnosticsService {
       for (final (key, label) in [
         ('ramTotal', 'Total RAM (MiB)'),
         ('ramFree', 'Available RAM (MiB)'),
+        ('ramLowThreshold', 'Low memory threshold (MiB)'),
         ('storageFree', 'Available internal storage (MiB)'),
         ('storageTotal', 'Internal storage (MiB)'),
         ('level', 'Battery (%)'),
@@ -67,6 +75,9 @@ class DiagnosticsService {
         final display =
             label.endsWith('(MiB)') ? (value / (1024 * 1024)).round() : value;
         report.writeln('$label: $display');
+      }
+      if (status['lowMemory'] case final bool lowMemory) {
+        report.writeln('Android reports memory pressure: $lowMemory');
       }
     }
     if (Get.isRegistered<InferenceService>()) {
@@ -109,18 +120,34 @@ class DiagnosticsService {
           );
         }
         for (final entry in snapshot.entries) {
-          report.writeln('${entry.key}: ${entry.value}');
+          if (entry.key != 'timeline') {
+            report.writeln('${entry.key}: ${entry.value}');
+          }
+        }
+        if (snapshot['timeline'] case final List events
+            when events.isNotEmpty) {
+          report.writeln('Model load timeline (milliseconds since start)');
+          for (final event in events.whereType<Map>()) {
+            report.writeln('+ ${event['elapsedMs']} ms  ${event['stage']}');
+          }
         }
       }
     }
     if (includeRecentErrors && Get.isRegistered<AppLogService>()) {
-      final entries =
-          Get.find<AppLogService>().importantEntries.take(50).toList();
+      final entries = Get.find<AppLogService>()
+          .entries
+          .where((entry) =>
+              entry.isImportant ||
+              entry.message.startsWith('[Inference]') ||
+              entry.message.startsWith('[LocalImageService]') ||
+              entry.message.startsWith('[ModelController]'))
+          .take(80)
+          .toList();
       report
         ..writeln()
-        ..writeln('Recent app warnings and errors');
+        ..writeln('Recent app errors, warnings and model runtime logs');
       for (final entry in entries.reversed) {
-        final line = entry.format();
+        final line = diagnosticText(entry.format());
         report.writeln(
           line.length <= 2000 ? line : '${line.substring(0, 2000)}…',
         );

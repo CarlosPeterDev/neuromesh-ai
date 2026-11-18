@@ -8,7 +8,6 @@ import '../core/ui.dart';
 import '../models/ai_model.dart';
 import '../services/download_service.dart';
 import '../services/favorites_service.dart';
-import '../services/device_info_service.dart';
 import '../services/hf_service.dart';
 import '../utils/image_bundle.dart';
 import '../utils/model_fit.dart';
@@ -695,7 +694,7 @@ class _BundlePickerState extends State<_BundlePicker> {
                       'This repository has no .safetensors or .gguf weights the app can use.');
         }
         final sizes = {for (final f in parts) f.path: f.size};
-        _selected ??= recommendBundle(sizes).toSet();
+        _selected ??= recommendBundle(sizes, familyHint: widget.repo.name).toSet();
         final sel = _selected!;
         final total = parts.where((f) => sel.contains(f.path)).fold<int>(0, (a, f) => a + f.size);
         final b = resolveBundle(sel.toList(), sizes: sizes);

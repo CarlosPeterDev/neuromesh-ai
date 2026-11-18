@@ -110,6 +110,17 @@ class TunnelService extends GetxService {
     }
   }
 
+  // Published by the tunnel provider: https://localhost.run/docs/security
+  static bool verifyHostKey(String algorithm, Uint8List fingerprint) {
+    final expected = switch (algorithm) {
+      'ssh-ed25519' => 'SHA256:pG6qrBxubYfWa1Zadu/V0NUgjEDiBds/7e2xzte/QNM',
+      'ssh-rsa' || 'rsa-sha2-256' || 'rsa-sha2-512' =>
+        'SHA256:FV8IMJ4IYjYUTnd6on7PqbRjaZf4c1EhhEBgeUdE94I',
+      _ => null,
+    };
+    return expected != null && ascii.decode(fingerprint, allowInvalid: true) == expected;
+  }
+
   Future<void> _connectOnce(int gen) async {
     SSHClient? client;
     SSHRemoteForward? fwd;
@@ -119,11 +130,12 @@ class TunnelService extends GetxService {
       client = SSHClient(
         socket,
         username: 'nokey',
+        onVerifyHostKey: verifyHostKey,
         onPasswordRequest: () => '',
         keepAliveInterval: const Duration(seconds: 20),
       );
       _client = client;
-      await client.authenticated;
+      await client.authenticated.timeout(const Duration(seconds: 20));
       if (gen != _gen) throw Exception('stopped');
 
       // Ask the server to listen on port 80 and send us every connection.

@@ -46,12 +46,20 @@ void main() {
 
     Get.put(await HiveService().init());
     final first = ModelLoadDiagnostics()..set('model', 'interrupted');
+    first.stage('check file');
     await first.checkpoint('initialize GPU');
+    await first.checkpoint('retry CPU');
     await Hive.close();
     Get.reset();
     final reopened = Get.put(await HiveService().init());
     expect(reopened.getSetting<Map>(ModelLoadDiagnostics.pendingKey)?['stage'],
-        'initialize GPU');
+        'retry CPU');
+    final snapshot = reopened.getSetting<Map>(ModelLoadDiagnostics.pendingKey)!;
+    final timeline = (snapshot['timeline'] as List).cast<Map>();
+    expect(timeline.map((event) => event['stage']),
+        ['check file', 'initialize GPU', 'retry CPU']);
+    expect(timeline.last['elapsedMs'],
+        greaterThanOrEqualTo(timeline.first['elapsedMs']));
 
     final next = ModelLoadDiagnostics()..set('model', 'retry');
     await next.checkpoint('initialize CPU');

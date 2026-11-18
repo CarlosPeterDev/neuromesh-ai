@@ -664,10 +664,17 @@ class ModelController extends GetxController {
     isPreparingModel.value = true;
     final report = ModelLoadDiagnostics()
       ..set('file', filename)
-      ..set('stage', 'file check');
+      ..stage('file check');
     try {
       await _loadModel(filename, report);
-    } catch (error) {
+    } catch (error, stack) {
+      report
+        ..set('exceptionType', error.runtimeType.toString())
+        ..set('dartStack', stack.toString().split('\n').take(16).join('\n'));
+      if (error is PlatformException) report.set('platformErrorCode', error.code);
+      if (error is FileSystemException) {
+        report.set('osErrorCode', error.osError?.errorCode);
+      }
       await _reportLoadFailure(filename, report, diagnosticText('$error'));
     } finally {
       await report.finish();
@@ -690,6 +697,9 @@ class ModelController extends GetxController {
       ..set('model', name)
       ..set('runtime', isImage ? 'image' : isLiteRt ? 'LiteRT-LM' : 'llama.cpp')
       ..set('parametersFromName', parameters ?? 'unknown')
+      ..set('quantizationFromFilename', RegExp(
+          r'(?:^|[^a-z0-9])((?:i?q[2-8](?:_[a-z0-9]+)*)|fp8|f16|bf16|f32)(?=$|[^a-z0-9])',
+          caseSensitive: false).firstMatch(lower)?.group(1)?.toUpperCase())
       ..set('imageForceCpu', isImage ? _settings.imageGenForceCpu.value : null)
       ..set('contextRequested', isImage ? null : _settings.contextSize.value)
       ..set('performanceMode', isImage
@@ -735,6 +745,7 @@ class ModelController extends GetxController {
       return _reportLoadFailure(filename, report,
           'Invalid LiteRT-LM file. Download the model again.');
     }
+    report.stage('read model metadata');
     final gguf = lower.endsWith('.gguf') ? await readGgufInfo(path) : null;
     if (gguf != null) {
       report
@@ -742,10 +753,15 @@ class ModelController extends GetxController {
         ..set('ggufName', gguf.name)
         ..set('ggufSizeLabel', gguf.sizeLabel)
         ..set('ggufFileType', gguf.fileType)
+        ..set('ggufParameterCount', gguf.parameterCount)
+        ..set('ggufTensorCount', gguf.tensorCount)
+        ..set('ggufSplitCount', gguf.splitCount)
         ..set('ggufLayers', gguf.layers)
-        ..set('ggufTrainingContext', gguf.trainedContext);
+        ..set('ggufTrainingContext', gguf.trainedContext)
+        ..set('ggufEstimatedBytesAtRequestedContext',
+            gguf.estimateBytes(_settings.contextSize.value));
     }
-    report.set('stage', 'load confirmation');
+    report.stage('load confirmation');
     // The phone cluster splits GGUF models only (llama.cpp); a LiteRT model
     // always runs on this phone, so say so instead of silently ignoring the
     // workers.
@@ -768,7 +784,7 @@ class ModelController extends GetxController {
     }
 
     if (isImage) {
-      report.set('stage', 'prepare image backend');
+      report.stage('prepare image backend');
       // Auto-download TAESD for fast VAE decode if not present
       String? taesdPath;
       try {
@@ -825,7 +841,12 @@ class ModelController extends GetxController {
           }
         }
       }
-      report.set('visionProjectorAvailable', mmprojPath != null);
+      report
+        ..set('visionProjectorAvailable', mmprojPath != null)
+        ..set('visionProjectorExpected', model?.hasVisionProjector ?? false)
+        ..set('visionProjector', model?.hasVisionProjector == true
+            ? model!.mmprojFilename
+            : null);
       final result = await _inference.loadModel(
         path,
         diagnostics: report,
@@ -863,6 +884,7 @@ class ModelController extends GetxController {
     ({String? likely, String details})? diagnosis,
   }) async {
     final details = diagnosticText(diagnosis?.details ?? error);
+    report.set('likelyCause', diagnosis?.likely ?? _getFriendlyErrorMessage(error));
     await report.finish(error: error, details: diagnosis == null ? null : details);
     final safeError = diagnosticText(error);
     Get.find<AppLogService>().error('Model load failed', details: safeError);

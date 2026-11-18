@@ -315,6 +315,8 @@ class DeviceBridge(private val context: Context) {
             am.getMemoryInfo(mi)
             out["ramTotal"] = mi.totalMem
             out["ramFree"] = mi.availMem
+            out["lowMemory"] = mi.lowMemory
+            out["ramLowThreshold"] = mi.threshold
         } catch (_: Exception) {
         }
         try {

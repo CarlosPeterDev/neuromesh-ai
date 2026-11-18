@@ -84,6 +84,8 @@ void main() {
       ..string('general.name', 'Qwen2.5 1.5B Instruct')
       ..string('general.size_label', '1.5B')
       ..u32('general.file_type', 15)
+      ..u32('general.parameter_count', 1500000000)
+      ..u32('split.count', 2)
       // Large vocab arrays before the arch keys: the reader must skip them.
       ..stringArray('tokenizer.ggml.tokens', 150000)
       ..floatArray('tokenizer.ggml.scores', 150000)
@@ -102,6 +104,8 @@ void main() {
     expect(info.name, 'Qwen2.5 1.5B Instruct');
     expect(info.sizeLabel, '1.5B');
     expect(info.fileType, 15);
+    expect(info.parameterCount, 1500000000);
+    expect(info.splitCount, 2);
     expect(info.layers, 28);
     expect(info.trainedContext, 32768);
     expect(info.headCountKv, 2);
