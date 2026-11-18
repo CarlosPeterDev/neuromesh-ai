@@ -1,0 +1,13 @@
+name = "neuromesh-diagnostics"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[[ratelimits]]
+name = "REPORTS_PER_SENDER"
+namespace_id = "304601"
+simple = { limit = 3, period = 60 }
+
+[[ratelimits]]
+name = "REPORTS_PER_LOCATION"
+namespace_id = "304602"
+simple = { limit = 30, period = 60 }

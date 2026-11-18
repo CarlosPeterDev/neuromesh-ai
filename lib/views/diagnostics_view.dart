@@ -13,7 +13,9 @@ class DiagnosticsView extends StatefulWidget {
 class _DiagnosticsViewState extends State<DiagnosticsView> {
   late Future<String> _report;
   bool _includeErrors = false;
-  bool _sharing = false;
+  bool _sending = false;
+  bool _sent = false;
+  String? _sendError;
   String _description = '';
 
   @override
@@ -28,23 +30,19 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
     );
   }
 
-  Future<void> _share(BuildContext buttonContext, String preview) async {
-    final box = buttonContext.findRenderObject() as RenderBox;
-    final origin = box.localToGlobal(Offset.zero) & box.size;
-    setState(() => _sharing = true);
+  Future<void> _send(String preview) async {
+    if (_sending || _sent) return;
+    setState(() {
+      _sending = true;
+      _sendError = null;
+    });
     try {
-      await DiagnosticsService.shareReport(
-        preview,
-        sharePositionOrigin: origin,
-      );
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not share the ZIP. Try again.')),
-        );
-      }
+      await DiagnosticsService.sendReport(preview);
+      if (mounted) setState(() => _sent = true);
+    } on ReportSubmissionError catch (error) {
+      if (mounted) setState(() => _sendError = error.message);
     } finally {
-      if (mounted) setState(() => _sharing = false);
+      if (mounted) setState(() => _sending = false);
     }
   }
 
@@ -70,20 +68,20 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
                         const Padding(
                           padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
                           child: Text(
-                            'Describe the problem and review the diagnostic '
-                            'details before sharing your report.',
+                            'Your report goes to NeuroMesh support via Telegram '
+                            'when you tap Send report. Review the preview first.',
                           ),
                         ),
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                           child: TextFormField(
                             initialValue: _description,
-                            enabled: !_sharing,
+                            enabled: !_sending && !_sent,
                             minLines: 2,
                             maxLines: 4,
                             maxLength: 1500,
                             decoration: const InputDecoration(
-                              labelText: 'What happened? (optional)',
+                              labelText: 'What happened?',
                               hintText:
                                   'What did you try, and what did you expect?',
                             ),
@@ -95,9 +93,9 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
                           value: _includeErrors,
                           title: const Text('Include recent app logs'),
                           subtitle: const Text(
-                            'Review these logs for personal details before sharing.',
+                            'Review these logs for personal details before sending.',
                           ),
-                          onChanged: _sharing
+                          onChanged: (_sending || _sent)
                               ? null
                               : (value) => setState(() {
                                     _includeErrors = value;
@@ -126,15 +124,34 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
                   if (preview != null)
                     Padding(
                       padding: const EdgeInsets.all(16),
-                      child: Builder(
-                        builder: (buttonContext) => FilledButton.icon(
-                          icon: const Icon(Icons.share_outlined),
-                          label: Text(
-                              _sharing ? 'Preparing report…' : 'Share report'),
-                          onPressed: _sharing
-                              ? null
-                              : () => _share(buttonContext, preview),
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (_sendError case final message?)
+                            Text(message,
+                                style: TextStyle(
+                                    color:
+                                        Theme.of(context).colorScheme.error)),
+                          if (!DiagnosticsService.canSendReport)
+                            const Text(
+                                'Report delivery is not configured in this build.'),
+                          FilledButton.icon(
+                            icon: Icon(_sent
+                                ? Icons.check_rounded
+                                : Icons.send_outlined),
+                            label: Text(_sent
+                                ? 'Report sent'
+                                : _sending
+                                    ? 'Sending…'
+                                    : 'Send report'),
+                            onPressed: _sending ||
+                                    _sent ||
+                                    note.isEmpty ||
+                                    !DiagnosticsService.canSendReport
+                                ? null
+                                : () => _send(preview),
+                          ),
+                        ],
                       ),
                     ),
                 ],

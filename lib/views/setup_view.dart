@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -6,6 +9,7 @@ import '../core/build_flavor.dart';
 import '../models/ai_model.dart';
 import '../core/ui.dart';
 import '../services/agent_service.dart';
+import '../services/app_log_service.dart';
 import '../services/device_bridge.dart';
 import '../services/device_info_service.dart';
 import '../services/download_queue.dart';
@@ -33,6 +37,7 @@ class _SetupViewState extends State<SetupView> {
   late final double _ram = Get.find<DeviceInfoService>().totalRamGB.value;
   late final bool _setUpBefore = _hive.getSetting<bool>(kSetupDone) == true;
   bool _busy = false;
+  String? _saveError;
 
   // Downloads
   bool wifiOnly = true;
@@ -92,71 +97,127 @@ class _SetupViewState extends State<SetupView> {
   AiModel get _recommendedModel => quickStartModels(_ram).last;
 
   Future<void> _apply() async {
-    setState(() => _busy = true);
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _saveError = null;
+    });
+    var closed = false;
     try {
       final agent = Get.find<AgentService>();
-      await _hive.setSetting('wifi_only', wifiOnly);
-      await _hive.setSetting('auto_context', autoContext);
-      await _hive.setSetting('auto_title', autoTitle);
-      await _hive.setSetting('auto_load_last', loadLast);
+      await _hive.settingsBox.putAll({
+        'wifi_only': wifiOnly,
+        'auto_context': autoContext,
+        'auto_title': autoTitle,
+        'auto_load_last': loadLast,
+      });
       await agent.setMode(tools ? AgentChatMode.auto : AgentChatMode.off);
       await agent.setAutoMemory(autoMemory);
       await MemoryService.ensure().setEnabled(memoryUpdate);
       if (_pro) {
-        final p = sandboxNoAsk ? 'allow' : 'default';
-        for (final t in const ['run_shell', 'run_script', 'install_packages', 'convert_file', 'create_tool', 'sandbox_setup']) {
-          await agent.setPolicy('built-in', t, p);
+        final policy = sandboxNoAsk ? 'allow' : 'default';
+        for (final tool in const [
+          'run_shell', 'run_script', 'install_packages', 'convert_file',
+          'create_tool', 'sandbox_setup',
+        ]) {
+          await agent.setPolicy('built-in', tool, policy);
         }
       }
-      await _hive.setSetting(kSetupDone, true);
-      await _hive.setSetting('quick_start_seen', true);
+      final language = _hive.getSetting<String>('voice_lang') ?? 'en';
+      final tts = ttsAr && (!ttsEn || language == 'ar')
+          ? 'piper-ar-kareem'
+          : ttsEn
+              ? 'piper-en-amy'
+              : null;
+      await _hive.settingsBox.putAll({
+        if (stt && (_hive.getSetting<String>('voice_stt_id') ?? '').isEmpty)
+          'voice_stt_id': _sttId,
+        if (tts != null && (_hive.getSetting<String>('voice_tts_id') ?? '').isEmpty)
+          'voice_tts_id': tts,
+        kSetupDone: true,
+        'quick_start_seen': true,
+      });
+      if (!mounted) return;
 
-      // Only start big downloads on Wi-Fi when that is what the user asked for.
-      var onWifi = true;
-      if (wifiOnly) {
-        try {
-          final st = await Get.find<DeviceBridge>().status();
-          onWifi = st.isEmpty || st['network'] == 'wifi' || st['network'] == 'ethernet';
-        } catch (_) {}
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      Navigator.of(context).pop();
+      closed = true;
+      unawaited(_startDownloads(messenger));
+    } catch (error) {
+      Get.find<AppLogService>().error('Could not apply recommended settings',
+          details: error);
+      if (mounted) {
+        setState(() => _saveError = 'Could not save your settings. Try again.');
       }
-      final todo = <String>[];
-      if (onWifi) {
-        if (chatModel && !_hasModel) {
-          Get.find<DownloadQueue>().add(_recommendedModel);
-          todo.add('chat model');
-        }
-        final vs = Get.find<VoiceModelStore>();
-        Future<void> dl(String id) async {
-          final m = voiceModelById(id);
-          if (m == null || _has(id)) return;
-          todo.add(m.title.split('(').first.trim());
-          await _hive.setSetting(m.kind == VoiceKind.stt ? 'voice_stt_id' : 'voice_tts_id', id);
-          vs.download(m); // runs in the background
-        }
-
-        if (stt) await dl(_sttId);
-        if (ttsEn) await dl('piper-en-amy');
-        if (ttsAr) await dl('piper-ar-kareem');
-        if (vad) await dl('silero-vad');
-        if (_pro && sandbox) {
-          final sb = Get.find<SandboxService>();
-          if (!sb.installed.value) {
-            todo.add('Linux sandbox');
-            _installSandbox(sb);
-          }
-        }
-      } else if (chatModel || stt || ttsEn || ttsAr || vad || sandbox) {
-        Get.snackbar('Waiting for Wi-Fi',
-            'Settings saved. Downloads were not started because Wi-Fi only is on and you are not on Wi-Fi. Open this screen again on Wi-Fi.',
-            duration: const Duration(seconds: 6));
-      }
-      if (todo.isNotEmpty) {
-        Get.snackbar('Downloading in the background', todo.join(', '),
-            duration: const Duration(seconds: 5));
-      }
-      if (mounted) Get.back();
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted && !closed) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  Future<void> _startDownloads(ScaffoldMessengerState? messenger) async {
+    final voiceIds = [
+      if (stt && !_has(_sttId)) _sttId,
+      if (ttsEn && !_has('piper-en-amy')) 'piper-en-amy',
+      if (ttsAr && !_has('piper-ar-kareem')) 'piper-ar-kareem',
+      if (vad && !_has('silero-vad')) 'silero-vad',
+    ];
+    final useChatModel = chatModel && !_hasModel;
+    final installSandbox = _pro && sandbox &&
+        !Get.find<SandboxService>().installed.value;
+    void notify(String message) {
+      if (messenger?.mounted == true) {
+        messenger!.showSnackBar(SnackBar(content: Text(message)));
+      }
+    }
+
+    try {
+      if (!useChatModel && voiceIds.isEmpty && !installSandbox) {
+        notify('Settings applied.');
+        return;
+      }
+      if (wifiOnly && Platform.isAndroid) {
+        final status = await Get.find<DeviceBridge>().status()
+            .timeout(const Duration(seconds: 3), onTimeout: () => {});
+        final network = status['network'];
+        if (network != 'wifi' && network != 'ethernet') {
+          notify('Settings applied. Connect to Wi-Fi and reopen Setup to start downloads.');
+          return;
+        }
+      }
+
+      if (useChatModel) Get.find<DownloadQueue>().add(_recommendedModel);
+      final store = Get.find<VoiceModelStore>();
+      for (final id in voiceIds) {
+        final model = voiceModelById(id);
+        if (model != null) unawaited(store.download(model).catchError((Object error) {
+          Get.find<AppLogService>().error('Voice model download could not start',
+              details: error);
+        }));
+      }
+      if (installSandbox) unawaited(_installSandbox(Get.find<SandboxService>()));
+      notify('Settings applied. Selected downloads are starting.');
+    } catch (error) {
+      Get.find<AppLogService>().error('Setup downloads could not start',
+          details: error);
+      notify('Settings applied. Open Models to start the downloads again.');
+    }
+  }
+
+  Future<void> _skip() async {
+    if (_busy) return;
+    try {
+      setState(() => _busy = true);
+      await _hive.setSetting(kSetupDone, true);
+      if (mounted) Navigator.of(context).pop();
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _saveError = 'Could not save your choice. Try again.';
+        });
+      }
     }
   }
 
@@ -179,7 +240,7 @@ class _SetupViewState extends State<SetupView> {
         icon: icon,
         title: rec ? '$title  ·  recommended' : title,
         subtitle: sub,
-        trailing: Switch(value: v, onChanged: (x) => setState(() => on(x))),
+        trailing: Switch(value: v, onChanged: _busy ? null : (x) => setState(() => on(x))),
       );
 
   @override
@@ -223,13 +284,12 @@ class _SetupViewState extends State<SetupView> {
           _sw(Icons.play_circle_outline_rounded, 'Load last model on start', 'Opens ready to chat but uses RAM right away', loadLast, (v) => loadLast = v, rec: false),
         ]),
         const SizedBox(height: 16),
+        if (_saveError case final message?)
+          AppNotice(message, icon: Icons.error_outline_rounded),
         PrimaryButton(label: _setUpBefore && !widget.firstRun ? 'Save' : 'Apply recommended settings', icon: Icons.check_rounded, busy: _busy, onPressed: _apply),
         if (widget.firstRun)
           TextButton(
-              onPressed: () async {
-                await _hive.setSetting(kSetupDone, true);
-                Get.back();
-              },
+              onPressed: _busy ? null : _skip,
               child: const Text('Skip for now')),
         const SizedBox(height: 24),
       ]),
@@ -242,5 +302,4 @@ Future<void> maybeShowSetup() async {
   final hive = Get.find<HiveService>();
   if (hive.getSetting<bool>(kSetupDone) == true) return;
   await Get.to(() => const SetupView(firstRun: true));
-  await hive.setSetting(kSetupDone, true);
 }

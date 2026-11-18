@@ -1,13 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-import 'dart:ui' show Rect;
 
-import 'package:archive/archive.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:get/get.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:share_plus/share_plus.dart';
+import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../ffi/sd_ffi_bindings.dart';
@@ -156,24 +153,77 @@ class DiagnosticsService {
     return diagnosticText(report.toString());
   }
 
-  static Future<void> shareReport(
-    String preview, {
-    required Rect sharePositionOrigin,
-  }) async {
-    final name =
-        'NeuroMesh-diagnostics-${DateTime.now().millisecondsSinceEpoch}.zip';
-    await Share.shareXFiles(
-      [XFile.fromData(encodeZip(preview), mimeType: 'application/zip')],
-      fileNameOverrides: [name],
-      sharePositionOrigin: sharePositionOrigin,
-    );
+  static final Uri? _submissionEndpoint = _parseEndpoint(
+    const String.fromEnvironment('NEUROMESH_REPORT_ENDPOINT'),
+  );
+
+  static bool get canSendReport => _submissionEndpoint != null;
+  static const _reportLimit = 256 * 1024;
+
+  static Uri? _parseEndpoint(String url) {
+    final uri = Uri.tryParse(url);
+    return uri != null &&
+            uri.scheme == 'https' &&
+            uri.host.isNotEmpty &&
+            uri.userInfo.isEmpty &&
+            !uri.hasFragment &&
+            !uri.hasQuery
+        ? uri
+        : null;
   }
 
-  static Uint8List encodeZip(String preview) {
+  static Future<void> sendReport(String preview) async {
+    final uri = _submissionEndpoint;
+    if (uri == null) {
+      throw const ReportSubmissionError(
+          'Report delivery is not configured in this build.');
+    }
     final bytes = utf8.encode(preview);
-    final archive = Archive()
-      ..addFile(ArchiveFile('diagnostics.txt', bytes.length, bytes));
-    return ZipEncoder().encodeBytes(archive);
+    if (bytes.length > _reportLimit) {
+      throw const ReportSubmissionError(
+          'This report is too large. Try turning off recent logs.');
+    }
+
+    final client = http.Client();
+    try {
+      final request = http.Request('POST', uri)
+        ..followRedirects = false
+        ..headers['Content-Type'] = 'text/plain; charset=utf-8'
+        ..bodyBytes = bytes;
+      final response = await client
+          .send(request)
+          .then(http.Response.fromStream)
+          .timeout(const Duration(seconds: 25));
+      if (response.statusCode == 429) {
+        throw const ReportSubmissionError(
+            'Too many reports were sent. Try again in a minute.');
+      }
+      if (response.statusCode == 400 || response.statusCode == 415) {
+        throw const ReportSubmissionError(
+            'The report service rejected this report format.');
+      }
+      if (response.statusCode == 413) {
+        throw const ReportSubmissionError(
+            'This report is too large. Try turning off recent logs.');
+      }
+      if (response.statusCode == 503) {
+        throw const ReportSubmissionError(
+            'Support delivery is temporarily unavailable.');
+      }
+      if (response.statusCode == 200) {
+        final result = jsonDecode(response.body);
+        if (result is Map && result['ok'] == true) return;
+      }
+      throw const ReportSubmissionError(
+          'Could not send the report. Try again later.');
+    } on ReportSubmissionError {
+      rethrow;
+    } catch (_) {
+      throw const ReportSubmissionError(
+          'Delivery could not be confirmed. Check your connection.');
+    } finally {
+      client.close();
+    }
   }
 
   /// Opens a public issue draft containing only the description the user wrote.
@@ -186,4 +236,10 @@ class DiagnosticsService {
     );
     return launchUrl(uri, mode: LaunchMode.externalApplication);
   }
+}
+
+class ReportSubmissionError implements Exception {
+  const ReportSubmissionError(this.message);
+
+  final String message;
 }

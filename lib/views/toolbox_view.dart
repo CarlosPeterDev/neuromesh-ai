@@ -405,7 +405,7 @@ class ToolboxView extends StatelessWidget {
           AppRow(
             icon: Icons.bug_report_outlined,
             title: 'Report an error',
-            subtitle: 'Review and share a diagnostic ZIP.',
+            subtitle: 'Review and send diagnostics to support.',
             chevron: true,
             onTap: () => Get.to(() => const DiagnosticsView()),
           ),
