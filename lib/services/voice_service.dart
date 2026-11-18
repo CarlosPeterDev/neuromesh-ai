@@ -15,6 +15,7 @@ import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import 'device_bridge.dart';
 import 'hive_service.dart';
 import 'voice_models.dart';
+import 'workload_placement.dart';
 
 /// Pure helper: float samples in [-1,1] to a 16-bit mono WAV file body.
 Uint8List encodeWav(Float32List samples, int sampleRate) {
@@ -369,14 +370,10 @@ class VoiceService extends GetxService {
 
   /// Transcribes an audio file (mp3, m4a, ogg, wav, mp4…) in 25-second pieces.
   Future<String> transcribeFile(String path, {String language = ''}) async {
-    final m = pickInstalled(VoiceKind.stt);
-    if (m == null) {
-      throw Exception('No listening model installed. Download one in Toolbox → Voice models.');
-    }
-    if (!sttLoadedFor(m, language)) await loadStt(m, language: language);
     Float32List? pcm;
     if (path.toLowerCase().endsWith('.wav')) {
-      pcm = decodeWav(await File(path).readAsBytes())?.samples;
+      final decoded = decodeWav(await File(path).readAsBytes());
+      if (decoded?.rate == 16000) pcm = decoded!.samples;
     }
     pcm ??= await Get.find<DeviceBridge>().decodeAudio(path);
     if (pcm == null || pcm.isEmpty) throw Exception('Could not read audio from this file.');
@@ -384,14 +381,44 @@ class VoiceService extends GetxService {
     final out = StringBuffer();
     for (var i = 0; i < pcm.length; i += piece) {
       final end = math.min(i + piece, pcm.length);
-      final t = transcribe(Float32List.sublistView(pcm, i, end));
+      final t = await transcribeSamples(
+          Float32List.sublistView(pcm, i, end), language: language);
       if (t.isNotEmpty) out..write(t)..write(' ');
     }
     return out.toString().trim();
   }
 
+  Future<String> transcribeSamples(Float32List samples,
+      {String language = '', bool allowWorker = true}) async {
+    final worker = allowWorker
+        ? WorkloadPlacement.forWorkload(PhoneWorkload.transcription)
+        : null;
+    if (worker != null) {
+      final bytes = await worker.request(PhoneWorkload.transcription.path,
+          payload: encodeWav(samples, 16000),
+          contentType: 'audio/wav',
+          query: {'language': language},
+          timeout: const Duration(seconds: 45),
+          maxBytes: 65536);
+      return utf8.decode(bytes).trim();
+    }
+    final model = pickInstalled(VoiceKind.stt);
+    if (model == null) throw StateError('Install or assign a listening model.');
+    if (!sttLoadedFor(model, language)) await loadStt(model, language: language);
+    return transcribe(samples);
+  }
+
   /// Speaks [text] with the chosen voice into a WAV file's bytes.
-  Future<Uint8List> synthesizeToWav(String text, {String lang = ''}) async {
+  Future<Uint8List> synthesizeToWav(String text,
+      {String lang = '', bool allowWorker = true}) async {
+    final worker = allowWorker
+        ? WorkloadPlacement.forWorkload(PhoneWorkload.speech)
+        : null;
+    if (worker != null) {
+      return worker.request(PhoneWorkload.speech.path,
+          payload: {'text': text, 'language': lang},
+          timeout: const Duration(seconds: 60));
+    }
     final m = pickInstalled(VoiceKind.tts, lang: lang);
     if (m == null) {
       throw Exception('No speaking model installed. Download one in Toolbox → Voice models.');
@@ -543,10 +570,23 @@ class VoiceService extends GetxService {
 
   /// Speaks with the worker phone, the on-device voice model, or the
   /// phone's own voice when [systemLang] is given (e.g. 'ar', 'en-US').
-  Future<void> speak(String text, {String? systemLang}) async {
+  Future<void> speak(String text, {String? systemLang, String workerLanguage = ''}) async {
     _stopSpeaking = false;
     final chunks = speechChunks(text);
     if (chunks.isEmpty) return;
+    final assigned = systemLang == null
+        ? WorkloadPlacement.forWorkload(PhoneWorkload.speech)
+        : null;
+    if (assigned != null) {
+      for (var i = 0; i < chunks.length && !_stopSpeaking; i++) {
+        final audio = await assigned.request(PhoneWorkload.speech.path,
+            payload: {'text': chunks[i], 'language': workerLanguage},
+            timeout: const Duration(seconds: 45));
+        if (_stopSpeaking) return;
+        await _playWav(audio, i);
+      }
+      return;
+    }
     final useWorker = systemLang == null && workerUrl.isNotEmpty;
     if (systemLang != null || (_tts == null && !useWorker)) {
       _system ??= FlutterTts();

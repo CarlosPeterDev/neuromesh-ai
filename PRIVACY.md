@@ -1,6 +1,6 @@
 # Privacy Policy — NeuroMesh AI
 
-_Last updated: 2026-11-15_
+_Last updated: 2026-11-18_
 
 NeuroMesh AI runs language models on your device. This policy describes what the app does with your data.
 
@@ -12,8 +12,9 @@ NeuroMesh AI runs language models on your device. This policy describes what the
 ## Network use
 The app uses the network only when you ask it to:
 - Searching and downloading models from Hugging Face (huggingface.co) and voice models from GitHub.
-- Optional features you turn on: a cloud provider with your own API key, MCP servers you add, the agent's "fetch web page" tool (asks first unless you choose Always allow), the local API server (reachable on your local network only while you run it), and Phone cluster over your Wi-Fi.
-- Opening a GitHub issue draft in your browser when you choose "Send feedback".
+- Optional features you turn on: a cloud provider with your own API key, MCP servers you add, the agent's "fetch web page" tool (asks first unless you choose Always allow), the local API server (reachable on your local network only while you run it), and Phone cluster over your Wi-Fi. If you assign a worker phone, that phone receives the text, audio or image prompt needed for that workload over your local network.
+- Opening a public GitHub issue draft with the description you write when you choose "Send feedback".
+- When you choose "Report an error", you can review a diagnostic ZIP containing the app version, device type, available memory and storage, and recent model-load details, resource snapshots and a timeline. You can optionally add a description and recent app logs. Logs may contain personal text, so review the preview before sharing. When you choose "Share ZIP", the app hands the file to your system share sheet and you choose the recipient.
 
 ## Permissions
 - Microphone: voice calls and voice typing.
@@ -21,7 +22,7 @@ The app uses the network only when you ask it to:
 - Storage/Files: only through the system file picker when you import or export.
 
 ## What we collect
-The app itself does not collect analytics or send your data to us. The developer has no access to your chats.
+In builds configured with Firebase Crashlytics, crash and error diagnostics may be sent to Firebase, including app and device details, model context and recent error logs. Exported reports are shared through the recipient you choose. The manual diagnostic ZIP excludes chat and model files.
 
 ## Children
 The app is not directed at children under 13.

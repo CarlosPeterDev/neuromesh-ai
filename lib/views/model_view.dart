@@ -109,8 +109,10 @@ class ModelView extends GetView<ModelController> {
   Widget _buildLocalActions(BuildContext context) {
     final inference = Get.find<InferenceService>();
     return Obx(() {
-      final busy =
-          controller.isImporting.value || inference.isLoadingModel.value;
+      final busy = controller.isImporting.value ||
+          controller.isPreparingModel.value ||
+          inference.isLoadingModel.value ||
+          Get.find<LocalImageService>().isLoadingModel.value;
       return PillButton(
         label: 'Import file',
         icon: Icons.file_upload_outlined,
@@ -211,8 +213,10 @@ class ModelView extends GetView<ModelController> {
       }
       final inference = Get.find<InferenceService>();
       final localImage = Get.find<LocalImageService>();
-      final busy =
-          controller.isImporting.value || inference.isLoadingModel.value;
+      final busy = controller.isImporting.value ||
+          controller.isPreparingModel.value ||
+          inference.isLoadingModel.value ||
+          localImage.isLoadingModel.value;
 
       final String name;
       final String meta;
@@ -1499,8 +1503,9 @@ class ModelView extends GetView<ModelController> {
           localImage.loadedModelName.value == actualFilename;
       final isCurrentlyDownloading =
           controller.isDownloadingModel(model.filename);
-      final isAnyModelLoading =
-          inference.isLoadingModel.value || localImage.isLoadingModel.value;
+      final isAnyModelLoading = controller.isPreparingModel.value ||
+          inference.isLoadingModel.value ||
+          localImage.isLoadingModel.value;
       final isThisTextModelLoading = inference.isLoadingModel.value &&
           inference.loadingModelName.value == actualFilename;
       final isThisImageModelLoading = localImage.isLoadingModel.value &&
@@ -1528,7 +1533,9 @@ class ModelView extends GetView<ModelController> {
       } else if (isDownloaded) {
         if (isThisModelLoading) {
           primaryAction = Text(
-              isThisImageModelLoading ? 'Loading…' : '$loadPercent%',
+              isThisImageModelLoading || loadPercent == '0'
+                  ? 'Loading…'
+                  : '$loadPercent%',
               style: t.small.copyWith(
                   color: t.accent,
                   fontWeight: FontWeight.w600,

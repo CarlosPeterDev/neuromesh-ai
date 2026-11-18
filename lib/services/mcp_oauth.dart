@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:get/get.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
@@ -20,7 +21,7 @@ class McpOAuthException implements Exception {
 /// Browser sign-in (OAuth 2.1 + PKCE) for remote MCP servers, so no token has
 /// to be pasted. Follows the MCP authorization spec: discovery through
 /// /.well-known metadata, dynamic client registration, authorization code with
-/// PKCE, and refresh tokens. Tokens are stored per server URL in Hive.
+/// PKCE, and refresh tokens. Tokens are stored in platform secure storage.
 class McpOAuth {
   McpOAuth._();
 
@@ -34,9 +35,41 @@ class McpOAuth {
   static HiveService? get _hive =>
       Get.isRegistered<HiveService>() ? Get.find<HiveService>() : null;
 
-  static Map<String, dynamic>? _load(String serverUrl) {
+  static const _storage = FlutterSecureStorage();
+  static Future<void>? _migration;
+
+  static Future<void> _migrateLegacyTokens() async {
+    final hive = _hive;
+    if (hive == null) return;
+    final box = hive.settingsBox;
+    final keys = box.keys.whereType<String>()
+        .where((key) => key.startsWith('mcp_oauth_')).toList();
+    if (keys.isEmpty) return;
+    for (final key in keys) {
+      final old = box.get(key);
+      if (old is String && old.isNotEmpty) {
+        final existing = await _storage.read(key: key);
+        if (existing == null) await _storage.write(key: key, value: old);
+      }
+      await box.delete(key);
+    }
+    await box.compact();
+  }
+
+  static Future<void> prepareSecureStorage() async {
+    final migration = _migration ??= _migrateLegacyTokens();
     try {
-      final raw = _hive?.getSetting<String>(_key(serverUrl));
+      await migration;
+    } catch (_) {
+      if (identical(_migration, migration)) _migration = null;
+      rethrow;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> _load(String serverUrl) async {
+    try {
+      await prepareSecureStorage();
+      final raw = await _storage.read(key: _key(serverUrl));
       if (raw == null || raw.isEmpty) return null;
       final m = jsonDecode(raw);
       return m is Map ? Map<String, dynamic>.from(m) : null;
@@ -46,20 +79,32 @@ class McpOAuth {
   }
 
   static Future<void> _save(String serverUrl, Map<String, dynamic> rec) async {
-    await _hive?.setSetting(_key(serverUrl), jsonEncode(rec));
+    try {
+      await prepareSecureStorage();
+      await _storage.write(key: _key(serverUrl), value: jsonEncode(rec));
+    } catch (_) {
+      throw McpOAuthException('Secure storage is unavailable. Sign-in was not saved.');
+    }
   }
 
-  /// Whether a sign-in is stored for this server.
-  static bool hasTokens(String serverUrl) => _load(serverUrl) != null;
+  static Future<bool> hasTokens(String serverUrl) async {
+    final record = await _load(serverUrl);
+    return record != null &&
+        (record['access'] != null && record['access'] != '' ||
+         record['refresh'] != null && record['refresh'] != '');
+  }
 
   static Future<void> signOut(String serverUrl) async {
-    await _hive?.setSetting(_key(serverUrl), '');
+    final inflight = _inflight[_key(serverUrl)];
+    if (inflight != null) await inflight;
+    await prepareSecureStorage();
+    await _storage.delete(key: _key(serverUrl));
   }
 
   /// A valid access token for the server, refreshing it when it is about to
   /// expire. Returns null when the user has not signed in (or refresh failed).
   static Future<String?> accessToken(String serverUrl) async {
-    final rec = _load(serverUrl);
+    final rec = await _load(serverUrl);
     if (rec == null) return null;
     final access = '${rec['access'] ?? ''}';
     final exp = (rec['expiresAt'] as num?)?.toInt() ?? 0;
@@ -73,11 +118,14 @@ class McpOAuth {
 
   /// One refresh at a time per server: servers that rotate refresh tokens
   /// reject a second parallel use of the same token.
-  static Future<String?> refresh(String serverUrl) => _inflight.putIfAbsent(
-      serverUrl, () => _refresh(serverUrl).whenComplete(() => _inflight.remove(serverUrl)));
+  static Future<String?> refresh(String serverUrl) {
+    final key = _key(serverUrl);
+    return _inflight.putIfAbsent(
+      key, () => _refresh(serverUrl).whenComplete(() => _inflight.remove(key)));
+  }
 
   static Future<String?> _refresh(String serverUrl) async {
-    final rec = _load(serverUrl);
+    final rec = await _load(serverUrl);
     if (rec == null) return null;
     final rt = '${rec['refresh'] ?? ''}';
     final te = '${rec['tokenEndpoint'] ?? ''}';

@@ -144,20 +144,28 @@ class _ReceiveTabState extends State<_ReceiveTab> {
 
   Future<void> _scan() async {
     final code = await Get.to<String>(() => const _ScanPage());
-    if (code != null && code.isNotEmpty) {
-      _addr.text = code;
-      await _connect();
+    if (mounted && code != null && code.isNotEmpty) {
+      setState(() {
+        _addr.text = code;
+        _error = ModelTransferClient.parse(code) == null
+            ? 'This is not a NeuroMesh transfer code for a phone on your Wi-Fi.'
+            : null;
+      });
     }
   }
 
   Future<void> _connect() async {
     final c = ModelTransferClient.parse(_addr.text);
     if (c == null) {
-      setState(() => _error = 'That address is not valid. Scan the code or type it exactly.');
+      setState(() => _error = 'Scan a NeuroMesh sender code from a phone on your Wi-Fi.');
       return;
     }
     setState(() {
       _loading = true;
+      _client = null;
+      _items = const [];
+      _picked.clear();
+      _have.clear();
       _error = null;
       _result = null;
     });

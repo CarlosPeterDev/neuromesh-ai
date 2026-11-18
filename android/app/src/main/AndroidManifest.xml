@@ -24,6 +24,7 @@
         android:label="NeuroMesh AI"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
         android:largeHeap="true"
         android:extractNativeLibs="true">
         <activity

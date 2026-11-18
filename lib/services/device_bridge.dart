@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../controllers/chat_controller.dart';
+import 'desktop_diagnostics.dart';
 
 /// Battery + thermal watching and "share to NeuroMesh" text intake.
 class DeviceBridge extends GetxService {
@@ -71,6 +72,7 @@ class DeviceBridge extends GetxService {
 
   /// Read-only phone facts (battery, storage, memory, network, temperature).
   Future<Map<String, dynamic>> status() async {
+    if (!Platform.isAndroid) return desktopDiagnostics();
     try {
       final m = await _ch.invokeMapMethod<String, dynamic>('deviceStatus');
       return m ?? <String, dynamic>{};

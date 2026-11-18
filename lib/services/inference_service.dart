@@ -1,9 +1,13 @@
 import 'dart:async';
+
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:get/get.dart';
+
 import 'hive_service.dart';
 import '../core/constants.dart';
 import 'device_info_service.dart';
 import 'app_log_service.dart';
+import 'model_load_diagnostics.dart';
 import 'cluster_service.dart';
 import 'stop_sequence_filter.dart';
 import '../utils/auto_context.dart';
@@ -52,6 +56,7 @@ class InferenceService extends GetxService {
   // Platform-specific engine
   platform.InferenceEngine? _engine;
   String _sessionNativeRuntime = '';
+  bool _unloadingModel = false;
 
   String get sessionNativeRuntime => _sessionNativeRuntime;
 
@@ -64,31 +69,37 @@ class InferenceService extends GetxService {
     String? modelRuntime,
     bool enableLiteRtVision = false,
     String? mmprojPath,
+    ModelLoadDiagnostics? diagnostics,
   }) async {
     if (!supportsLocalInference) {
       return 'ERROR: Local inference is not available on this platform. Use Cloud mode.';
     }
-    if (isLoadingModel.value) return 'ERROR: Model is already loading.';
-
-    if (platform.isRunning32Bit) {
-      final lower = modelPath.toLowerCase();
-      if (_runtimeFor(modelPath, modelRuntime) == 'litert') {
-        return 'ERROR: LiteRT models need 64-bit Android. This phone runs '
-            '32-bit Android; use a small GGUF model (under 1.5 GB) instead.';
-      }
-      // A 32-bit process can't map a model this large next to everything else.
-      if (lower.endsWith('.gguf') &&
-          await _fileBytes(modelPath) > 1536 * 1024 * 1024) {
-        return 'ERROR: This model is too large for 32-bit Android. Choose a '
-            'GGUF model under 1.5 GB (for example a 1B Q4 model).';
-      }
+    if (isLoadingModel.value || _unloadingModel) {
+      return 'ERROR: Wait for the current model operation to finish.';
     }
-
-    if (modelPath.toLowerCase().endsWith('.safetensors')) {
-      return 'ERROR: Cannot load image generation models (.safetensors) into the local text engine. Native local image generation requires the upcoming stable-diffusion engine update. Use Cloud Stability AI for now.';
-    }
+    isLoadingModel.value = true;
+    loadingModelName.value = modelName ?? modelPath.split('/').last;
+    modelLoadProgress.value = 0.0;
 
     try {
+      if (platform.isRunning32Bit) {
+        final lower = modelPath.toLowerCase();
+        if (_runtimeFor(modelPath, modelRuntime) == 'litert') {
+          return 'ERROR: LiteRT models need 64-bit Android. This phone runs '
+              '32-bit Android; use a small GGUF model (under 1.5 GB) instead.';
+        }
+        // A 32-bit process can't map a model this large next to everything else.
+        if (lower.endsWith('.gguf') &&
+            await _fileBytes(modelPath) > 1536 * 1024 * 1024) {
+          return 'ERROR: This model is too large for 32-bit Android. Choose a '
+              'GGUF model under 1.5 GB (for example a 1B Q4 model).';
+        }
+      }
+
+      if (modelPath.toLowerCase().endsWith('.safetensors')) {
+        return 'ERROR: Cannot load image generation models (.safetensors) into the local text engine. Native local image generation requires the upcoming stable-diffusion engine update. Use Cloud Stability AI for now.';
+      }
+
       final runtime = _runtimeFor(modelPath, modelRuntime);
       final isLiteRt = runtime == 'litert';
       final liteRtMode = _hive.getSetting<String>(
@@ -104,15 +115,8 @@ class InferenceService extends GetxService {
       final forceLiteRtCpu = isLiteRt && cpuOnly;
       final shouldTryLiteRtGpu = isLiteRt && !cpuOnly;
       final allowGgufGpu = !isLiteRt && !cpuOnly;
-      // Clear crash state left by older versions of the app.
-      await _hive.setSetting(AppConstants.keyLiteRtGpuCrashDetected, false);
-      await _hive.setSetting(AppConstants.keyLiteRtGpuLoadPending, false);
-      await _hive.setSetting(AppConstants.keyGgufGpuPending, false);
-
-      await unloadModel();
-      isLoadingModel.value = true;
-      loadingModelName.value = modelName ?? modelPath.split('/').last;
-      modelLoadProgress.value = 0.0;
+      await diagnostics?.checkpoint('release previous text engine');
+      await _releaseEngine();
 
       _engine = platform.InferenceEngine();
 
@@ -138,7 +142,8 @@ class InferenceService extends GetxService {
           );
           if (auto < finalContextSize) {
             Get.find<AppLogService>().info(
-                'Auto context: $finalContextSize -> $auto (available RAM ${dev.availableRamGB.value.toStringAsFixed(1)} GB)');
+              'Auto context: $finalContextSize -> $auto (available RAM ${dev.availableRamGB.value.toStringAsFixed(1)} GB)',
+            );
             finalContextSize = auto;
           }
         } catch (_) {}
@@ -148,6 +153,15 @@ class InferenceService extends GetxService {
           _hive.getSetting<int>('last_loaded_context_size') ?? 0;
       final contextChanged = isLiteRt && lastLoadedContext != finalContextSize;
 
+      diagnostics
+        ?..set('contextActual', finalContextSize)
+        ..set('performanceMode', liteRtMode)
+        ..set('autoContextEnabled',
+            _hive.getSetting<bool>('auto_context', defaultValue: true))
+        ..set('deviceTier', _getDeviceTier());
+      await diagnostics?.checkpoint(
+        isLiteRt ? 'prepare LiteRT-LM' : 'prepare llama.cpp / phone cluster',
+      );
       final deviceTier = _getDeviceTier();
       final isTensorSoC = _getIsTensorSoC();
 
@@ -155,15 +169,18 @@ class InferenceService extends GetxService {
       // then runs its share on the CPU.
       var clusterWorkers = 0;
       if (!isLiteRt && Get.isRegistered<ClusterService>()) {
-        clusterWorkers = await Get.find<ClusterService>()
-            .applyForNextLoad(modelPath, modelName: modelName);
+        clusterWorkers = await Get.find<ClusterService>().applyForNextLoad(
+          modelPath,
+          modelName: modelName,
+        );
       }
 
       final requestedModelName = modelName ?? modelPath.split('/').last;
-      var activeModelName = requestedModelName;
-      var result = await _loadModelOnEngine(
+      diagnostics?.set('clusterWorkers', clusterWorkers);
+      final result = await _loadModelOnEngine(
         modelPath: modelPath,
         modelRuntime: modelRuntime,
+        diagnostics: diagnostics,
         contextSize: finalContextSize,
         deviceTier: deviceTier,
         isTensorSoC: isTensorSoC,
@@ -177,29 +194,15 @@ class InferenceService extends GetxService {
       );
 
       if (!result.success) {
-        isModelLoaded.value = false;
-        isLoadingModel.value = false;
-        loadingModelName.value = '';
-        modelLoadProgress.value = 0.0;
-        loadedModelName.value = '';
-        loadedModelRuntime.value = '';
-        loadedBackend.value = '';
-        gpuName.value = '';
-        gpuLayersUsed.value = 0;
-        isGpuAccelerated.value = false;
-        Get.find<AppLogService>().error(
-          'Local model load failed',
-          details:
-              'model=$requestedModelName, runtime=$runtime, backend=${result.backend}, message=${result.message}',
-        );
+        diagnostics
+          ?..set('engineBackend', result.backend.isEmpty ? 'unknown' : result.backend)
+          ..set('progressPercent', (modelLoadProgress.value * 100).round());
+        await _releaseEngine();
         return result.message;
       }
 
-      isModelLoaded.value = result.success;
-      isLoadingModel.value = false;
-      loadingModelName.value = '';
       modelLoadProgress.value = 1.0;
-      loadedModelName.value = activeModelName;
+      loadedModelName.value = requestedModelName;
       loadedModelRuntime.value = result.runtime;
       if (result.runtime == 'llama' || result.runtime == 'litert') {
         _sessionNativeRuntime = result.runtime;
@@ -211,49 +214,77 @@ class InferenceService extends GetxService {
       contextTokensUsed.value = 0;
       contextTokensTotal.value = finalContextSize;
 
-      await _hive.setSetting(AppConstants.keyLocalModelPath, modelPath);
-      await _hive.setSetting(
-          AppConstants.keyLocalModelName, loadedModelName.value);
-      await _hive.setSetting(
-          AppConstants.keyLocalModelRuntime, loadedModelRuntime.value);
-      await _hive.setSetting(
-          AppConstants.keyLocalModelBackend, loadedBackend.value);
-
-      if (isLiteRt) {
-        await _hive.setSetting('last_loaded_context_size', finalContextSize);
+      // Settings or split statistics can fail after a usable model has loaded.
+      // Keep the engine available in that case.
+      try {
+        await _hive.setSetting(AppConstants.keyLocalModelPath, modelPath);
+        await _hive.setSetting(
+          AppConstants.keyLocalModelName,
+          loadedModelName.value,
+        );
+        await _hive.setSetting(
+          AppConstants.keyLocalModelRuntime,
+          loadedModelRuntime.value,
+        );
+        await _hive.setSetting(
+          AppConstants.keyLocalModelBackend,
+          loadedBackend.value,
+        );
+        if (isLiteRt) {
+          await _hive.setSetting('last_loaded_context_size', finalContextSize);
+        }
+      } catch (error) {
+        Get.find<AppLogService>().warning(
+          'Could not save active model settings',
+          details: diagnosticText('$error'),
+        );
       }
 
+      isModelLoaded.value = true;
       if (clusterWorkers > 0) {
-        final cluster = Get.find<ClusterService>();
-        await cluster.refreshSplit(modelPath);
-        return 'Model loaded across ${cluster.splitSummary ?? '${clusterWorkers + 1} phones'}.';
+        try {
+          final cluster = Get.find<ClusterService>();
+          await cluster.refreshSplit(modelPath);
+          return "Model loaded across ${cluster.splitSummary ?? '${clusterWorkers + 1} phones'}.";
+        } catch (error) {
+          Get.find<AppLogService>().warning(
+            'Could not read the cluster split',
+            details: diagnosticText('$error'),
+          );
+        }
       }
       return result.message;
-    } catch (e) {
-      isModelLoaded.value = false;
+    } catch (error) {
+      await _releaseEngine();
+      final detail = diagnosticText('$error');
+      Get.find<AppLogService>().error(
+        'Failed to load local model',
+        details: detail,
+      );
+      return 'ERROR: Failed to load model — $detail';
+    } finally {
       isLoadingModel.value = false;
       loadingModelName.value = '';
-      modelLoadProgress.value = 0.0;
-      loadedBackend.value = '';
-      Get.find<AppLogService>().error('Failed to load local model', details: e);
-      return 'ERROR: Failed to load model — $e';
+      if (!isModelLoaded.value) modelLoadProgress.value = 0.0;
     }
   }
 
   Future<void> unloadModel() async {
+    if (isLoadingModel.value || _unloadingModel) return;
+    _unloadingModel = true;
+    try {
+      await _releaseEngine();
+    } finally {
+      _unloadingModel = false;
+    }
+  }
+
+  Future<void> _releaseEngine() async {
     final engine = _engine;
     _engine = null;
-    if (Get.isRegistered<ClusterService>()) {
-      Get.find<ClusterService>().clearSplit();
-    }
-    if (engine != null) {
-      await stopGeneration();
-      await engine.dispose();
-    }
     isModelLoaded.value = false;
     isVisionLoaded.value = false;
     loadedModelName.value = '';
-    loadingModelName.value = '';
     loadedModelRuntime.value = '';
     loadedBackend.value = '';
     gpuLayersUsed.value = 0;
@@ -262,6 +293,21 @@ class InferenceService extends GetxService {
     contextTokensUsed.value = 0;
     contextTokensTotal.value = 0;
     _sessionNativeRuntime = '';
+    if (Get.isRegistered<ClusterService>()) {
+      Get.find<ClusterService>().clearSplit();
+    }
+    if (engine != null) {
+      // dispose() stops native inference; invalidate Dart callbacks first.
+      await stopGeneration();
+      try {
+        await engine.dispose();
+      } catch (error) {
+        Get.find<AppLogService>().warning(
+          'Could not release inference engine',
+          details: diagnosticText('$error'),
+        );
+      }
+    }
   }
 
   Future<String> generate({
@@ -275,7 +321,8 @@ class InferenceService extends GetxService {
     List<String> stopSequences = const [],
     void Function(String token)? onToken,
   }) async {
-    if (!supportsLocalInference || _engine == null || !isModelLoaded.value) {
+    final engine = _engine;
+    if (!supportsLocalInference || engine == null || !isModelLoaded.value) {
       return 'ERROR: No model loaded. Go to Models tab to download and load one.';
     }
 
@@ -289,6 +336,10 @@ class InferenceService extends GetxService {
         await stopGeneration();
         await Future.delayed(const Duration(milliseconds: 300));
       }
+    }
+
+    if (!identical(engine, _engine) || !isModelLoaded.value) {
+      return 'ERROR: The active model changed while waiting to generate.';
     }
 
     // Identifies this generation so a stopped one that finishes late can't
@@ -333,7 +384,7 @@ class InferenceService extends GetxService {
           ? (maxTokens < settingMaxTokens ? maxTokens : settingMaxTokens)
           : settingMaxTokens;
 
-      final result = await _engine!.generate(
+      final result = await engine.generate(
         prompt: prompt,
         conversationHistory: conversationHistory,
         systemPrompt: systemPrompt ?? AppConstants.systemPrompt,
@@ -353,7 +404,8 @@ class InferenceService extends GetxService {
               // Halt the engine directly: this is a normal finish, not a
               // user/server interruption, so stopCount must not change.
               unawaited(
-                  _engine?.stop().catchError((_) {}) ?? Future<void>.value());
+                _engine?.stop().catchError((_) {}) ?? Future<void>.value(),
+              );
             }
             if (token.isEmpty) return;
           }
@@ -492,59 +544,61 @@ class InferenceService extends GetxService {
     required bool enableLiteRtVision,
     bool allowGgufGpu = false,
     String? mmprojPath,
+    ModelLoadDiagnostics? diagnostics,
   }) async {
     // Auto fast: if a LiteRT GPU load fails, retry this load on the CPU.
     // Nothing is remembered — the next load tries the GPU again.
     final fallbackToCpu = tryLiteRtGpu && liteRtPerformanceMode == 'auto_fast';
-    Future<platform.LoadResult> loadOnCpu() {
-      modelLoadProgress.value = 0.0;
-      return _engine!.loadModel(
-        modelPath: modelPath,
-        modelRuntime: modelRuntime,
-        contextSize: contextSize,
-        deviceTier: deviceTier,
-        isTensorSoC: isTensorSoC,
-        liteRtPerformanceMode: liteRtPerformanceMode,
-        forceLiteRtCpu: true,
-        clearLiteRtCache: true,
-        enableLiteRtVision: enableLiteRtVision,
-        onProgress: (p) => modelLoadProgress.value = _normalizeProgress(p),
-      );
+    Future<platform.LoadResult> run({required bool cpuRetry}) async {
+      try {
+        if (cpuRetry) modelLoadProgress.value = 0.0;
+        await diagnostics?.checkpoint(
+          cpuRetry
+              ? 'retry LiteRT-LM on CPU'
+              : tryLiteRtGpu
+                  ? 'initialize LiteRT-LM GPU backend'
+                  : allowGgufGpu
+                      ? 'initialize llama.cpp (GPU eligible)'
+                      : 'initialize local backend',
+        );
+        return await _engine!.loadModel(
+          modelPath: modelPath,
+          modelRuntime: modelRuntime,
+          contextSize: contextSize,
+          deviceTier: deviceTier,
+          isTensorSoC: isTensorSoC,
+          liteRtPerformanceMode: liteRtPerformanceMode,
+          forceLiteRtCpu: cpuRetry || forceLiteRtCpu,
+          clearLiteRtCache: cpuRetry || clearLiteRtCache,
+          enableLiteRtVision: enableLiteRtVision,
+          allowGgufGpu: allowGgufGpu,
+          mmprojPath: mmprojPath,
+          onProgress: (p) => modelLoadProgress.value = _normalizeProgress(p),
+          onLoadStage: diagnostics == null
+              ? null
+              : (stage, error) async {
+                  diagnostics.set('firstBackendError', error);
+                  await diagnostics.checkpoint(stage);
+                },
+        );
+      } catch (error, stack) {
+        diagnostics
+          ?..set('engineExceptionType', error.runtimeType.toString())
+          ..set('engineDartStack', stack.toString().split('\n').take(16).join('\n'));
+        if (error is PlatformException) {
+          diagnostics?.set('enginePlatformErrorCode', error.code);
+        }
+        return platform.LoadResult(
+          success: false,
+          message: 'ERROR: Failed to load model - ${diagnosticText('$error')}',
+        );
+      }
     }
 
-    try {
-      final result = await _engine!.loadModel(
-        modelPath: modelPath,
-        modelRuntime: modelRuntime,
-        contextSize: contextSize,
-        deviceTier: deviceTier,
-        isTensorSoC: isTensorSoC,
-        liteRtPerformanceMode: liteRtPerformanceMode,
-        forceLiteRtCpu: forceLiteRtCpu,
-        clearLiteRtCache: clearLiteRtCache,
-        enableLiteRtVision: enableLiteRtVision,
-        allowGgufGpu: allowGgufGpu,
-        mmprojPath: mmprojPath,
-        onProgress: (p) => modelLoadProgress.value = _normalizeProgress(p),
-      );
-      if (result.success || !fallbackToCpu) return result;
-      return await loadOnCpu();
-    } catch (e) {
-      if (fallbackToCpu) {
-        try {
-          return await loadOnCpu();
-        } catch (cpuError) {
-          return platform.LoadResult(
-            success: false,
-            message: 'ERROR: Failed to load model - $cpuError',
-          );
-        }
-      }
-      return platform.LoadResult(
-        success: false,
-        message: 'ERROR: Failed to load model - $e',
-      );
-    }
+    final result = await run(cpuRetry: false);
+    if (result.success || !fallbackToCpu) return result;
+    diagnostics?.set('firstBackendError', result.message);
+    return run(cpuRetry: true);
   }
 
   Future<int> _fileBytes(String path) async {

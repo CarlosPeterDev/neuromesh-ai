@@ -14,7 +14,12 @@ void main() {
   });
 
   test('bundle resolves components', () {
-    final b = resolveBundle(['flux1-dev-Q4_0.gguf', 'ae.safetensors', 'clip_l.safetensors', 't5xxl_Q8_0.gguf']);
+    final b = resolveBundle([
+      'flux1-dev-Q4_0.gguf',
+      'ae.safetensors',
+      'clip_l.safetensors',
+      't5xxl_Q8_0.gguf'
+    ]);
     expect(b.diffusion, 'flux1-dev-Q4_0.gguf');
     expect(b.model, '');
     expect(b.vae, 'ae.safetensors');
@@ -27,6 +32,23 @@ void main() {
     expect(b.model, 'sd_turbo.safetensors');
     expect(b.diffusion, '');
     expect(b.isValid, true);
+  });
+
+  test('Diffusers layouts resolve CLIP, VAE and diffusion by family', () {
+    final bundle = resolveBundle([
+      'sdxl.sdbundle/unet/diffusion_pytorch_model.safetensors',
+      'sdxl.sdbundle/vae/diffusion_pytorch_model.safetensors',
+      'sdxl.sdbundle/text_encoder/model.safetensors',
+      'sdxl.sdbundle/text_encoder_2/model.safetensors',
+    ]);
+    expect(bundle.diffusion, contains('/unet/'));
+    expect(bundle.vae, contains('/vae/'));
+    expect(bundle.clipL, contains('/text_encoder/'));
+    expect(bundle.clipG, contains('/text_encoder_2/'));
+    expect(
+        roleOfFile('text_encoder_2/model.safetensors',
+            familyHint: 'FLUX.1-dev'),
+        BundleRole.t5xxl);
   });
 
   test('recommend prefers small quant and adds helpers', () {

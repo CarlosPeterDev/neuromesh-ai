@@ -33,10 +33,14 @@ class ImageBundle {
 enum BundleRole { diffusion, vae, clipL, clipG, t5xxl, llm, checkpoint, other }
 
 /// Which part of a model a file is, judged from its name.
-BundleRole roleOfFile(String path) {
+BundleRole roleOfFile(String path, {String familyHint = ''}) {
   final n = path.split('/').last.toLowerCase();
-  final all = path.toLowerCase();
-  if (!(n.endsWith('.safetensors') || n.endsWith('.gguf'))) return BundleRole.other;
+  final all = '/${path.toLowerCase().replaceAll('\\', '/')}';
+  final family = '${familyHint.toLowerCase()} $all';
+  final isSdxl =
+      family.contains('sdxl') || family.contains('stable-diffusion-xl');
+  if (!(n.endsWith('.safetensors') || n.endsWith('.gguf')))
+    return BundleRole.other;
   if (n.contains('taesd') || n.contains('taef')) return BundleRole.other;
   if (RegExp(r'(^|[^a-z])(ae|vae)([^a-z]|$)').hasMatch(n) ||
       n.contains('vae') ||
@@ -49,14 +53,27 @@ BundleRole roleOfFile(String path) {
   if (n.contains('clip_g') || n.contains('clip-g') || n.contains('clipg')) {
     return BundleRole.clipG;
   }
-  if (n.contains('t5xxl') || n.contains('t5-xxl') || n.contains('umt5') || all.contains('/text_encoder_2/')) {
+  if (n.contains('t5xxl') || n.contains('t5-xxl') || n.contains('umt5')) {
     return BundleRole.t5xxl;
   }
-  if (n.contains('qwen') && !n.contains('image') && (n.contains('3') || n.contains('2.5') || n.contains('vl') || all.contains('text_encoder'))) {
+  if (n.contains('qwen') &&
+      !n.contains('image') &&
+      (n.contains('3') ||
+          n.contains('2.5') ||
+          n.contains('vl') ||
+          all.contains('text_encoder'))) {
     return BundleRole.llm;
   }
-  if (n.contains('gemma') || n.contains('mistral') || n.contains('llama') || all.contains('/text_encoder/')) {
+  if (n.contains('gemma') || n.contains('mistral') || n.contains('llama')) {
     return BundleRole.llm;
+  }
+  if (all.contains('/text_encoder_2/')) {
+    return isSdxl ? BundleRole.clipG : BundleRole.t5xxl;
+  }
+  if (all.contains('/text_encoder/')) {
+    return family.contains('flux') || isSdxl
+        ? BundleRole.clipL
+        : BundleRole.llm;
   }
   if (all.contains('/transformer/') ||
       all.contains('/unet/') ||
@@ -78,7 +95,8 @@ BundleRole roleOfFile(String path) {
 /// Picks the components out of the files of one model folder
 /// (paths relative to the folder or absolute). When several files share a
 /// role the biggest-name-sorted first wins; sizes are used when given.
-ImageBundle resolveBundle(List<String> files, {Map<String, int> sizes = const {}}) {
+ImageBundle resolveBundle(List<String> files,
+    {Map<String, int> sizes = const {}}) {
   String pick(BundleRole role) {
     final c = files.where((f) => roleOfFile(f) == role).toList()
       ..sort((a, b) => (sizes[b] ?? 0).compareTo(sizes[a] ?? 0));
@@ -101,16 +119,20 @@ ImageBundle resolveBundle(List<String> files, {Map<String, int> sizes = const {}
 /// Chooses a sensible set of files to download from a repository listing:
 /// the smallest diffusion/checkpoint file plus the helpers it needs, with a
 /// quantised variant preferred over a huge full-precision one.
-List<String> recommendBundle(Map<String, int> sizes, {int maxBytes = 6 * 1024 * 1024 * 1024}) {
+List<String> recommendBundle(Map<String, int> sizes,
+    {int maxBytes = 6 * 1024 * 1024 * 1024, String familyHint = ''}) {
   final files = sizes.keys.toList();
   String? best(BundleRole role, {bool preferSmall = true}) {
-    final c = files.where((f) => roleOfFile(f) == role).toList();
+    final c = files
+        .where((f) => roleOfFile(f, familyHint: familyHint) == role)
+        .toList();
     if (c.isEmpty) return null;
     c.sort((a, b) {
       int score(String f) {
         final n = f.toLowerCase();
         var s = 0;
-        if (n.contains('q4_k_m') || n.contains('q4_0') || n.contains('q4_k_s')) s -= 3;
+        if (n.contains('q4_k_m') || n.contains('q4_0') || n.contains('q4_k_s'))
+          s -= 3;
         if (n.contains('q5')) s -= 2;
         if (n.contains('q8')) s -= 1;
         if (n.contains('fp8') || n.contains('int8')) s -= 1;
@@ -129,7 +151,13 @@ List<String> recommendBundle(Map<String, int> sizes, {int maxBytes = 6 * 1024 * 
   final ckpt = diff == null ? best(BundleRole.checkpoint) : null;
   if (diff != null) out.add(diff);
   if (ckpt != null) out.add(ckpt);
-  for (final r in [BundleRole.vae, BundleRole.clipL, BundleRole.clipG, BundleRole.t5xxl, BundleRole.llm]) {
+  for (final r in [
+    BundleRole.vae,
+    BundleRole.clipL,
+    BundleRole.clipG,
+    BundleRole.t5xxl,
+    BundleRole.llm
+  ]) {
     final f = best(r);
     if (f != null) out.add(f);
   }

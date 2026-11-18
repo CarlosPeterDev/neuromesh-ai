@@ -17,6 +17,7 @@ import '../controllers/model_controller.dart';
 import 'local_image_service.dart';
 import 'scheduler_service.dart';
 import 'voice_service.dart';
+import 'workload_placement.dart';
 import 'document_extractor_service.dart';
 import 'hive_service.dart';
 import 'inference_service.dart';
@@ -452,34 +453,39 @@ class AgentService extends GetxService {
         final img = Get.find<LocalImageService>();
         final inf = Get.find<InferenceService>();
         final imgName = img.lastModelName ?? '';
-        if (imgName.isEmpty || !mc.isDownloaded(imgName)) {
+        final remote = WorkloadPlacement.forWorkload(PhoneWorkload.image) != null;
+        if (!remote && (imgName.isEmpty || !mc.isDownloaded(imgName))) {
           return 'Error: no image model is installed. Ask the user to download one in Models → Image models.';
         }
         final textName = mc.lastLoadedModelName;
         var name = (args['name'] ?? 'image_${DateTime.now().millisecondsSinceEpoch}.png').toString();
         if (!name.toLowerCase().endsWith('.png')) name = '$name.png';
         try {
-          // Phone memory holds one model at a time: swap the chat model out,
-          // draw, then bring it back.
-          await inf.unloadModel();
-          if (!img.isModelLoaded.value) {
-            await mc.loadModel(imgName);
-            for (var i = 0; i < 600 && img.isLoadingModel.value; i++) {
-              await Future.delayed(const Duration(milliseconds: 500));
+          if (!remote) {
+            // Phone memory holds one model at a time: swap the chat model out,
+            // draw, then bring it back.
+            await inf.unloadModel();
+            if (!img.isModelLoaded.value) {
+              await mc.loadModel(imgName);
+              for (var i = 0; i < 600 && img.isLoadingModel.value; i++) {
+                await Future.delayed(const Duration(milliseconds: 500));
+              }
+            }
+            if (!img.isModelLoaded.value) {
+              return 'Error: the image model could not be loaded (not enough memory?).';
             }
           }
-          if (!img.isModelLoaded.value) {
-            return 'Error: the image model could not be loaded (not enough memory?).';
-          }
           final bytes = await img.generateImage(prompt: prompt);
-          if (bytes == null || bytes.isEmpty) return 'Error: the image model produced nothing.';
+          if (bytes == null || bytes.isEmpty) {
+            return 'Error: ${img.lastFailureReason ?? 'the image model produced nothing.'}';
+          }
           final f = await _safeFile(name);
           await f.writeAsBytes(bytes);
           final n = f.path.split('/').last;
           return 'Saved $n. Show it to the user with ![${prompt.length > 40 ? prompt.substring(0, 40) : prompt}](nmfile:$n)';
         } finally {
-          await img.unloadModel();
-          if (textName.isNotEmpty && !inf.isModelLoaded.value) {
+          if (!remote) await img.unloadModel();
+          if (!remote && textName.isNotEmpty && !inf.isModelLoaded.value) {
             await mc.loadModel(textName);
             for (var i = 0; i < 600 && inf.isLoadingModel.value; i++) {
               await Future.delayed(const Duration(milliseconds: 500));

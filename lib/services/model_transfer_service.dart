@@ -13,6 +13,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../controllers/model_controller.dart';
 import 'download_service.dart';
+import 'lan_network.dart';
 import 'voice_models.dart';
 
 /// Moving models between devices on the same network (and voice models to and
@@ -137,10 +138,7 @@ Future<String?> lanAddress() async {
     for (final i in ifs) {
       for (final a in i.addresses) {
         final ip = a.address;
-        final private = ip.startsWith('192.168.') ||
-            ip.startsWith('10.') ||
-            RegExp(r'^172\.(1[6-9]|2\d|3[01])\.').hasMatch(ip);
-        if (!private) continue;
+        if (!isPrivateLanAddress(ip)) continue;
         final n = i.name.toLowerCase();
         if (n.startsWith('wlan') || n == 'en0' || n.startsWith('wi')) return ip;
         fallback ??= ip;
@@ -188,9 +186,11 @@ class ModelTransferServer {
   Future<String> start() async {
     await stop();
     token = _randomToken();
-    host = await lanAddress() ?? '127.0.0.1';
+    final ip = await lanAddress();
+    if (ip == null) throw StateError('Connect to a private Wi-Fi network first.');
+    host = ip;
     bytesServed = 0;
-    final s = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+    final s = await HttpServer.bind(InternetAddress(host), 0);
     _server = s;
     s.listen((req) => _handle(req), onError: (_) {});
     return url;
@@ -426,9 +426,20 @@ class ModelTransferClient {
     if (s.isEmpty) return null;
     if (!s.contains('://')) s = 'http://$s';
     final u = Uri.tryParse(s);
-    if (u == null || u.host.isEmpty || !u.hasPort) return null;
-    final t = u.queryParameters['token'];
-    if (t == null || t.isEmpty) return null;
+    if (u == null ||
+        u.scheme != 'http' ||
+        !isPrivateLanAddress(u.host) ||
+        !u.hasPort || u.port < 1 || u.port > 65535 ||
+        u.userInfo.isNotEmpty || u.hasFragment ||
+        (u.path.isNotEmpty && u.path != '/')) {
+      return null;
+    }
+    final params = u.queryParametersAll;
+    if (params.length != 1 || params['token']?.length != 1) return null;
+    final t = params['token']!.single;
+    if (!RegExp(r'^[abcdefghijkmnopqrstuvwxyz23456789]{12}$').hasMatch(t)) {
+      return null;
+    }
     return ModelTransferClient._(
         Uri(scheme: 'http', host: u.host, port: u.port), t);
   }
@@ -442,9 +453,21 @@ class ModelTransferClient {
   }
 
   Future<List<TransferItem>> fetchList() async {
-    final c = http.Client();
+    final c = lanHttpClient();
     try {
-      final res = await c.get(_uri('/list')).timeout(const Duration(seconds: 15));
+      final req = http.Request('GET', _uri('/list'))..followRedirects = false;
+      final response = await c.send(req).timeout(const Duration(seconds: 15));
+      if (response.statusCode >= 300 && response.statusCode < 400) {
+        throw const FormatException('The sender tried to redirect the connection.');
+      }
+      final bytes = BytesBuilder(copy: false);
+      await for (final chunk in response.stream.timeout(const Duration(seconds: 15))) {
+        if (bytes.length + chunk.length > 2 * 1024 * 1024) {
+          throw const FormatException('The sender’s file list is too large.');
+        }
+        bytes.add(chunk);
+      }
+      final res = http.Response.bytes(bytes.takeBytes(), response.statusCode);
       if (res.statusCode == 403) {
         throw Exception('The code was not accepted. Check it on the other device.');
       }
@@ -512,7 +535,7 @@ class ModelTransferClient {
     _done = 0;
     _total = items.fold<int>(0, (a, i) => a + i.size);
     final failures = <String>[];
-    _client = http.Client();
+    _client = lanHttpClient();
     try {
       for (final it in items) {
         if (_cancel) throw TransferCancelled();
@@ -590,11 +613,16 @@ class ModelTransferClient {
       have = 0;
     }
     if (have < f.size || f.size == 0) {
-      final req = http.Request('GET', _uri('/file', {'fid': '${f.fid}'}));
+      final req = http.Request('GET', _uri('/file', {'fid': '${f.fid}'}))
+        ..followRedirects = false;
       if (have > 0) req.headers['Range'] = 'bytes=$have-';
       final res = await _client!.send(req).timeout(const Duration(seconds: 30));
       if (res.statusCode != 200 && res.statusCode != 206) {
         throw Exception('the other device answered ${res.statusCode}');
+      }
+      if (res.statusCode == 206 &&
+          res.headers['content-range'] != 'bytes $have-${f.size - 1}/${f.size}') {
+        throw const FormatException('The sender returned an unexpected byte range.');
       }
       if (res.statusCode == 200) have = 0; // the sender ignored the range
       _done += have;
@@ -602,7 +630,11 @@ class ModelTransferClient {
       try {
         await for (final chunk in res.stream.timeout(const Duration(seconds: 30))) {
           if (_cancel) throw TransferCancelled();
+          if (have + chunk.length > f.size) {
+            throw const FormatException('The sender exceeded the expected file size.');
+          }
           sink.add(chunk);
+          have += chunk.length;
           _done += chunk.length;
           _report();
         }
@@ -721,9 +753,15 @@ Future<void> _writeStoredZip(File out, List<_ZipSrc> sources) async {
         ..add(_le(4, offset))
         ..add(nameBytes);
       offset += h.length + size;
+      if (offset > 0xFFFFFFFE) {
+        throw const FormatException('This export exceeds the ZIP size limit (4 GB).');
+      }
     }
     if (sources.length > 0xFFFE) throw Exception('Too many files for a .zip.');
     final cd = central.toBytes();
+    if (offset + cd.length + 22 > 0xFFFFFFFE) {
+      throw const FormatException('This export exceeds the ZIP size limit (4 GB).');
+    }
     sink
       ..add(cd)
       ..add(_le(4, 0x06054b50))
@@ -803,7 +841,9 @@ extension VoiceModelPortable on VoiceModelStore {
       outDir = await getTemporaryDirectory();
     }
     await outDir.create(recursive: true);
-    final out = File('${outDir.path}/NeuroMesh-voice-${m.id}.zip');
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    final out = File('${outDir.path}/NeuroMesh-voice-${m.id}-$stamp.zip');
+    final partial = File('${out.path}.part');
     final sources = <_ZipSrc>[
       _ZipSrc.bytes(
           'manifest.json',
@@ -821,7 +861,12 @@ extension VoiceModelPortable on VoiceModelStore {
       if (rel == '.complete' || _skipName(rel)) continue;
       sources.add(_ZipSrc.file('${m.dirName}/$rel', e));
     }
-    await _writeStoredZip(out, sources);
+    try {
+      await Isolate.run(() => _writeStoredZip(partial, sources));
+      await partial.rename(out.path);
+    } finally {
+      if (await partial.exists()) await partial.delete();
+    }
     if (_isDesktop()) return 'Saved to ${out.path}';
     await Share.shareXFiles([XFile(out.path)], subject: m.title);
     return 'Choose where to save the file (Files, Downloads, Drive…).';

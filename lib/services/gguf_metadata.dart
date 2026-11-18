@@ -7,6 +7,11 @@ import 'dart:typed_data';
 class GgufInfo {
   final String architecture;
   final String? name;
+  final String? sizeLabel;
+  final int? fileType;
+  final int? parameterCount;
+  final int? tensorCount;
+  final int? splitCount;
   final int layers;
   final int trainedContext;
   final int embeddingLength;
@@ -19,6 +24,11 @@ class GgufInfo {
   const GgufInfo({
     required this.architecture,
     required this.name,
+    this.sizeLabel,
+    this.fileType,
+    this.parameterCount,
+    this.tensorCount,
+    this.splitCount,
     required this.layers,
     required this.trainedContext,
     required this.embeddingLength,
@@ -79,6 +89,21 @@ class GgufInfo {
   static const _mb = 1024 * 1024;
 }
 
+/// Checks the fixed part of a GGUF header before handing it to native code.
+Future<bool> hasGgufSignature(String path) async {
+  final file = await File(path).open();
+  try {
+    final header = await file.read(24);
+    return header.length == 24 &&
+        header[0] == 0x47 &&
+        header[1] == 0x47 &&
+        header[2] == 0x55 &&
+        header[3] == 0x46;
+  } finally {
+    await file.close();
+  }
+}
+
 /// Reads just the metadata block at the start of a GGUF file (never the
 /// tensor data). Returns null if the file isn't a GGUF the reader
 /// understands or is missing the architecture fields.
@@ -110,10 +135,10 @@ class _GgufReader {
   static const _maxMetadataBytes = 64 << 20;
 
   Future<void> _ensure(int n) async {
-    if (_pos + n <= _bufStart + _buf.length) return;
-    if (_pos + n > _fileLength || _pos + n > _maxMetadataBytes) {
+    if (n < 0 || _pos + n > _fileLength || _pos + n > _maxMetadataBytes) {
       throw const FormatException('GGUF metadata truncated');
     }
+    if (_pos + n <= _bufStart + _buf.length) return;
     await _raf.setPosition(_pos);
     final size = n > _chunk ? n : _chunk;
     _buf = await _raf.read(size);
@@ -123,7 +148,11 @@ class _GgufReader {
 
   Future<ByteData> _bytes(int n) async {
     await _ensure(n);
-    final view = ByteData.sublistView(_buf, _pos - _bufStart, _pos - _bufStart + n);
+    final view = ByteData.sublistView(
+      _buf,
+      _pos - _bufStart,
+      _pos - _bufStart + n,
+    );
     _pos += n;
     return view;
   }
@@ -132,7 +161,7 @@ class _GgufReader {
   Future<int> _u64() async => (await _bytes(8)).getUint64(0, Endian.little);
 
   Future<void> _skip(int n) async {
-    if (n < 0 || _pos + n > _fileLength) {
+    if (n < 0 || n > _fileLength - _pos || n > _maxMetadataBytes - _pos) {
       throw const FormatException('Bad skip');
     }
     _pos += n;
@@ -149,7 +178,8 @@ class _GgufReader {
       final view = ByteData.sublistView(_buf);
       while (remaining > 0 && _pos + 8 <= end) {
         final len = view.getUint64(_pos - _bufStart, Endian.little);
-        if (len > 1 << 20) throw const FormatException('String too long');
+        if (len < 0 || len > 1 << 20)
+          throw const FormatException('String too long');
         if (_pos + 8 + len > end) break; // needs a refill
         _pos += 8 + len;
         remaining--;
@@ -165,18 +195,30 @@ class _GgufReader {
 
   Future<String> _string() async {
     final len = await _u64();
-    if (len > 1 << 20) throw const FormatException('String too long');
+    if (len < 0 || len > 1 << 20)
+      throw const FormatException('String too long');
     await _ensure(len);
     final s = utf8.decode(
-        _buf.sublist(_pos - _bufStart, _pos - _bufStart + len),
-        allowMalformed: true);
+      _buf.sublist(_pos - _bufStart, _pos - _bufStart + len),
+      allowMalformed: true,
+    );
     _pos += len;
     return s;
   }
 
   // Fixed sizes of scalar value types (GGUF spec); 8 = string, 9 = array.
   static const _scalarSize = {
-    0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8,
+    0: 1,
+    1: 1,
+    2: 2,
+    3: 2,
+    4: 4,
+    5: 4,
+    6: 4,
+    7: 1,
+    10: 8,
+    11: 8,
+    12: 8,
   };
 
   Future<Object?> _value(int type, {bool keep = true}) async {
@@ -191,14 +233,15 @@ class _GgufReader {
         final itemType = await _u32();
         final count = await _u64();
         final size = _scalarSize[itemType];
+        if (count < 0 || count > _maxMetadataBytes) {
+          throw const FormatException('Invalid GGUF array length');
+        }
         if (size != null) {
           await _skip(size * count);
         } else if (itemType == 8) {
           await _skipStrings(count);
         } else {
-          for (var i = 0; i < count; i++) {
-            await _value(itemType, keep: false);
-          }
+          throw FormatException('Unsupported GGUF array type $itemType');
         }
         return null;
       default:
@@ -239,15 +282,27 @@ class _GgufReader {
       return null;
     }
     final version = await _u32();
-    if (version < 2) return null; // v1 used 32-bit counts
-    await _u64(); // tensor count
+    if (version != 2 && version != 3) return null;
+    final tensorCount = await _u64();
     final kvCount = await _u64();
+    if (kvCount < 0 || kvCount > 65536) return null;
 
     final values = <String, Object?>{};
     for (var i = 0; i < kvCount; i++) {
       final key = await _string();
       final type = await _u32();
-      values[key] = await _value(type);
+      final keep = key == 'general.architecture' ||
+          key == 'general.name' ||
+          key == 'general.size_label' ||
+          key == 'general.file_type' ||
+          key == 'general.parameter_count' ||
+          key == 'split.count' ||
+          key.endsWith('.block_count') ||
+          key.endsWith('.context_length') ||
+          key.endsWith('.embedding_length') ||
+          key.contains('.attention.');
+      final value = await _value(type, keep: keep);
+      if (keep) values[key] = value;
     }
 
     final arch = values['general.architecture'];
@@ -266,6 +321,13 @@ class _GgufReader {
     return GgufInfo(
       architecture: arch,
       name: values['general.name'] as String?,
+      sizeLabel: values['general.size_label'] as String?,
+      fileType: values['general.file_type'] as int?,
+      parameterCount: values['general.parameter_count'] is int
+          ? values['general.parameter_count'] as int
+          : null,
+      tensorCount: tensorCount >= 0 ? tensorCount : null,
+      splitCount: values['split.count'] as int?,
       layers: layers,
       trainedContext: intOf('context_length') ?? 4096,
       embeddingLength: embedding,

@@ -3,6 +3,8 @@ name: Android release
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 # One release job at a time per branch; a newer push cancels an older run that has not published yet.
@@ -153,6 +155,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub Release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -186,6 +189,8 @@ jobs:
       BASE_VERSION: "1.0"
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: subosito/flutter-action@v2
         with:
@@ -222,6 +227,23 @@ jobs:
           CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
         run: flutter build windows --release
 
+      - name: Build and install the desktop image runtime
+        shell: bash
+        run: |
+          set -e
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            bundle="$PWD/build/windows/x64/runner/Release"
+            library=neuromesh_sd.dll
+          else
+            bundle="$PWD/build/linux/x64/release/bundle"
+            library=libneuromesh_sd.so
+          fi
+          cmake -S local_plugins/sd_flutter_android/desktop -B build/desktop-image -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/desktop-image --config Release --parallel 2
+          ctest --test-dir build/desktop-image -C Release --output-on-failure
+          cmake --install build/desktop-image --config Release --prefix "$bundle"
+          test -s "$bundle/native/$library"
+
       - name: Bundle llama-server and package (Linux)
         if: runner.os == 'Linux'
         env:
@@ -242,10 +264,13 @@ jobs:
           ls "$B/llama" | head -20
           tar -C "$B" -czf "NeuroMesh-AI-v${V}-linux-x64.tar.gz" .
           bash scripts/package_linux.sh "$B" "$V" web/icons/Icon-512.png
-          for f in NeuroMesh-AI-v${V}-linux-x64.*; do
-            gh release upload "v${V}" "$f" --clobber --repo "$GITHUB_REPOSITORY"
-            gh release upload latest "$f" --clobber --repo "$GITHUB_REPOSITORY"
-          done
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+            for f in "NeuroMesh-AI-v${V}-linux-x64.deb" "NeuroMesh-AI-v${V}-linux-x64.AppImage"; do
+              [[ -f "$f" ]] || continue
+              gh release upload "v${V}" "$f" --clobber --repo "$GITHUB_REPOSITORY"
+              gh release upload latest "$f" --clobber --repo "$GITHUB_REPOSITORY"
+            done
+          fi
 
       - name: Bundle llama-server and package (Windows)
         if: runner.os == 'Windows'
@@ -271,14 +296,22 @@ jobs:
           export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
           "$ISCC" "/DAppVersion=${V}" "/DSourceDir=$(cygpath -w "$PWD/$B")" "/DOutDir=$(cygpath -w "$PWD")" installer/neuromesh.iss
           ls -la NeuroMesh-AI-Setup-*.exe
-          for f in "NeuroMesh-AI-v${V}-windows-x64-portable.zip" "NeuroMesh-AI-Setup-v${V}-x64.exe"; do
-            gh release upload "v${V}" "$f" --clobber --repo "$GITHUB_REPOSITORY"
-            gh release upload latest "$f" --clobber --repo "$GITHUB_REPOSITORY"
-          done
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+            installer="NeuroMesh-AI-Setup-v${V}-x64.exe"
+            gh release upload "v${V}" "$installer" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload latest "$installer" --clobber --repo "$GITHUB_REPOSITORY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neuromesh-ai-${{ runner.os }}-x64
+          path: NeuroMesh-AI-*x64*
+          if-no-files-found: error
 
   # "Pro" APK: the normal app plus an Alpine Linux sandbox (proot) so the AI can
   # run real commands. Not for Google Play (it downloads and runs programs).
   pro:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 120

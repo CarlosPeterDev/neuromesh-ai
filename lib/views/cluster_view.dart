@@ -8,6 +8,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../core/ui.dart';
 import '../services/cluster_service.dart';
+import 'workload_placement_view.dart';
 
 /// Phone cluster: pick Master (runs the model) or Worker (lends this phone),
 /// and pair them by scanning the worker's QR code.
@@ -60,6 +61,16 @@ class _ClusterViewState extends State<ClusterView> {
               selected: role,
               onChanged: cluster.setRole,
             ),
+            const SizedBox(height: 16),
+            AppGroup(children: [
+              AppRow(
+                icon: Icons.devices_other_rounded,
+                title: 'Workload placement',
+                subtitle: 'Assign speech, recognition and images to worker phones',
+                chevron: true,
+                onTap: () => Get.to(() => const WorkloadPlacementView()),
+              ),
+            ]),
             const SizedBox(height: 16),
             if (role != ClusterRole.off && cluster.wifiAddress.value == null) ...[
               AppNotice(

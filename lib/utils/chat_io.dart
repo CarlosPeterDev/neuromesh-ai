@@ -118,11 +118,16 @@ bool isSecretSettingKey(String key) {
   return k.contains('key') || k.contains('token') || k.contains('secret');
 }
 
+// Internal diagnostic history is local and has its own reviewed export.
+bool canTransferSetting(String key) =>
+    !isSecretSettingKey(key) && !key.startsWith('diagnostics_model_load_') &&
+    !key.startsWith('mcp_oauth_');
+
 Map<String, dynamic> stripSecrets(Map<dynamic, dynamic> settings) {
   final out = <String, dynamic>{};
   settings.forEach((k, v) {
     final key = '$k';
-    if (!isSecretSettingKey(key)) out[key] = v;
+    if (canTransferSetting(key)) out[key] = v;
   });
   return out;
 }

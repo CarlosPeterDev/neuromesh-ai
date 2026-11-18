@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../core/ui.dart';
 import '../services/app_log_service.dart';
+import 'diagnostics_view.dart';
 
 const _tabular = [FontFeature.tabularFigures()];
 
@@ -52,6 +53,11 @@ class _LogViewState extends State<LogView> {
         title: 'Logs',
         showBack: true,
         actions: [
+          AppBarIcon(
+            icon: Icons.bug_report_outlined,
+            tooltip: 'Report an error',
+            onPressed: () => Get.to(() => const DiagnosticsView()),
+          ),
           Obx(() => AppBarIcon(
                 icon: Icons.copy_rounded,
                 tooltip: 'Copy important logs',

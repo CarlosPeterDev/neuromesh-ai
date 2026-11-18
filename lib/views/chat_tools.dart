@@ -346,7 +346,7 @@ class _ChatToolsViewState extends State<ChatToolsView> {
             onPressed: () async {
               if (p.tokenLabel != null &&
                   token.text.trim().isEmpty &&
-                  !McpOAuth.hasTokens(presetUrl(p, {for (final e in fields.entries) e.key: e.value.text}))) {
+                  !await McpOAuth.hasTokens(presetUrl(p, {for (final e in fields.entries) e.key: e.value.text}))) {
                 setS(() => error = 'Paste a token, or use "Sign in with browser".');
                 return;
               }
@@ -478,9 +478,12 @@ class _ChatToolsViewState extends State<ChatToolsView> {
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
               icon: const Icon(Icons.login_rounded, size: 18),
-              label: Text(McpOAuth.hasTokens(url.text.trim())
-                  ? 'Signed in · sign in again'
-                  : 'Sign in with browser (no token)'),
+              label: FutureBuilder<bool>(
+                future: McpOAuth.hasTokens(url.text.trim()),
+                builder: (_, snapshot) => Text(snapshot.data == true
+                    ? 'Signed in · sign in again'
+                    : 'Sign in with browser'),
+              ),
               onPressed: busy
                   ? null
                   : () async {
