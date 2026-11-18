@@ -469,7 +469,9 @@ SD_FFI_API void* sd_ffi_init_ex(const char* model_path,
     }
     g_ffi_model_path = model_path ? model_path : "";
 
-    // Backend selection via environment variables
+#ifndef _WIN32
+    // Backend selection via environment variables on Android. The Windows
+    // bundle links only the CPU backend, so it needs no Vulkan overrides.
     // backend: 0=CPU, 1=Vulkan, 2=OpenCL
     if (backend == 0) {
         // Force CPU: hide all Vulkan devices from ggml
@@ -486,6 +488,7 @@ SD_FFI_API void* sd_ffi_init_ex(const char* model_path,
         unsetenv("GGML_VK_VISIBLE_DEVICES");
         LOGI("[FFI] Backend: OpenCL");
     }
+#endif
 
     sd_ctx_params_t params;
     sd_ctx_params_init(&params);
