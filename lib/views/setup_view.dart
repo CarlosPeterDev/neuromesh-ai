@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../controllers/model_controller.dart';
-import '../core/build_flavor.dart';
 import '../models/ai_model.dart';
 import '../core/ui.dart';
 import '../services/agent_service.dart';
@@ -50,7 +49,7 @@ class _SetupViewState extends State<SetupView> {
   bool tools = true;
   bool autoMemory = true;
   bool memoryUpdate = true;
-  bool sandbox = true;
+  bool sandbox = false;
   bool sandboxNoAsk = true;
   // Performance
   bool autoContext = true;
@@ -81,8 +80,7 @@ class _SetupViewState extends State<SetupView> {
       ttsAr = !_has('piper-ar-kareem');
       vad = !_has('silero-vad');
       if (_pro) {
-        final sb = Get.find<SandboxService>();
-        sandbox = !sb.installed.value;
+        sandbox = false;
         sandboxNoAsk = agent.policyFor('built-in', 'run_shell', needsConfirm: true) == 'allow';
       }
     } else {
@@ -274,8 +272,8 @@ class _SetupViewState extends State<SetupView> {
           if (_pro) ...[
             _sw(Icons.terminal_rounded, 'Install the Linux sandbox', 'About 150 MB with python, node, git. One shared sandbox for every chat.', sandbox, (v) => sandbox = v),
             _sw(Icons.bolt_rounded, 'Run sandbox commands without asking', 'Commands run in an isolated Linux, not on your phone files', sandboxNoAsk, (v) => sandboxNoAsk = v),
-          ] else if (kProBuild)
-            const AppRow(icon: Icons.terminal_rounded, title: 'Linux sandbox', subtitle: 'Available on Android in the Pro build'),
+          ] else
+            const AppRow(icon: Icons.terminal_rounded, title: 'Linux sandbox', subtitle: 'Available on supported Android devices'),
         ]),
         const SectionHeader('Performance'),
         AppGroup(children: [

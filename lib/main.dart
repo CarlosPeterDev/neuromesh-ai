@@ -15,6 +15,7 @@ import 'core/theme.dart';
 //////
 import 'core/routes.dart';
 import 'services/agent_service.dart';
+import 'services/skills_service.dart';
 import 'services/user_files.dart';
 import 'services/toolbox_service.dart';
 import 'services/rag_service.dart';
@@ -113,6 +114,8 @@ void main() {
     Get.put(InferenceService());
     Get.put(UserFilesService(), permanent: true);
     Get.put(AgentService());
+    final skills = await Get.putAsync(() => SkillsService().init());
+    skills.registerTools(Get.find<AgentService>());
     Get.put(ToolboxService());
     Get.put(RagService());
     Get.put(FavoritesService(), permanent: true);
@@ -134,13 +137,14 @@ void main() {
     if (UpdateService.isSupported) Get.put(UpdateService(), permanent: true);
     Get.put(LocalImageService());
     registerExtraTools(Get.find<AgentService>());
-    final crashReporting = await Get.putAsync(() => CrashReportingService().init().timeout(
-          const Duration(seconds: 10),
-          onTimeout: () {
-            appLog.error('CrashReportingService.init timed out');
-            return CrashReportingService();
-          },
-        ));
+    final crashReporting =
+        await Get.putAsync(() => CrashReportingService().init().timeout(
+              const Duration(seconds: 10),
+              onTimeout: () {
+                appLog.error('CrashReportingService.init timed out');
+                return CrashReportingService();
+              },
+            ));
     FlutterError.onError = (details) {
       FlutterError.presentError(details);
       appLog.error(

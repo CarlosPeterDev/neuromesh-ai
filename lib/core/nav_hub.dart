@@ -8,6 +8,7 @@ import '../views/chat_tools.dart';
 import '../views/cluster_view.dart';
 import '../views/log_view.dart';
 import '../views/memory_view.dart';
+import '../views/skills_view.dart';
 import '../views/model_transfer_view.dart';
 import '../views/roles_view.dart';
 import '../views/perf_views.dart';
@@ -62,12 +63,13 @@ class NavSection {
 /// To add a new screen, add one NavEntry below.
 List<NavSection> buildNavSections() => [
       NavSection('AI & agent', Icons.auto_awesome_rounded, [
-        NavEntry('Setup & recommended settings',
+        NavEntry(
+            'Setup & recommended settings',
             'Wi-Fi downloads, voice, small models, agent defaults',
             Icons.auto_fix_high_rounded,
             page: () => const SetupView()),
-        NavEntry('Agent tools & permissions',
-            'What the AI may do, per tool', Icons.handyman_outlined,
+        NavEntry('Agent tools & permissions', 'What the AI may do, per tool',
+            Icons.handyman_outlined,
             page: () => const ChatToolsView()),
         NavEntry('MCP servers', 'Connect apps and services',
             Icons.extension_outlined,
@@ -75,6 +77,11 @@ List<NavSection> buildNavSections() => [
         NavEntry('Scheduled tasks', 'Automation that runs by itself',
             Icons.schedule_rounded,
             page: () => const ScheduledTasksView()),
+        NavEntry(
+            'Skills',
+            'Import instructions, references and reusable workflows',
+            Icons.auto_stories_outlined,
+            page: () => const SkillsView()),
         NavEntry('Memory', 'What the AI remembers about you',
             Icons.psychology_alt_rounded,
             page: () => const MemoryView()),
@@ -82,7 +89,7 @@ List<NavSection> buildNavSections() => [
             Icons.theater_comedy_outlined,
             page: () => const RolesView()),
         if (SandboxService.supported)
-          NavEntry('Linux sandbox', 'Run real commands (Pro build)',
+          NavEntry('Linux sandbox', 'Download Alpine and run commands',
               Icons.terminal_rounded,
               page: () => const ChatToolsView()),
       ]),
@@ -101,13 +108,13 @@ List<NavSection> buildNavSections() => [
         NavEntry('Voice cloning', 'Speak in your own voice',
             Icons.mic_external_on_rounded,
             page: () => const VoiceCloneView()),
-        NavEntry('Compare models', 'Same prompt, two answers',
-            Icons.compare_rounded,
+        NavEntry(
+            'Compare models', 'Same prompt, two answers', Icons.compare_rounded,
             page: () => const CompareView()),
       ]),
       NavSection('Connect', Icons.hub_outlined, [
-        NavEntry('Server & API', 'Use the AI from other apps',
-            Icons.lan_outlined,
+        NavEntry(
+            'Server & API', 'Use the AI from other apps', Icons.lan_outlined,
             tab: HomeTab.server),
         NavEntry('Remote access', 'Reach your phone from outside',
             Icons.public_rounded,
@@ -124,8 +131,8 @@ List<NavSection> buildNavSections() => [
         NavEntry('Toolbox', 'Export, backup, benchmark, utilities',
             Icons.handyman_rounded,
             page: () => const ToolboxView()),
-        NavEntry('Storage', 'Downloaded models and space',
-            Icons.sd_storage_outlined,
+        NavEntry(
+            'Storage', 'Downloaded models and space', Icons.sd_storage_outlined,
             page: () => const StorageView()),
         NavEntry('Logs', 'What the app has been doing', Icons.article_outlined,
             page: () => const LogView()),

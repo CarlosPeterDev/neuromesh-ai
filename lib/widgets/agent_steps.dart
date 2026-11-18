@@ -18,7 +18,8 @@ class AgentStep {
   final String result;
   final bool running;
   final int ms;
-  const AgentStep(this.name, this.label, this.args, this.result, this.running, this.ms);
+  const AgentStep(
+      this.name, this.label, this.args, this.result, this.running, this.ms);
 
   static AgentStep? parse(String line) {
     if (!line.startsWith(ToolLoopResult.traceMark)) return null;
@@ -28,7 +29,9 @@ class AgentStep {
       return AgentStep(
         '${j['n'] ?? ''}',
         '${j['l'] ?? j['n'] ?? ''}',
-        (j['a'] is Map) ? Map<String, dynamic>.from(j['a'] as Map) : <String, dynamic>{},
+        (j['a'] is Map)
+            ? Map<String, dynamic>.from(j['a'] as Map)
+            : <String, dynamic>{},
         '${j['r'] ?? ''}',
         j['run'] == true,
         (j['ms'] is num) ? (j['ms'] as num).toInt() : 0,
@@ -93,62 +96,115 @@ IconData _iconFor(String n) {
 }
 
 /// A collapsible "what the agent did" list; tap a step for its details.
-class AgentStepsView extends StatelessWidget {
+class AgentStepsView extends StatefulWidget {
   final List<AgentStep> steps;
   final String messageId;
   final bool live;
-  const AgentStepsView({
-    super.key, required this.steps, required this.messageId, this.live = false,
-  });
+  final RxString? traceSource;
+  const AgentStepsView(
+      {super.key,
+      required this.steps,
+      required this.messageId,
+      this.live = false,
+      this.traceSource});
+  @override
+  State<AgentStepsView> createState() => _AgentStepsViewState();
+}
+
+class _AgentStepsViewState extends State<AgentStepsView> {
+  late final ValueNotifier<List<AgentStep>> changes =
+      ValueNotifier(widget.steps);
+  bool open = false;
+  @override
+  void didUpdateWidget(covariant AgentStepsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) changes.value = widget.steps;
+    });
+  }
+
+  @override
+  void dispose() {
+    if (!open) changes.dispose();
+    super.dispose();
+  }
+
+  Future<void> showSteps() async {
+    open = true;
+    final source = widget.traceSource;
+    final worker = source == null
+        ? null
+        : ever<String>(source, (text) {
+            final current = splitSteps(text).$1;
+            if (current.isNotEmpty) changes.value = current;
+          });
+    await showDialog<void>(
+        context: context,
+        builder: (ctx) => Dialog(
+              clipBehavior: Clip.antiAlias,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                    maxWidth: 600,
+                    maxHeight: MediaQuery.sizeOf(ctx).height * .75),
+                child: ValueListenableBuilder<List<AgentStep>>(
+                    valueListenable: changes,
+                    builder: (ctx, steps, _) =>
+                        Column(mainAxisSize: MainAxisSize.min, children: [
+                          ListTile(
+                              title: Text(
+                                  'Agent activity · ${steps.length} steps'),
+                              trailing: IconButton(
+                                  tooltip: 'Close',
+                                  icon: const Icon(Icons.close),
+                                  onPressed: () => Navigator.pop(ctx))),
+                          const Divider(height: 1),
+                          Flexible(
+                              child: ListView.builder(
+                                  shrinkWrap: true,
+                                  padding: const EdgeInsets.all(12),
+                                  itemCount: steps.length,
+                                  itemBuilder: (ctx, i) =>
+                                      _StepTile(step: steps[i]))),
+                        ])),
+              ),
+            ));
+    worker?.dispose();
+    open = false;
+    if (!mounted) changes.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final steps = widget.steps;
     if (steps.isEmpty) return const SizedBox.shrink();
-    final cs = Theme.of(context).colorScheme;
     final running = steps.any((s) => s.running);
     final total = steps.fold<int>(0, (a, s) => a + s.ms);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          initiallyExpanded: live,
-          key: PageStorageKey('agent-steps-$messageId'),
-          tilePadding: const EdgeInsets.symmetric(horizontal: 12),
-          childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-          dense: true,
-          leading: running
-              ? const SizedBox(
-                  width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-              : Icon(Icons.check_circle_outline_rounded, size: 20, color: cs.primary),
-          title: Text(
-            running
-                ? steps.lastWhere((s) => s.running).label
-                : '${steps.length} step${steps.length == 1 ? '' : 's'}'
-                    '${total > 0 ? ' · ${(total / 1000).toStringAsFixed(1)}s' : ''}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
-          ),
-          children: [
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 240),
-              child: ListView.builder(
-                key: PageStorageKey('agent-step-list-$messageId'),
-                primary: false,
-                shrinkWrap: true,
-                itemCount: steps.length,
-                itemBuilder: (context, index) => _StepTile(step: steps[index]),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+    return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: open ? null : showSteps,
+              icon: running
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.terminal_rounded, size: 17),
+              label: Row(mainAxisSize: MainAxisSize.min, children: [
+                Flexible(
+                    child: Text(
+                        running
+                            ? 'Working… ${steps.lastWhere((s) => s.running).label}'
+                            : '${steps.length} step${steps.length == 1 ? '' : 's'}${total > 0 ? ' · ${(total / 1000).toStringAsFixed(1)}s' : ''}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis)),
+                const Icon(Icons.chevron_right, size: 17)
+              ]),
+              style: TextButton.styleFrom(
+                  foregroundColor:
+                      Theme.of(context).colorScheme.onSurfaceVariant),
+            )));
   }
 }
 
@@ -163,12 +219,14 @@ class _StepTile extends StatelessWidget {
       contentPadding: const EdgeInsets.symmetric(horizontal: 6),
       leading: step.running
           ? const SizedBox(
-              width: 16, height: 16,
+              width: 16,
+              height: 16,
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           : Icon(_iconFor(step.name), size: 18),
       title: Text(step.label,
-          maxLines: 2, overflow: TextOverflow.ellipsis,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontSize: 13)),
       subtitle: Text(
         step.running
@@ -199,7 +257,8 @@ class _StepDetails extends StatelessWidget {
     return SafeArea(
       top: false,
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.65),
+        constraints:
+            BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.65),
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
           child: Column(
@@ -211,7 +270,8 @@ class _StepDetails extends StatelessWidget {
                 Text('Input', style: theme.textTheme.titleSmall),
                 for (final entry in step.args.entries) ...[
                   const SizedBox(height: 8),
-                  Text(_fieldLabel(entry.key), style: theme.textTheme.labelLarge),
+                  Text(_fieldLabel(entry.key),
+                      style: theme.textTheme.labelLarge),
                   SelectableText(_fieldValue(entry.value), style: textStyle),
                 ],
               ],
@@ -251,7 +311,8 @@ String _fieldLabel(String key) {
 String _fieldValue(Object? value) {
   if (value is Map) {
     return value.entries
-        .map((entry) => '${_fieldLabel(entry.key.toString())} — ${_fieldValue(entry.value)}')
+        .map((entry) =>
+            '${_fieldLabel(entry.key.toString())} — ${_fieldValue(entry.value)}')
         .join('\n');
   }
   if (value is List) {
@@ -275,14 +336,18 @@ Future<File?> agentFile(String name) async {
 
 /// Inline image for `![alt](nmfile:name)`.
 Widget agentImage(Uri uri, String? alt, {String? project}) {
-  final name = Uri.decodeComponent(uri.toString().substring(nmFileScheme.length));
+  final name =
+      Uri.decodeComponent(uri.toString().substring(nmFileScheme.length));
   return FutureBuilder<File?>(
     future: project == null
         ? agentFile(name)
         : Get.find<AgentService>().inProject(project, () => agentFile(name)),
     builder: (c, snap) {
       final f = snap.data;
-      if (f == null) return Text(snap.connectionState == ConnectionState.done ? '[missing: $name]' : '');
+      if (f == null)
+        return Text(snap.connectionState == ConnectionState.done
+            ? '[missing: $name]'
+            : '');
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: GestureDetector(
@@ -319,9 +384,35 @@ Future<void> openAgentFile(BuildContext context, String name) async {
 }
 
 const _textExts = {
-  'txt', 'md', 'csv', 'tsv', 'json', 'html', 'htm', 'xml', 'yaml', 'yml', 'log',
-  'py', 'js', 'ts', 'dart', 'kt', 'java', 'c', 'cpp', 'h', 'sh', 'sql', 'css',
-  'ini', 'toml', 'conf', 'srt', 'vtt', 'tex'
+  'txt',
+  'md',
+  'csv',
+  'tsv',
+  'json',
+  'html',
+  'htm',
+  'xml',
+  'yaml',
+  'yml',
+  'log',
+  'py',
+  'js',
+  'ts',
+  'dart',
+  'kt',
+  'java',
+  'c',
+  'cpp',
+  'h',
+  'sh',
+  'sql',
+  'css',
+  'ini',
+  'toml',
+  'conf',
+  'srt',
+  'vtt',
+  'tex'
 };
 const _imageExts = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'};
 
@@ -338,7 +429,8 @@ class _FileSheetState extends State<_FileSheet> {
   String? _text;
   bool _truncated = false;
   late final String _name = widget.file.path.split('/').last;
-  late final String _ext = _name.contains('.') ? _name.split('.').last.toLowerCase() : '';
+  late final String _ext =
+      _name.contains('.') ? _name.split('.').last.toLowerCase() : '';
 
   @override
   void initState() {
@@ -350,11 +442,13 @@ class _FileSheetState extends State<_FileSheet> {
     try {
       final bytes = await widget.file.readAsBytes();
       final cut = bytes.length > 60000;
-      final t = utf8.decode(cut ? bytes.sublist(0, 60000) : bytes, allowMalformed: true);
-      if (mounted) setState(() {
-        _text = t;
-        _truncated = cut;
-      });
+      final t = utf8.decode(cut ? bytes.sublist(0, 60000) : bytes,
+          allowMalformed: true);
+      if (mounted)
+        setState(() {
+          _text = t;
+          _truncated = cut;
+        });
     } catch (e) {
       if (mounted) setState(() => _text = 'Could not read this file: $e');
     }
@@ -377,54 +471,72 @@ class _FileSheetState extends State<_FileSheet> {
     final isImage = _imageExts.contains(_ext);
     return SafeArea(
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+        constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.85),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(_name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-            Text('${(size / 1024).toStringAsFixed(size < 10240 ? 1 : 0)} KB',
-                style: TextStyle(color: Theme.of(context).hintColor, fontSize: 12)),
-            const SizedBox(height: 10),
-            Flexible(
-              child: isImage
-                  ? InteractiveViewer(child: Image.file(widget.file, fit: BoxFit.contain))
-                  : _text != null
-                      ? Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                              borderRadius: BorderRadius.circular(12)),
-                          child: SingleChildScrollView(
-                              child: SelectableText(
-                                  _truncated ? '$_text\n… (preview cut; save the file for everything)' : _text!,
-                                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5, height: 1.45))))
-                      : Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 24),
-                          child: Text(_textExts.contains(_ext)
-                              ? 'Loading…'
-                              : 'No preview for .$_ext files. Save or share it instead.')),
-            ),
-            const SizedBox(height: 12),
-            Wrap(spacing: 8, runSpacing: 8, children: [
-              FilledButton.icon(
-                  onPressed: _save,
-                  icon: const Icon(Icons.download_rounded),
-                  label: const Text('Save to phone')),
-              OutlinedButton.icon(
-                  onPressed: () => Share.shareXFiles([XFile(widget.file.path)]),
-                  icon: const Icon(Icons.ios_share_rounded),
-                  label: const Text('Share')),
-              if (_text != null)
-                OutlinedButton.icon(
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: _text!));
-                      Get.snackbar('Copied', _name);
-                    },
-                    icon: const Icon(Icons.copy_rounded),
-                    label: const Text('Copy text')),
-            ]),
-          ]),
+          child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_name,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w700, fontSize: 16)),
+                Text(
+                    '${(size / 1024).toStringAsFixed(size < 10240 ? 1 : 0)} KB',
+                    style: TextStyle(
+                        color: Theme.of(context).hintColor, fontSize: 12)),
+                const SizedBox(height: 10),
+                Flexible(
+                  child: isImage
+                      ? InteractiveViewer(
+                          child: Image.file(widget.file, fit: BoxFit.contain))
+                      : _text != null
+                          ? Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerHighest
+                                      .withValues(alpha: 0.5),
+                                  borderRadius: BorderRadius.circular(12)),
+                              child: SingleChildScrollView(
+                                  child: SelectableText(
+                                      _truncated
+                                          ? '$_text\n… (preview cut; save the file for everything)'
+                                          : _text!,
+                                      style: const TextStyle(
+                                          fontFamily: 'monospace',
+                                          fontSize: 12.5,
+                                          height: 1.45))))
+                          : Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 24),
+                              child: Text(_textExts.contains(_ext)
+                                  ? 'Loading…'
+                                  : 'No preview for .$_ext files. Save or share it instead.')),
+                ),
+                const SizedBox(height: 12),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  FilledButton.icon(
+                      onPressed: _save,
+                      icon: const Icon(Icons.download_rounded),
+                      label: const Text('Save to phone')),
+                  OutlinedButton.icon(
+                      onPressed: () =>
+                          Share.shareXFiles([XFile(widget.file.path)]),
+                      icon: const Icon(Icons.ios_share_rounded),
+                      label: const Text('Share')),
+                  if (_text != null)
+                    OutlinedButton.icon(
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: _text!));
+                          Get.snackbar('Copied', _name);
+                        },
+                        icon: const Icon(Icons.copy_rounded),
+                        label: const Text('Copy text')),
+                ]),
+              ]),
         ),
       ),
     );
@@ -478,7 +590,8 @@ class _AudioSheetState extends State<_AudioSheet> {
           Row(mainAxisAlignment: MainAxisAlignment.center, children: [
             FilledButton.icon(
               onPressed: _toggle,
-              icon: Icon(_playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+              icon: Icon(
+                  _playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
               label: Text(_playing ? 'Pause' : 'Play'),
             ),
             const SizedBox(width: 12),

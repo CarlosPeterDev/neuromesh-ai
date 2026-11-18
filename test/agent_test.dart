@@ -11,7 +11,8 @@ import 'package:neuromesh_ai/services/hive_service.dart';
 
 void main() {
   group('local chat context fitting', () {
-    test('preserves short voice and ordinary requests under context pressure', () {
+    test('preserves short voice and ordinary requests under context pressure',
+        () {
       for (final prompt in [
         'Create audio file that says hello Carlos using tts tool',
         'Can you explain it?',
@@ -22,21 +23,35 @@ void main() {
           {'role': 'assistant', 'content': 'old answer ' * 200},
           {'role': 'user', 'content': prompt},
         ];
-        expect(AgentService.fitToContext('instructions ' * 100, history, prompt, 512),
+        expect(
+            AgentService.fitToContext(
+                'instructions ' * 10, history, prompt, 512),
             prompt);
-        expect(history, [{'role': 'user', 'content': prompt}]);
+        expect(history, [
+          {'role': 'user', 'content': prompt}
+        ]);
       }
     });
 
-    test('shortens a long request and keeps the prompt and history in sync', () {
+    test(
+        'rejects oversized mandatory instructions without cropping the user request',
+        () {
       final prompt = 'first ${'middle ' * 500}last';
-      final history = [{'role': 'user', 'content': prompt}];
-      final fitted = AgentService.fitToContext('', history, prompt, 1024);
-
-      expect(fitted, startsWith('first '));
-      expect(fitted, endsWith('last'));
-      expect(fitted.length, lessThan(prompt.length));
-      expect(history.single['content'], fitted);
+      final history = [
+        {'role': 'user', 'content': prompt}
+      ];
+      expect(() => AgentService.fitToContext('', history, prompt, 1024),
+          throwsStateError);
+      expect(history.single['content'], prompt);
+      expect(
+          () => AgentService.fitToContext(
+              'rule ' * 1000,
+              [
+                {'role': 'user', 'content': 'hello'}
+              ],
+              'hello',
+              512),
+          throwsStateError);
     });
   });
 
@@ -48,26 +63,38 @@ void main() {
     expect(agent.wantsTools('Helli!'), isFalse);
     expect(agent.wantsTools('السلام عليكم'), isFalse);
     expect(agent.wantsTools('Hi', hasFile: true), isTrue);
-    expect(agent.wantsTools('Create a file in the workspace named hello.txt'), isTrue);
+    expect(agent.wantsTools('Create a file in the workspace named hello.txt'),
+        isTrue);
   });
 
   test('routes literal speech and leaves voice overrides to the model', () {
     expect(
-      literalSpeechText('Create audio file that says hello Carlos using tts tool'),
+      literalSpeechText(
+          'Create audio file that says hello Carlos using tts tool'),
       'hello Carlos',
     );
-    expect(literalSpeechText('Make a WAV file saying "Hello!" using the TTS tool'), 'Hello!');
-    expect(literalSpeechText('Create audio file that says hello Carlos using tts tool with voice af_heart'), isNull);
+    expect(
+        literalSpeechText('Make a WAV file saying "Hello!" using the TTS tool'),
+        'Hello!');
+    expect(
+        literalSpeechText(
+            'Create audio file that says hello Carlos using tts tool with voice af_heart'),
+        isNull);
     expect(literalSpeechText('Can you create a file'), isNull);
   });
 
   test('recognizes an explicitly named empty workspace file', () {
-    expect(namedWorkspaceFile('Create a file in the workspace named hello.txt'), 'hello.txt');
-    expect(namedWorkspaceFile('Create a file in the workspace named hello.txt with my notes'), isNull);
+    expect(namedWorkspaceFile('Create a file in the workspace named hello.txt'),
+        'hello.txt');
+    expect(
+        namedWorkspaceFile(
+            'Create a file in the workspace named hello.txt with my notes'),
+        isNull);
     expect(namedWorkspaceFile('Can you create a file'), isNull);
   });
 
-  test('explicit TTS runs the tool, exposes progress and returns the audio link',
+  test(
+      'explicit TTS runs the tool, exposes progress and returns the audio link',
       () async {
     Get.put(HiveService());
     addTearDown(Get.reset);
@@ -75,9 +102,12 @@ void main() {
     final traceUpdates = <List<String>>[];
     const prompt = 'Create audio file that says hello Carlos using tts tool';
     final result = await agent.runToolLoop(
-      generate: (_, __, ___) async => throw StateError('LLM should not be called'),
+      generate: (_, __, ___) async =>
+          throw StateError('LLM should not be called'),
       prompt: prompt,
-      history: [{'role': 'user', 'content': prompt}],
+      history: [
+        {'role': 'user', 'content': prompt}
+      ],
       confirm: (_, __, ___) async => true,
       onVisible: (_) {},
       onStatus: (_) {},
@@ -104,7 +134,8 @@ void main() {
     });
 
     test('tolerates a missing closing tag and braces inside strings', () {
-      final c = parseToolCall('<tool_call>{"name":"x","arguments":{"q":"a } b"}}');
+      final c =
+          parseToolCall('<tool_call>{"name":"x","arguments":{"q":"a } b"}}');
       expect(c?.arguments['q'], 'a } b');
     });
 
@@ -131,7 +162,8 @@ void main() {
   });
 
   group('McpClient', () {
-    const cfg = McpServerConfig(id: '1', name: 'Demo Server', url: 'https://x.test/mcp', token: 'tok');
+    const cfg = McpServerConfig(
+        id: '1', name: 'Demo Server', url: 'https://x.test/mcp', token: 'tok');
 
     test('initializes, lists tools and calls a tool', () async {
       final methods = <String>[];
@@ -143,30 +175,40 @@ void main() {
           final body = jsonDecode(req.body) as Map<String, dynamic>;
           final method = body['method'] as String;
           methods.add(method);
-          if (method == 'notifications/initialized') return http.Response('', 202);
+          if (method == 'notifications/initialized')
+            return http.Response('', 202);
           Map<String, dynamic> result;
           if (method == 'initialize') {
             result = {'protocolVersion': '2025-03-26'};
           } else if (method == 'tools/list') {
             result = {
               'tools': [
-                {'name': 'echo', 'description': 'Echo', 'inputSchema': {'type': 'object'}}
+                {
+                  'name': 'echo',
+                  'description': 'Echo',
+                  'inputSchema': {'type': 'object'}
+                }
               ]
             };
           } else {
             result = {
               'content': [
-                {'type': 'text', 'text': 'hi ${(body['params'] as Map)['arguments']['msg']}'}
+                {
+                  'type': 'text',
+                  'text': 'hi ${(body['params'] as Map)['arguments']['msg']}'
+                }
               ]
             };
           }
-          final json = jsonEncode({'jsonrpc': '2.0', 'id': body['id'], 'result': result});
+          final json = jsonEncode(
+              {'jsonrpc': '2.0', 'id': body['id'], 'result': result});
           // Answer tools/call as an SSE stream to cover both transports.
           if (method == 'tools/call') {
             return http.Response('event: message\ndata: $json\n\n', 200,
                 headers: {'content-type': 'text/event-stream'});
           }
-          return http.Response(json, 200, headers: {'content-type': 'application/json'});
+          return http.Response(json, 200,
+              headers: {'content-type': 'application/json'});
         }),
       );
       final tools = await client.listTools();
@@ -175,11 +217,17 @@ void main() {
       final out = await client.callTool('echo', {'msg': 'there'});
       expect(out, 'hi there');
       expect(auth, 'Bearer tok');
-      expect(methods, ['initialize', 'notifications/initialized', 'tools/list', 'tools/call']);
+      expect(methods, [
+        'initialize',
+        'notifications/initialized',
+        'tools/list',
+        'tools/call'
+      ]);
     });
 
     test('reports auth and server errors readably', () async {
-      final client = McpClient(cfg, client: MockClient((_) async => http.Response('no', 401)));
+      final client = McpClient(cfg,
+          client: MockClient((_) async => http.Response('no', 401)));
       expect(client.listTools(), throwsA(isA<McpException>()));
     });
   });

@@ -80,7 +80,7 @@ class _ChatToolsViewState extends State<ChatToolsView> {
             ])),
 
         if (SandboxService.supported) ...[
-          const SectionHeader('Linux sandbox (Pro build)'),
+          const SectionHeader('Linux sandbox'),
           const _SandboxCard(),
         ],
 
