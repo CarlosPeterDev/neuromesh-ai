@@ -871,8 +871,19 @@ class ChatController extends GetxController {
       if (previous != null) {
         effectiveText = previous.withUserText(visibleText).content;
       }
+      final pagedAttachment = workspaceName != null &&
+          hasInline &&
+          Get.find<SettingsController>().inferenceMode.value == 'local' &&
+          fileContent.length > 512;
+      if (pagedAttachment) {
+        effectiveText =
+            '$visibleText\n\nAttached workspace file: $workspaceName. '
+            'Read relevant pages using read_context(source: "file:$workspaceName", page: 1) '
+            'or read_file/search_in_file. Do not assume the entire document was read.';
+      }
       final needsFileTools = previous == null
-          ? workspaceName != null && (!hasInline || truncated)
+          ? workspaceName != null &&
+              (!hasInline || truncated || pagedAttachment)
           : fileName != null &&
               fileType != 'image' &&
               fileType != 'audio' &&
@@ -951,9 +962,9 @@ class ChatController extends GetxController {
 
       final contextAgent = Get.find<AgentService>();
       final skillContext = Get.isRegistered<SkillsService>()
-          ? await Get.find<SkillsService>().prepare(
-              '$visibleText${workspaceName == null ? '' : '\n@file:"$workspaceName"'}',
-              await contextAgent.inProject(project, contextAgent.filesDir))
+          ? await Get.find<SkillsService>().prepare(visibleText,
+              await contextAgent.inProject(project, contextAgent.filesDir),
+              attachment: pagedAttachment ? workspaceName : null)
           : null;
 
       // Add the best-matching passages from the user's documents (if enabled).
@@ -1161,7 +1172,7 @@ class ChatController extends GetxController {
             // Never send more than the context can hold: an overflow makes
             // small models fail or answer nothing.
             final currentSystem =
-                '${buildSystem()}${prompt == finalPrompt ? '' : '\n\nCurrent user request: $visibleText'}';
+                '${buildSystem()}${prompt == finalPrompt ? '' : '\n\nCurrent user request: $visibleText${workspaceName == null ? '' : '\nAttached workspace file: $workspaceName'}'}';
             prompt = AgentService.fitToContext(
                 currentSystem, hist, prompt, contextSize);
             return inference.generate(

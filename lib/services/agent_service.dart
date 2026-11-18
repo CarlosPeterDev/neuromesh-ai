@@ -385,6 +385,10 @@ class AgentService extends GetxService {
   bool get _hasFolders => _user != null && _user!.folders.isNotEmpty;
 
   String _page(String text, int start, {int size = 4000}) {
+    final context = Get.isRegistered<InferenceService>()
+        ? Get.find<InferenceService>().contextTokensTotal.value
+        : 0;
+    if (context > 0) size = size.clamp(1, (context ~/ 4).clamp(160, 4000));
     if (start < 0) start = 0;
     if (start >= text.length) return '(end of file)';
     final end = (start + size).clamp(0, text.length);
