@@ -96,7 +96,10 @@ void main() {
     expect(find.text('Saved file'), findsOneWidget);
     expect(find.text('Writing file'), findsNothing);
     await tester.tap(find.byTooltip('Close'));
-    await tester.pumpAndSettle();
+    // The deliberately unreconstructed background still has a running spinner.
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(Dialog), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
     expect(tester.takeException(), isNull);
   });
 }
