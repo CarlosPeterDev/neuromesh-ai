@@ -2133,6 +2133,7 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
         fprintf(stderr, "Failed to create server socket\n");
         return;
     }
+    GGML_LOG_INFO("RPC server ready\n");
     while (true) {
         auto client_socket = server_socket->accept();
         if (client_socket == nullptr) {

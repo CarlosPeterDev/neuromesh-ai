@@ -79,12 +79,20 @@ class DownloadQueue extends GetxService {
         queue.removeAt(0);
         current.value = next;
         await _save();
-        if (!_abortCurrent && !mc.isDownloaded(next.filename)) {
-          if (!mc.isDownloadingModel(next.filename))
+        if (!_abortCurrent) {
+          if (mc.isDownloaded(next.filename) ||
+              mc.isDownloadingModel(next.filename)) {
+            await mc.downloadVisionFile(next);
+          } else {
             await mc.downloadModel(next);
-          // Native downloads return as soon as they start; wait for the end.
+          }
+          // Android starts downloads in the background. Wait for both
+          // files before beginning the next queued model.
           final started = DateTime.now();
-          while (mc.isDownloadingModel(next.filename) && !_abortCurrent) {
+          while (!_abortCurrent &&
+              (mc.isDownloadingModel(next.filename) ||
+                  (next.hasVisionProjector &&
+                      mc.isDownloadingModel(next.mmprojFilename)))) {
             await Future<void>.delayed(const Duration(seconds: 2));
             if (DateTime.now().difference(started).inHours >= 6) break;
           }

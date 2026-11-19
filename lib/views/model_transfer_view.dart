@@ -6,6 +6,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../services/model_transfer_service.dart';
 import '../services/cluster_backup.dart';
+import '../services/lan_network.dart';
 
 /// Move models (chat, image and voice) to or from another device on the same
 /// Wi-Fi: one device sends, the other scans its code and receives.
@@ -42,7 +43,12 @@ class _SendTab extends StatefulWidget {
   State<_SendTab> createState() => _SendTabState();
 }
 
-class _SendTabState extends State<_SendTab> {
+class _SendTabState extends State<_SendTab>
+    with AutomaticKeepAliveClientMixin<_SendTab> {
+  @override
+  bool get wantKeepAlive => true;
+  List<LanEndpoint> _addresses = const [];
+  String? _address;
   final _server = ModelTransferServer();
   final _backupParts = <ClusterBackupPart>{};
   bool _includeModels = true;
@@ -52,6 +58,7 @@ class _SendTabState extends State<_SendTab> {
   @override
   void initState() {
     super.initState();
+    _refreshAddresses();
     _server.onChange = () {
       if (mounted) setState(() {});
     };
@@ -64,6 +71,15 @@ class _SendTabState extends State<_SendTab> {
     super.dispose();
   }
 
+  Future<void> _refreshAddresses() async {
+    final addresses = await lanIpv4Endpoints();
+    if (!mounted) return;
+    setState(() {
+      _addresses = addresses;
+      if (!addresses.any((entry) => entry.address == _address)) _address = null;
+    });
+  }
+
   Future<void> _toggle() async {
     setState(() {
       _busy = true;
@@ -73,17 +89,18 @@ class _SendTabState extends State<_SendTab> {
       if (_server.running) {
         await _server.stop();
       } else {
-        await _server.start(includeModels: _includeModels, backupParts: _backupParts);
+        await _server.start(includeModels: _includeModels, backupParts: _backupParts, localAddress: _address);
         if (!mounted) await _server.stop();
       }
     } catch (e) {
-      _error = '$e';
+      _error = transferErrorMessage(e);
     }
     if (mounted) setState(() => _busy = false);
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final on = _server.running;
     return ListView(padding: const EdgeInsets.all(16), children: [
       const Text(
@@ -123,6 +140,25 @@ class _SendTabState extends State<_SendTab> {
           ),
         const Text(
             'Personal backups are encrypted. The receiving device merges workspace files and can reinstall Alpine through Setup.'),
+      ],
+      if (!on) ...[
+        if (_addresses.length > 1)
+          DropdownButtonFormField<String>(
+            key: ValueKey(_address ?? _addresses.first.address),
+            initialValue: _address ?? _addresses.first.address,
+            decoration: const InputDecoration(labelText: 'Share on local address'),
+            items: [
+              for (final entry in _addresses)
+                DropdownMenuItem(
+                  value: entry.address,
+                  child: Text('${entry.address} · ${entry.interfaceName}'),
+                ),
+            ],
+            onChanged: _busy ? null : (address) => setState(() => _address = address),
+          ),
+        if (_addresses.isEmpty || _error != null)
+          TextButton(onPressed: _busy ? null : _refreshAddresses,
+              child: const Text('Refresh local addresses')),
       ],
       if (on) ...[
         Center(
@@ -228,7 +264,7 @@ class _ReceiveTabState extends State<_ReceiveTab> {
           ..addAll(items.where((i) => i.kind != 'backup' && !have.contains(i.id)).map((i) => i.id));
       });
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = transferErrorMessage(e));
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -254,7 +290,7 @@ class _ReceiveTabState extends State<_ReceiveTab> {
     } on TransferCancelled {
       if (mounted) setState(() => _result = 'Stopped.');
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = transferErrorMessage(e));
     }
     if (mounted) setState(() => _progress = null);
   }

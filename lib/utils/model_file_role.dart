@@ -32,7 +32,8 @@ ModelFileRole modelFileRole(String path) {
           parts.contains('patch-unsloth'))) {
     return ModelFileRole.patch;
   }
-  if (name.endsWith('-imatrix.gguf') || name.endsWith('_imatrix.gguf')) {
+  if (name.endsWith('.gguf') &&
+      RegExp(r'(^|[-_.])imatrix([-_.]|$)').hasMatch(name)) {
     return ModelFileRole.quantizationData;
   }
   if (isFastMtpDraft(name)) {

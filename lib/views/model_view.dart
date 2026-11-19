@@ -1,3 +1,4 @@
+import '../widgets/scroll_to_end.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -68,41 +69,44 @@ class ModelView extends GetView<ModelController> {
           }),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          final scope = controller.modelScope.value;
-          if (scope == 'voice') {
-            await Get.find<VoiceModelStore>().scan();
-          } else if (scope != 'online') {
-            await controller.refreshDownloaded();
-          }
-        },
-        color: t.accent,
-        child: Obx(() {
-          final scope = controller.modelScope.value;
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
-            children: [
-              _buildScopeToggle(),
-              const SizedBox(height: 16),
-              if (scope != 'voice') ...[
-                _buildActiveModelBanner(context),
-                _buildActiveDownloadsBanner(context),
+      body: ScrollToEnd(
+        label: 'Go to end of models',
+        child: RefreshIndicator(
+          onRefresh: () async {
+            final scope = controller.modelScope.value;
+            if (scope == 'voice') {
+              await Get.find<VoiceModelStore>().scan();
+            } else if (scope != 'online') {
+              await controller.refreshDownloaded();
+            }
+          },
+          color: t.accent,
+          child: Obx(() {
+            final scope = controller.modelScope.value;
+            return ListView(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+              children: [
+                _buildScopeToggle(),
+                const SizedBox(height: 16),
+                if (scope != 'voice') ...[
+                  _buildActiveModelBanner(context),
+                  _buildActiveDownloadsBanner(context),
+                ],
+                if (scope == 'local') ...[
+                  _buildImportingProgress(context),
+                  ..._buildLibrary(context),
+                ] else if (scope == 'browse') ...[
+                  const HfBrowser(key: ValueKey('hf-gguf')),
+                ] else if (scope == 'images') ...[
+                  const HfBrowser(key: ValueKey('hf-images'), images: true),
+                ] else if (scope == 'voice')
+                  const VoiceModelCatalog()
+                else
+                  _buildOnlineProviders(context),
               ],
-              if (scope == 'local') ...[
-                _buildImportingProgress(context),
-                ..._buildLibrary(context),
-              ] else if (scope == 'browse') ...[
-                const HfBrowser(key: ValueKey('hf-gguf')),
-              ] else if (scope == 'images') ...[
-                const HfBrowser(key: ValueKey('hf-images'), images: true),
-              ] else if (scope == 'voice')
-                const VoiceModelCatalog()
-              else
-                _buildOnlineProviders(context),
-            ],
-          );
-        }),
+            );
+          }),
+        ),
       ),
     );
   }
@@ -1596,6 +1600,8 @@ class ModelView extends GetView<ModelController> {
 
       // Primary action (right). While downloading: a progress ring with the
       // percentage (cancel lives in the pinned downloads card at the top).
+      final optionalHelper = model.hasVisionProjector &&
+          controller.isLlamaModel(model) && !modelFileRole(model.filename).isHelper;
       final Widget primaryAction;
       if (isCurrentlyDownloading) {
         primaryAction = _DownloadRing(filename: model.filename);
@@ -1618,7 +1624,9 @@ class ModelView extends GetView<ModelController> {
             label: 'Load',
             onPressed: disableActions
                 ? null
-                : () => controller.loadModel(actualFilename),
+                : optionalHelper
+                    ? () => _chooseHelperLoad(context, model, actualFilename)
+                    : () => controller.loadModel(actualFilename),
           );
         } else {
           primaryAction = Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1636,7 +1644,7 @@ class ModelView extends GetView<ModelController> {
         );
       }
       final favs = Get.find<FavoritesService>();
-      final VoidCallback? load = isDownloaded && !isActive && !disableActions
+      final VoidCallback? load = isDownloaded && (!isActive || optionalHelper) && !disableActions
           ? () => controller.loadModel(actualFilename)
           : null;
 
@@ -1720,7 +1728,10 @@ class ModelView extends GetView<ModelController> {
       ].join(' · ');
       void openDetails() => _showModelDetails(
           context, model, subtitle, secondary, disableActions, primaryAction,
-          onLoad: modelFileRole(model.filename).isHelper ? null : load);
+          onLoad: modelFileRole(model.filename).isHelper ? null : load,
+          onLoadTextOnly: optionalHelper && load != null
+              ? () => controller.loadModel(actualFilename, includeHelpers: false)
+              : null);
       return Material(
         color: Colors.transparent,
         child: InkWell(
@@ -1962,6 +1973,30 @@ class ModelView extends GetView<ModelController> {
     );
   }
 
+  Future<void> _chooseHelperLoad(
+      BuildContext context, AiModel model, String filename) async {
+    final includeHelper = await showAppSheet<bool>(
+      context,
+      title: 'Load ${model.name}',
+      builder: (ctx) => AppGroup(children: [
+        AppRow(
+          icon: Icons.image_outlined,
+          title: 'Load with vision helper',
+          onTap: () => Navigator.pop(ctx, true),
+        ),
+        AppRow(
+          icon: Icons.chat_bubble_outline,
+          title: 'Load without helpers',
+          subtitle: 'Text chat',
+          onTap: () => Navigator.pop(ctx, false),
+        ),
+      ]),
+    );
+    if (includeHelper != null) {
+      await controller.loadModel(filename, includeHelpers: includeHelper);
+    }
+  }
+
   /// ⋯ sheet: full description, details and the less common actions.
   void _showModelDetails(
     BuildContext context,
@@ -1971,6 +2006,7 @@ class ModelView extends GetView<ModelController> {
     bool disabled,
     Widget? primaryAction, {
     VoidCallback? onLoad,
+    VoidCallback? onLoadTextOnly,
   }) {
     final downloaded = controller.isDownloaded(model.filename);
     showAppSheet<void>(
@@ -2005,7 +2041,7 @@ class ModelView extends GetView<ModelController> {
             if (onLoad != null && !modelFileRole(model.filename).isHelper) ...[
               const SizedBox(height: 18),
               PrimaryButton(
-                label: 'Load model',
+                label: onLoadTextOnly == null ? 'Load model' : 'Load with vision helper',
                 icon: Icons.play_arrow_rounded,
                 onPressed: () {
                   Navigator.pop(ctx);
@@ -2013,6 +2049,14 @@ class ModelView extends GetView<ModelController> {
                 },
               ),
             ],
+            if (onLoadTextOnly != null)
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  onLoadTextOnly();
+                },
+                child: const Text('Load without helpers'),
+              ),
             if (!downloaded && !disabled) ...[
               const SizedBox(height: 18),
               PrimaryButton(

@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../controllers/model_controller.dart';
+import '../core/redact.dart';
 import 'download_service.dart';
 import 'cluster_backup.dart';
 import 'lan_network.dart';
@@ -131,26 +132,6 @@ String? _safeName(String name) {
   return name;
 }
 
-Future<String?> lanAddress() async {
-  try {
-    final ifs = await NetworkInterface.list(
-        type: InternetAddressType.IPv4, includeLoopback: false);
-    String? fallback;
-    for (final i in ifs) {
-      for (final a in i.addresses) {
-        final ip = a.address;
-        if (!isPrivateLanAddress(ip)) continue;
-        final n = i.name.toLowerCase();
-        if (n.startsWith('wlan') || n == 'en0' || n.startsWith('wi')) return ip;
-        fallback ??= ip;
-      }
-    }
-    return fallback;
-  } catch (_) {
-    return null;
-  }
-}
-
 String _randomToken() {
   final r = math.Random.secure();
   const chars = 'abcdefghijkmnopqrstuvwxyz23456789';
@@ -191,13 +172,14 @@ class ModelTransferServer {
 
   Future<String> start({
     bool includeModels = true,
+    String? localAddress,
     Set<ClusterBackupPart> backupParts = const {},
   }) async {
     await stop();
     token = _randomToken();
-    final ip = await lanAddress();
-    if (ip == null) throw StateError('Connect to a private Wi-Fi network first.');
-    host = ip;
+    if (localAddress != null && !isPrivateLanAddress(localAddress)) {
+      throw const FormatException('Choose a private local network address.');
+    }
     bytesServed = 0;
     try {
       if (backupParts.isNotEmpty) {
@@ -217,6 +199,12 @@ class ModelTransferServer {
       }
       _offer = await collectItems(includeModels: includeModels);
       if (_offer.isEmpty) throw StateError('There is nothing selected to share.');
+      final endpoints = await lanIpv4Endpoints();
+      final ip = localAddress ?? endpoints.firstOrNull?.address;
+      if (ip == null || !endpoints.any((entry) => entry.address == ip)) {
+        throw StateError('No selected local address is available. Connect to Wi-Fi or a hotspot and refresh the addresses.');
+      }
+      host = ip;
       final server = await HttpServer.bind(InternetAddress(host), 0);
       _server = server;
       server.listen((req) => _handle(req), onError: (_) {});
@@ -447,6 +435,17 @@ class ModelTransferServer {
 
 /// ───────────────────────── Receiver ─────────────────────────
 
+/// Connection errors can include the entire request URI and pairing token.
+String transferErrorMessage(Object error) {
+  if (error is SocketException || error is http.ClientException ||
+      error is TimeoutException) {
+    return 'Couldn’t reach the other device. $lanConnectionHelp';
+  }
+  final message = error is FormatException ? error.message : '$error';
+  return redactSecrets(message).replaceAll(
+      RegExp(r'(#backup=)[A-Za-z0-9_-]+'), '#backup=[REDACTED]');
+}
+
 class TransferCancelled implements Exception {
   @override
   String toString() => 'Cancelled';
@@ -618,7 +617,7 @@ class ModelTransferClient {
           rethrow;
         } catch (e) {
           if (_cancel) throw TransferCancelled();
-          failures.add('${it.name}: $e');
+          failures.add('${it.name}: ${transferErrorMessage(e)}');
         }
       }
     } on http.ClientException {

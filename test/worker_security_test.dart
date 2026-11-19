@@ -1,16 +1,42 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
+import 'package:http/http.dart' as http;
+import 'package:neuromesh_ai/services/lan_network.dart';
 import 'package:hive/hive.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
+import 'package:neuromesh_ai/services/cluster_service.dart';
 import 'package:neuromesh_ai/services/mcp_oauth.dart';
 import 'package:neuromesh_ai/services/model_transfer_service.dart';
 import 'package:neuromesh_ai/services/workload_placement.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  test('LAN candidates prefer physical Wi-Fi and hotspot, and skip tunnels',
+      () {
+    final entries = sortLanEndpoints([
+      (address: '10.0.0.2', interfaceName: 'tun0'),
+      (address: '192.168.1.15', interfaceName: 'wlan0'),
+      (address: '192.168.43.1', interfaceName: 'ap0'),
+      (address: '192.168.1.15', interfaceName: 'eth0'),
+      (address: '10.1.2.3', interfaceName: 'rmnet_data0'),
+    ]);
+    expect(entries.map((entry) => entry.address),
+        ['192.168.1.15', '192.168.43.1']);
+  });
+
+  test('transfer route error gives recovery steps without the pairing URL', () {
+    final error = http.ClientException('No route to host',
+        Uri.parse('http://192.168.1.7:8765/list?token=abcdefghjk23'));
+    final message = transferErrorMessage(error);
+    expect(message, contains('same Wi-Fi or hotspot'));
+    expect(message, isNot(contains('abcdefghjk23')));
+  });
+
   test('transfer codes require the sender format and private IPv4', () {
     const token = 'abcdefghjk23';
     expect(
@@ -25,6 +51,45 @@ void main() {
     ]) {
       expect(ModelTransferClient.parse(address), isNull, reason: address);
     }
+  });
+
+  test('pairing checks the rediscovered address when a worker changes IP',
+      () async {
+    final dir = await Directory.systemTemp.createTemp('cluster_pairing');
+    Hive.init(dir.path);
+    Get.put(await HiveService().init());
+    final cluster = ClusterService();
+    const channel = MethodChannel('llama_flutter_android/cluster');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final probes = <String>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'probe') {
+        final endpoint = call.arguments['endpoint'] as String;
+        probes.add(endpoint);
+        return endpoint == '192.168.236.11:50052';
+      }
+      if (call.method == 'discover') {
+        return [
+          {'host': '192.168.236.11', 'port': 50052, 'id': 'test-worker'},
+        ];
+      }
+      throw MissingPluginException();
+    });
+    addTearDown(() async {
+      messenger.setMockMethodCallHandler(channel, null);
+      Get.reset();
+      await Hive.close();
+      await dir.delete(recursive: true);
+    });
+
+    expect(await cluster.addManual('8.8.8.8:50052'), isNotNull);
+    expect(
+        await cluster.addFromQr(
+            'neuromesh://worker?host=192.168.236.10&port=50052&id=test-worker'),
+        isNull);
+    expect(probes, ['192.168.236.10:50052', '192.168.236.11:50052']);
+    expect(cluster.workers.single.host, '192.168.236.11');
   });
 
   test('workloads can be assigned to different authenticated LAN phones',

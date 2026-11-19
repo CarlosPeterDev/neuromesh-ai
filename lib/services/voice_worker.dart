@@ -10,7 +10,7 @@ import 'hive_service.dart';
 import 'voice_service.dart';
 import 'voice_models.dart';
 import 'local_image_service.dart';
-import 'model_transfer_service.dart' show lanAddress;
+import 'lan_network.dart' show lanAddress;
 import 'workload_placement.dart';
 
 /// Lets a stronger phone speak (with the cloned voice) for another phone on

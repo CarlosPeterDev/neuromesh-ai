@@ -74,8 +74,13 @@ class ClusterChannel(
                     .putExtra(ClusterWorkerService.EXTRA_PORT,
                         call.argument<Int>("port") ?: ClusterWorkerService.DEFAULT_PORT)
                     .putExtra(ClusterWorkerService.EXTRA_THREADS, call.argument<Int>("threads") ?: 0)
-                ContextCompat.startForegroundService(context, intent)
-                result.success(null)
+                try {
+                    ContextCompat.startForegroundService(context, intent)
+                    result.success(null)
+                } catch (e: RuntimeException) {
+                    Log.e(TAG, "Could not start worker service", e)
+                    result.error("WORKER_START", "Keep NeuroMesh AI open and try starting the worker again.", null)
+                }
             }
             "stopWorker" -> {
                 if (isWorkerRunning()) {
@@ -262,7 +267,11 @@ class ClusterChannel(
             val attrs = info.attributes.mapValues { (_, v) -> v?.let { String(it) } }
             mapOf(
                 "name" to info.serviceName,
-                "host" to info.host?.hostAddress,
+                "host" to if (Build.VERSION.SDK_INT >= 34) {
+                    info.hostAddresses.firstOrNull { it is java.net.Inet4Address }?.hostAddress
+                } else {
+                    info.host?.takeIf { it is java.net.Inet4Address }?.hostAddress
+                },
                 "port" to info.port,
                 "ramMb" to attrs["ram"]?.toLongOrNull(),
                 "bandwidth" to attrs["bw"]?.toDoubleOrNull(),

@@ -157,7 +157,8 @@ class ModelController extends GetxController {
         .map(_withHelper)
         .where((m) => supportsAppleNpu || !isNpuModel(m))
         .toList()
-      ..addAll(customModels);
+      ..addAll(customModels.where((model) =>
+          model.filename != AppConstants.artemisStarter['filename']));
     refreshDownloaded();
   }
 
@@ -316,7 +317,8 @@ class ModelController extends GetxController {
   /// Downloads just the vision file for a model that's already on disk.
   Future<void> downloadVisionFile(AiModel model) async {
     if (!model.hasVisionProjector || model.mmprojUrl.isEmpty) return;
-    if (isDownloadingModel(model.mmprojFilename)) return;
+    if (await _download.isModelDownloaded(model.mmprojFilename) ||
+        isDownloadingModel(model.mmprojFilename)) return;
     await _downloadVisionFile(model);
   }
 
@@ -349,6 +351,12 @@ class ModelController extends GetxController {
 
   String get lastLoadedModelName =>
       _hive.getSetting<String>(AppConstants.keyLocalModelName) ?? '';
+
+  Future<void> reloadLastModel() => loadModel(
+        lastLoadedModelName,
+        includeHelpers:
+            _hive.getSetting<bool>(AppConstants.keyLocalModelIncludesHelpers) ?? true,
+      );
 
   bool get canLoadLastModel =>
       lastLoadedModelName.isNotEmpty && isDownloaded(lastLoadedModelName);
@@ -708,7 +716,8 @@ class ModelController extends GetxController {
       _inference.isLoadingModel.value ||
       _localImage.isLoadingModel.value;
 
-  Future<void> loadModel(String filename, {bool safeRetry = false}) async {
+  Future<void> loadModel(String filename,
+      {bool safeRetry = false, bool includeHelpers = true}) async {
     if (_modelOperationInProgress) {
       showToast('Model loading', 'Wait for the current model load.',
           tone: ToastTone.warning);
@@ -723,9 +732,10 @@ class ModelController extends GetxController {
     isPreparingModel.value = true;
     final report = ModelLoadDiagnostics()
       ..set('file', filename)
+      ..set('includeHelpers', includeHelpers)
       ..stage('file check');
     try {
-      await _loadModel(filename, report, safeRetry: safeRetry);
+      await _loadModel(filename, report, safeRetry: safeRetry, includeHelpers: includeHelpers);
     } catch (error, stack) {
       report
         ..set('exceptionType', error.runtimeType.toString())
@@ -741,7 +751,7 @@ class ModelController extends GetxController {
     }
   }
 
-  Future<void> _loadModel(String filename, ModelLoadDiagnostics report, {required bool safeRetry}) async {
+  Future<void> _loadModel(String filename, ModelLoadDiagnostics report, {required bool safeRetry, required bool includeHelpers}) async {
     final model =
         availableModels.firstWhereOrNull((m) => m.filename == filename);
     final name = model?.name ?? filename;
@@ -906,7 +916,10 @@ class ModelController extends GetxController {
       // and load text-only for now.
       String? mmprojPath;
       var visionNote = '';
-      if (model != null && model.hasVisionProjector && !isLiteRt) {
+      final hasOptionalHelper = model != null && model.hasVisionProjector && !isLiteRt;
+      if (hasOptionalHelper && !includeHelpers) {
+        visionNote = ' Loaded for text chat.';
+      } else if (hasOptionalHelper) {
         if (await _download.isModelDownloaded(model.mmprojFilename)) {
           mmprojPath = await _download.modelPath(model.mmprojFilename);
         } else {
@@ -920,7 +933,7 @@ class ModelController extends GetxController {
       }
       report
         ..set('visionProjectorAvailable', mmprojPath != null)
-        ..set('visionProjectorExpected', model?.hasVisionProjector ?? false)
+        ..set('visionProjectorExpected', hasOptionalHelper && includeHelpers)
         ..set('visionProjector', model?.hasVisionProjector == true
             ? model!.mmprojFilename
             : null);
@@ -941,6 +954,7 @@ class ModelController extends GetxController {
             ? (!fallbackToText && model != null && isVisionModel(model))
             : _inference.ggufVisionLoaded;
         try {
+          await _hive.setSetting(AppConstants.keyLocalModelIncludesHelpers, includeHelpers);
           await _settings.setInferenceMode('local');
         } catch (error) {
           Get.find<AppLogService>().warning('Could not save inference mode',
@@ -967,6 +981,7 @@ class ModelController extends GetxController {
     final safeError = diagnosticText(error);
     Get.find<AppLogService>().error('Model load failed', details: safeError);
     _showLoadFailedSheet(filename, safeError,
+        includeHelpers: report.includeHelpers,
         diagnosis: (likely: diagnosis?.likely, details: details));
   }
 
@@ -1706,7 +1721,7 @@ class ModelController extends GetxController {
   }
 
   void _showLoadFailedSheet(String filename, String result,
-      {({String? likely, String details})? diagnosis}) {
+      {bool includeHelpers = true, ({String? likely, String details})? diagnosis}) {
     final friendlyMsg = diagnosis?.likely ?? _getFriendlyErrorMessage(result);
     final context = Get.context;
     if (context == null || !context.mounted) {
@@ -1806,7 +1821,7 @@ class ModelController extends GetxController {
                   label: const Text('Retry with CPU and smaller context'),
                   onPressed: () {
                     Navigator.pop(ctx);
-                    loadModel(filename, safeRetry: true);
+                    loadModel(filename, safeRetry: true, includeHelpers: includeHelpers);
                   },
                 ),
               FilledButton.icon(

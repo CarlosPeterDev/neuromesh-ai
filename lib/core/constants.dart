@@ -35,6 +35,7 @@ class AppConstants {
   static const String keyCustomCloudModel = 'custom_cloud_model';
   static const String keyGlobalSystemPrompt = 'global_system_prompt';
   static const String keyLocalModelPath = 'local_model_path';
+  static const String keyLocalModelIncludesHelpers = 'local_model_includes_helpers';
   static const String keyLocalModelName = 'local_model_name';
   static const String keyLocalModelRuntime = 'local_model_runtime';
   static const String keyLocalModelBackend = 'local_model_backend';
@@ -104,8 +105,21 @@ class AppConstants {
         lower.contains('dolphin');
   }
 
+  static const artemisStarter = <String, String>{
+    'name': 'Qwen 3.5 0.8B Artemis',
+    'filename': 'Qwen3.5-0.8B-Artemis-Q4_K_M.gguf',
+    'url': 'https://huggingface.co/turintech/Qwen3.5-0.8B-Artemis-GGUF/resolve/main/Qwen3.5-0.8B-Artemis-Q4_K_M.gguf',
+    'size': '532 MB + 207 MB',
+    'description': 'A small chat model with image input through its vision helper.',
+    'template': 'chatml',
+    'vision': 'true',
+    'mmproj_filename': 'mmproj-39d50a89a8cb459a6.gguf',
+    'mmproj_url': 'https://huggingface.co/turintech/Qwen3.5-0.8B-Artemis-GGUF/resolve/main/mmproj-BF16.gguf',
+  };
+
   // Available Models for Download
   static const List<Map<String, String>> availableModels = [
+    artemisStarter,
     {
       'name': 'Qwen 3 0.6B (LiteRT-LM)',
       'filename': 'Qwen3-0.6B.litertlm',

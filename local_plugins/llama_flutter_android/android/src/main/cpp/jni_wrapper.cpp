@@ -452,6 +452,13 @@ static void runRadioKeepAwake(const std::atomic<bool>& running, std::string (*pe
 }
 
 static std::atomic<bool> g_worker_running{false};
+static std::atomic<bool> g_worker_ready{false};
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_neuromesh_llama_1flutter_1android_ClusterNative_nativeWorkerReady(
+        JNIEnv*, jobject) {
+    return g_worker_ready.load() ? JNI_TRUE : JNI_FALSE;
+}
 
 static std::string currentWorkerPeer() {
     std::lock_guard<std::mutex> lock(g_load_log_mutex);
@@ -489,6 +496,7 @@ Java_com_neuromesh_llama_1flutter_1android_ClusterNative_nativeServe(
     std::thread([] { runRadioKeepAwake(g_worker_running, currentWorkerPeer); }).detach();
     start(ep.c_str(), cache.empty() ? nullptr : cache.c_str(),
           (size_t)std::max<jlong>(1, n_threads), 1, &cpu);
+    g_worker_ready = false;
     g_worker_running = false;
     return env->NewStringUTF("Worker stopped: the port may already be in use");
 }
@@ -538,6 +546,9 @@ static void androidLlamaLog(ggml_log_level level, const char* text, void*) {
         const double mib = std::strtod(at + std::strlen(" model buffer size = "), nullptr);
         g_load_buffers.append(start, at - start).append("\t")
             .append(std::to_string(mib)).append("\n");
+    }
+    if (std::strcmp(text, "RPC server ready\n") == 0) {
+        g_worker_ready = true;
     }
     static const char kConnected[] = "RPC client connected: ";
     if (std::strncmp(text, kConnected, sizeof(kConnected) - 1) == 0) {

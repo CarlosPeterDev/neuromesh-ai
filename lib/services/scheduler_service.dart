@@ -304,7 +304,7 @@ class SchedulerService extends GetxService with WidgetsBindingObserver {
       if (!inf.isModelLoaded.value) {
         final mc = Get.find<ModelController>();
         if (mc.canLoadLastModel) {
-          await mc.loadModel(mc.lastLoadedModelName);
+          await mc.reloadLastModel();
           for (var i = 0; i < 240 && inf.isLoadingModel.value; i++) {
             await Future.delayed(const Duration(milliseconds: 500));
           }

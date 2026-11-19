@@ -342,7 +342,7 @@ class _ModelCard extends StatelessWidget {
                   primary: true,
                   onTap: () {
                     Haptics.lightImpact();
-                    models.loadModel(last);
+                    models.reloadLastModel();
                   });
       }
 
