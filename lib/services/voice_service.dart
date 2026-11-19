@@ -731,6 +731,7 @@ class VoiceService extends GetxService {
       if (_stopSpeaking) return;
       if (workerOk) {
         final wav = await _remoteWav(chunks[i]);
+        if (_stopSpeaking) return;
         if (wav != null) {
           await _playWav(wav, i);
           if (_stopSpeaking) return;
