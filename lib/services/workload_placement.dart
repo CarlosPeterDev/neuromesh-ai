@@ -17,6 +17,21 @@ enum PhoneWorkload {
   final String path;
 }
 
+class WorkloadCancelled implements Exception {
+  const WorkloadCancelled();
+}
+
+/// Retains handlers on the pending request so a late failure after cancellation
+/// cannot become an unhandled asynchronous error.
+Future<T> withWorkerCancellation<T>(
+        Future<T> request, Future<void>? cancelled) =>
+    cancelled == null
+        ? request
+        : Future.any([
+            request,
+            cancelled.then<T>((_) => throw const WorkloadCancelled()),
+          ]);
+
 class WorkloadWorker {
   final Uri address;
   final String token;
@@ -47,10 +62,12 @@ class WorkloadWorker {
       String contentType = 'application/json',
       Duration timeout = const Duration(seconds: 120),
       Map<String, String>? query,
+      Future<void>? cancelled,
+      http.Client? httpClient,
       int maxBytes = 16 * 1024 * 1024}) async {
-    final client = lanHttpClient();
+    final client = httpClient ?? lanHttpClient();
     try {
-      return await (() async {
+      final pending = (() async {
         final request = http.Request(payload == null ? 'GET' : 'POST',
             address.replace(path: path, queryParameters: query))
           ..followRedirects = false
@@ -79,8 +96,9 @@ class WorkloadWorker {
         return bytes.takeBytes();
       })()
           .timeout(timeout);
+      return await withWorkerCancellation(pending, cancelled);
     } finally {
-      client.close();
+      if (httpClient == null) client.close();
     }
   }
 

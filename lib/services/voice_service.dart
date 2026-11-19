@@ -544,9 +544,14 @@ class VoiceService extends GetxService {
   }
 
   Completer<void>? _stopSignal;
+  Completer<void>? _speechInterruption;
 
   Future<void> stopSpeaking() async {
     _stopSpeaking = true;
+    final interruption = _speechInterruption;
+    if (interruption != null && !interruption.isCompleted) {
+      interruption.complete();
+    }
     final sig = _stopSignal;
     if (sig != null && !sig.isCompleted) sig.complete();
     await _player.stop();
@@ -600,19 +605,30 @@ class VoiceService extends GetxService {
   }
 
   /// Asks the worker phone to speak [chunk]; returns WAV bytes or null.
-  Future<Uint8List?> _remoteWav(String chunk) async {
+  Future<Uint8List?> _remoteWav(String chunk, {Future<void>? cancelled}) async {
     if (workerUrl.isEmpty) return null;
+    final client = _workerClient ?? http.Client();
     try {
-      final post = _workerClient?.post ?? http.post;
-      final res = await post(Uri.parse('$workerUrl/tts'),
-              headers: {
-                'Authorization': 'Bearer $workerToken',
-                'Content-Type': 'application/json'
-              },
-              body: jsonEncode({'text': chunk}))
-          .timeout(const Duration(seconds: 40));
+      final request = http.Request('POST', Uri.parse('$workerUrl/tts'))
+        ..followRedirects = false
+        ..headers.addAll({
+          'Authorization': 'Bearer $workerToken',
+          'Content-Type': 'application/json',
+        })
+        ..body = jsonEncode({'text': chunk});
+      final res = await withWorkerCancellation(
+          client
+              .send(request)
+              .then(http.Response.fromStream)
+              .timeout(const Duration(seconds: 40)),
+          cancelled);
       if (res.statusCode == 200) return res.bodyBytes;
-    } catch (_) {}
+    } on WorkloadCancelled {
+      rethrow;
+    } catch (_) {
+    } finally {
+      if (_workerClient == null) client.close();
+    }
     return null;
   }
 
@@ -682,6 +698,11 @@ class VoiceService extends GetxService {
       if (playbackError != null) {
         Error.throwWithStackTrace(playbackError!, playbackStack!);
       }
+    } catch (_) {
+      try {
+        await _player.stop();
+      } catch (_) {}
+      rethrow;
     } finally {
       await subscription.cancel();
       if (identical(_stopSignal, stopped)) _stopSignal = null;
@@ -690,13 +711,40 @@ class VoiceService extends GetxService {
 
   /// Speaks with the worker phone, the on-device voice model, or the
   /// phone's own voice when [systemLang] is given (e.g. 'ar', 'en-US').
-  Future<void> speak(String text, {
+  Future<void> speak(
+    String text, {
     String? systemLang,
     String workerLanguage = '',
     VoiceModelInfo? localModel,
     bool preferLocal = false,
   }) async {
+    final interruption = Completer<void>();
+    _speechInterruption = interruption;
     _stopSpeaking = false;
+    try {
+      await _speak(text,
+          systemLang: systemLang,
+          workerLanguage: workerLanguage,
+          localModel: localModel,
+          preferLocal: preferLocal,
+          cancelled: interruption.future);
+    } on WorkloadCancelled {
+      // User interruption is a normal end of the utterance, not a voice error.
+    } finally {
+      if (identical(_speechInterruption, interruption)) {
+        _speechInterruption = null;
+      }
+    }
+  }
+
+  Future<void> _speak(
+    String text, {
+    String? systemLang,
+    String workerLanguage = '',
+    VoiceModelInfo? localModel,
+    bool preferLocal = false,
+    required Future<void> cancelled,
+  }) async {
     final chunks = speechChunks(text);
     if (chunks.isEmpty) return;
     final assigned = systemLang == null && !preferLocal
@@ -706,14 +754,17 @@ class VoiceService extends GetxService {
       for (var i = 0; i < chunks.length && !_stopSpeaking; i++) {
         final audio = await assigned.request(PhoneWorkload.speech.path,
             payload: {'text': chunks[i], 'language': workerLanguage},
+            cancelled: cancelled,
             timeout: const Duration(seconds: 45));
         if (_stopSpeaking) return;
         await _playWav(audio, i);
       }
       return;
     }
-    final useWorker = systemLang == null && !preferLocal && workerUrl.isNotEmpty;
-    final localVoice = localModel ?? (_ttsId == null ? null : voiceModelById(_ttsId!));
+    final useWorker =
+        systemLang == null && !preferLocal && workerUrl.isNotEmpty;
+    final localVoice =
+        localModel ?? (_ttsId == null ? null : voiceModelById(_ttsId!));
     if (systemLang != null || (localVoice == null && !useWorker)) {
       _system ??= FlutterTts();
       await _system!.awaitSpeakCompletion(true);
@@ -730,7 +781,7 @@ class VoiceService extends GetxService {
     for (var i = 0; i < chunks.length; i++) {
       if (_stopSpeaking) return;
       if (workerOk) {
-        final wav = await _remoteWav(chunks[i]);
+        final wav = await _remoteWav(chunks[i], cancelled: cancelled);
         if (_stopSpeaking) return;
         if (wav != null) {
           await _playWav(wav, i);
