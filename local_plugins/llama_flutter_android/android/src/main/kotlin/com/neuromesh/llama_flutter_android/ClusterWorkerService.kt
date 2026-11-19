@@ -15,6 +15,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.Process
 import android.util.Log
+import android.util.AtomicFile
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
 import java.io.File
@@ -29,7 +30,7 @@ import java.io.File
  */
 class ClusterWorkerService : Service() {
     private var nsdManager: NsdManager? = null
-    private var registration: NsdManager.RegistrationListener? = null
+    @Volatile private var registration: NsdManager.RegistrationListener? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     @Volatile private var running = false
@@ -99,19 +100,26 @@ class ClusterWorkerService : Service() {
         Thread({
             // Measure before serving: free RAM and memory speed tell the
             // master how much to give this phone and how fast it runs.
-            ramMb = availableRamMb(this)
-            bandwidth = ClusterNative.nativeMemBandwidth(threads)
-            Log.i(TAG, "Worker: $threads threads, ${ramMb} MB free, %.1f GB/s".format(bandwidth))
-            advertise(port)
-            writeStatus("running")
-            startStatusLoop()
-            val error = ClusterNative.nativeServe(
-                applicationInfo.nativeLibraryDir,
-                "0.0.0.0:$port",
-                cacheDir.absolutePath,
-                threads.toLong()
-            )
+            val error = try {
+                ramMb = availableRamMb(this)
+                bandwidth = ClusterNative.nativeMemBandwidth(threads)
+                Log.i(TAG, "Worker: $threads threads, ${ramMb} MB free, %.1f GB/s".format(bandwidth))
+                startStatusLoop(port)
+                ClusterNative.nativeServe(
+                    applicationInfo.nativeLibraryDir,
+                    "0.0.0.0:$port",
+                    cacheDir.absolutePath,
+                    threads.toLong()
+                )
+            } catch (e: LinkageError) {
+                Log.e(TAG, "Could not load worker runtime", e)
+                "This app build could not load the worker runtime."
+            } catch (e: Exception) {
+                Log.e(TAG, "Could not start worker", e)
+                "Could not start the worker service."
+            }
             Log.e(TAG, "Worker exited: $error")
+            running = false
             writeStatus("error", error = error ?: "Worker stopped")
             shutdown()
         }, "cluster-worker").start()
@@ -119,10 +127,21 @@ class ClusterWorkerService : Service() {
     }
 
     /** Every 2 s: which master is connected and what this worker holds. */
-    private fun startStatusLoop() {
+    private fun startStatusLoop(port: Int) {
         Thread({
             var lastText = ""
+            var announced = false
             while (running) {
+                if (!ClusterNative.nativeWorkerReady()) {
+                    Thread.sleep(200)
+                    continue
+                }
+                if (!announced) {
+                    announced = true
+                    runCatching { advertise(port) }.onFailure {
+                        Log.w(TAG, "Could not advertise worker. Pair by QR code.", it)
+                    }
+                }
                 val peer = ClusterNative.nativeWorkerPeer()
                 val held = residentMb()
                 writeStatus("running", peer = peer, heldMb = held)
@@ -153,7 +172,9 @@ class ClusterWorkerService : Service() {
         }
     }.getOrDefault(false)
 
+    @Synchronized
     private fun writeStatus(state: String, error: String? = null, peer: String? = null, heldMb: Long = 0) {
+        if (state == "running" && !running) return
         val json = JSONObject()
             .put("state", state)
             .put("ramMb", ramMb)
@@ -162,7 +183,19 @@ class ClusterWorkerService : Service() {
             .put("throttled", isThrottled())
         if (error != null) json.put("error", error)
         if (peer != null) json.put("peer", peer)
-        statusFile(this).writeText(json.toString())
+        val file = AtomicFile(statusFile(this))
+        try {
+            val stream = file.startWrite()
+            try {
+                stream.write(json.toString().encodeToByteArray())
+                file.finishWrite(stream)
+            } catch (e: Exception) {
+                file.failWrite(stream)
+                throw e
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not save worker status", e)
+        }
     }
 
     /** This process's resident memory: mostly the model layers it holds. */

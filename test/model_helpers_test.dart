@@ -10,6 +10,9 @@ import 'package:neuromesh_ai/utils/model_file_role.dart';
 
 void main() {
   test('helper file classification preserves complete MTP models', () {
+    expect(modelFileRole('imatrix_micro3.gguf'), ModelFileRole.quantizationData);
+    expect(modelFileRole('qwen-imatrix-F16.gguf'), ModelFileRole.quantizationData);
+    expect(modelFileRole('Qwen-Q4_K_M.gguf'), ModelFileRole.model);
     expect(modelFileRole('Family-7B-MTP-Q4_K_M.gguf'), ModelFileRole.model);
     expect(modelFileRole('mmproj-family-f16.gguf'), ModelFileRole.projector);
     expect(modelFileRole('family-FastMTP-64K.gguf'), ModelFileRole.draft);

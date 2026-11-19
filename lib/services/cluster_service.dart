@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show File, InternetAddressType, NetworkInterface, Platform;
+import 'dart:io' show File, Platform;
 import 'dart:math' as math;
 
 import 'package:device_info_plus/device_info_plus.dart';
@@ -13,6 +13,7 @@ import '../core/constants.dart';
 import '../core/ui.dart';
 import 'app_log_service.dart';
 import 'hive_service.dart';
+import 'lan_network.dart';
 import 'gguf_metadata.dart';
 import '../utils/cluster_plan.dart';
 import 'inference_service.dart';
@@ -105,6 +106,7 @@ class ClusterService extends GetxService {
 
   /// This phone's Wi-Fi address, or null when it isn't on Wi-Fi.
   final wifiAddress = RxnString();
+  final localAddresses = <LanEndpoint>[].obs;
 
   /// How the loaded model is spread across phones; empty when it isn't.
   final split = <ClusterShare>[].obs;
@@ -131,7 +133,7 @@ class ClusterService extends GetxService {
     super.onInit();
     enabled.value = _hive.getSetting<bool>(AppConstants.keyClusterEnabled) ?? false;
     final saved = _hive.getSetting<List>(AppConstants.keyClusterWorkers) ?? const [];
-    workers.assignAll(saved.whereType<Map>().map(ClusterWorker.fromMap));
+    workers.assignAll(saved.whereType<Map>().map(ClusterWorker.fromMap).where(_validWorker));
     final savedProfile = _hive.getSetting<String>('cluster_load_profile');
     profile.value = ClusterProfile.values.firstWhere((value) => value.name == savedProfile,
         orElse: () => ClusterProfile.automatic);
@@ -251,16 +253,16 @@ class ClusterService extends GetxService {
   }
 
   Future<void> startWorker() async {
-    if (Platform.isAndroid) {
-      // Unrestricted battery keeps Android (Samsung especially) from moving
-      // the worker to slow cores once it gets busy.
-      final status = await LlamaCluster.workerStatus();
-      if (!status.batteryUnrestricted) await LlamaCluster.requestBatteryUnrestricted();
-    }
     _workerRequested.value = true;
     worker.value = const ClusterWorkerStatus(state: 'starting');
-    await LlamaCluster.startWorker();
-    _watchWorker();
+    try {
+      await LlamaCluster.startWorker();
+      _watchWorker();
+    } on PlatformException catch (error) {
+      _statusTimer?.cancel();
+      worker.value = ClusterWorkerStatus(state: 'error',
+          error: error.message ?? 'Could not start the worker service.');
+    }
   }
 
   Future<void> stopWorker() async {
@@ -279,6 +281,11 @@ class ClusterService extends GetxService {
     _statusTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       await refreshWorkerStatus();
       final s = worker.value;
+      if (s.running || s.starting) checks = 0;
+      if (s.state == 'error') {
+        _statusTimer?.cancel();
+        return;
+      }
       // Give the service a few seconds to come up before calling it stopped.
       if (!s.running && !s.starting && ++checks > 3) {
         _workerRequested.value = false;
@@ -295,19 +302,23 @@ class ClusterService extends GetxService {
     }
   }
 
-  /// Finds this device's IPv4 address on Wi-Fi (wlan* on Android, en0 on
-  /// iOS), if any.
+  /// Update the addresses shown in both the worker's QR code and manual pairing.
   Future<void> refreshWifiAddress() async {
-    try {
-      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
-      final wifi = interfaces.where((i) => i.name.startsWith('wlan') || i.name == 'en0');
-      wifiAddress.value = wifi.isEmpty || wifi.first.addresses.isEmpty
-          ? null
-          : wifi.first.addresses.first.address;
-    } catch (_) {
-      wifiAddress.value = null;
+    final addresses = await lanIpv4Endpoints();
+    localAddresses.assignAll(addresses);
+    if (!addresses.any((entry) => entry.address == wifiAddress.value)) {
+      wifiAddress.value = addresses.firstOrNull?.address;
     }
   }
+
+  void selectWorkerAddress(String address) {
+    if (localAddresses.any((entry) => entry.address == address)) {
+      wifiAddress.value = address;
+    }
+  }
+
+  static bool _validWorker(ClusterWorker worker) =>
+      isPrivateLanAddress(worker.host) && worker.port > 0 && worker.port <= 65535;
 
   // ── Master: workers ────────────────────────────────────────────────────
 
@@ -318,7 +329,7 @@ class ClusterService extends GetxService {
     final params = uri?.queryParameters ?? const {};
     final host = params['host'];
     final port = int.tryParse(params['port'] ?? '');
-    if (uri == null || uri.scheme != _qrScheme || host == null || port == null) {
+    if (uri == null || uri.scheme != _qrScheme || uri.host != 'worker' || host == null || port == null) {
       return 'That isn\'t a NeuroMesh AI worker code';
     }
     return _add(ClusterWorker(
@@ -378,13 +389,14 @@ class ClusterService extends GetxService {
     ];
     unreachableWorkers.addAll(missing.map((w) => w.endpoint));
     if (missing.isEmpty) return const [];
-    final seen = await LlamaCluster.discover();
+    final seen = await _discoverWorkers();
     var moved = 0;
     final unreachable = <ClusterWorker>[];
     for (final w in missing) {
       final match = seen.firstWhereOrNull((s) => w.id != null && s.id == w.id);
       final i = workers.indexWhere((x) => x.endpoint == w.endpoint);
-      if (match == null || match.endpoint == w.endpoint || i < 0) {
+      if (match == null || match.endpoint == w.endpoint || i < 0 ||
+          !await _probeWorker(match)) {
         unreachable.add(w);
         continue;
       }
@@ -401,16 +413,54 @@ class ClusterService extends GetxService {
     return unreachable;
   }
 
-  Future<String?> _add(ClusterWorker worker) async {
-    if (!await LlamaCluster.probe(worker.endpoint)) {
-      return 'Can\'t reach ${worker.endpoint}. Check that the phone is a worker '
-          'and on the same Wi-Fi.';
+  Future<List<ClusterWorker>> _discoverWorkers() async {
+    try {
+      return (await LlamaCluster.discover()).where(_validWorker).toList();
+    } on PlatformException {
+      return [];
     }
-    workers.removeWhere((w) => w.endpoint == worker.endpoint);
+  }
+
+  Future<bool> _probeWorker(ClusterWorker worker) async {
+    if (!_validWorker(worker)) return false;
+    try {
+      return await LlamaCluster.probe(worker.endpoint)
+          .timeout(const Duration(seconds: 4));
+    } on PlatformException {
+      return false;
+    } on TimeoutException {
+      return false;
+    }
+  }
+
+  Future<String?> _add(ClusterWorker candidate) async {
+    if (!_validWorker(candidate)) return 'Enter the worker’s private IPv4 address and port.';
+    await refreshWifiAddress();
+    if (localAddresses.any((entry) => entry.address == candidate.host)) {
+      return 'This address belongs to this device. Use the code from the worker device.';
+    }
+    var worker = candidate;
+    var ready = await _probeWorker(worker);
+    if (!ready) {
+      final id = worker.id;
+      if (id != null) {
+        final current = (await _discoverWorkers())
+            .firstWhereOrNull((item) => item.id == id);
+        if (current != null) worker = current;
+      } else {
+        await Future<void>.delayed(const Duration(milliseconds: 450));
+      }
+      ready = await _probeWorker(worker);
+    }
+    if (!ready) {
+      return 'Couldn’t reach the worker at ${worker.endpoint}. Wait for Ready on the worker. $lanConnectionHelp';
+    }
+    workers.removeWhere((item) => item.endpoint == worker.endpoint ||
+        (worker.id != null && item.id == worker.id));
     workers.add(worker);
     lastWorkerReply[worker.endpoint] = DateTime.now();
     unreachableWorkers.remove(worker.endpoint);
-    found.removeWhere((w) => w.endpoint == worker.endpoint);
+    found.removeWhere((item) => item.endpoint == worker.endpoint);
     await _save();
     return null;
   }
@@ -429,7 +479,7 @@ class ClusterService extends GetxService {
     if (isScanning.value) return;
     isScanning.value = true;
     try {
-      final list = await LlamaCluster.discover();
+      final list = await _discoverWorkers();
       found.assignAll(list.where((w) => !isAdded(w)));
     } finally {
       isScanning.value = false;

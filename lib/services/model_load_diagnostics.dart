@@ -37,6 +37,8 @@ class ModelLoadDiagnostics {
   static String? parameterLabel(String name) =>
       _parameterPattern.firstMatch(name)?.group(1)?.toUpperCase();
 
+  bool get includeHelpers => _fields['includeHelpers'] != false;
+
   void set(String key, Object? value) {
     if (value == null) return;
     if (value is String) {

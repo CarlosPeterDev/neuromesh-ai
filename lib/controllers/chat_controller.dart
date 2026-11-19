@@ -1690,6 +1690,8 @@ class ChatController extends GetxController {
     }
   }
 
+  void followLatest() => _followStreaming = true;
+
   void pauseStreamingFollow() {
     if (isStreaming.value) {
       _followStreaming = false;

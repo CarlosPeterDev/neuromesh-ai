@@ -28,6 +28,7 @@ object ClusterNative {
 
     /** Worker: the connected master's address, or null. */
     external fun nativeWorkerPeer(): String?
+    external fun nativeWorkerReady(): Boolean
 
     /** Memory read speed in GB/s; ranks phones by how fast they generate. */
     external fun nativeMemBandwidth(threads: Int): Double

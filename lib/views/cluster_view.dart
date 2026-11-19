@@ -165,11 +165,23 @@ class _ClusterViewState extends State<ClusterView> {
         ),
         const SizedBox(height: 16),
         Text('Scan this from the master phone', style: t.bodyStrong),
+        if (cluster.localAddresses.length > 1)
+          DropdownButton<String>(
+            value: cluster.wifiAddress.value,
+            items: [
+              for (final entry in cluster.localAddresses)
+                DropdownMenuItem(value: entry.address,
+                    child: Text('${entry.address} · ${entry.interfaceName}')),
+            ],
+            onChanged: (value) {
+              if (value != null) cluster.selectWorkerAddress(value);
+            },
+          ),
         const SizedBox(height: 6),
         Row(mainAxisSize: MainAxisSize.min, children: [
           StatusDot(t.green, size: 8),
           const SizedBox(width: 6),
-          Text('Ready · ${cluster.wifiAddress.value}', style: t.caption),
+          Text('Ready · ${cluster.wifiAddress.value}:${LlamaCluster.defaultPort}', style: t.caption),
         ]),
         const SizedBox(height: 16),
         Row(children: [

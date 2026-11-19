@@ -1,3 +1,4 @@
+import '../widgets/scroll_to_end.dart';
 import '../widgets/chat_math.dart';
 import 'dart:async';
 import 'dart:io';
@@ -63,28 +64,33 @@ class ChatView extends GetView<ChatController> {
             final streaming = controller.isStreaming.value;
             final text = controller.streamingResponse.value;
             final n = controller.messages.length;
-            return NotificationListener<ScrollUpdateNotification>(
-              onNotification: (note) {
-                if (note.dragDetails != null && streaming) {
-                  if ((note.scrollDelta ?? 0) < 0) {
-                    controller.pauseStreamingFollow();
-                  } else {
-                    controller.resumeStreamingFollowIfNearBottom();
+            return ScrollToEnd(
+              label: 'Go to latest message',
+              controller: controller.scrollController,
+              onJump: controller.followLatest,
+              child: NotificationListener<ScrollUpdateNotification>(
+                onNotification: (note) {
+                  if (note.dragDetails != null && streaming) {
+                    if ((note.scrollDelta ?? 0) < 0) {
+                      controller.pauseStreamingFollow();
+                    } else {
+                      controller.resumeStreamingFollowIfNearBottom();
+                    }
                   }
-                }
-                return false;
-              },
-              child: ListView.builder(
-                controller: controller.scrollController,
-                padding: const EdgeInsets.only(top: 8, bottom: 8),
-                itemCount: n + (streaming ? 1 : 0),
-                itemBuilder: (_, i) {
-                  if (i == n && streaming) {
-                    return _streamBubble(context, text, isDark);
-                  }
-                  final message = controller.messages[i];
-                  return ChatBubble(key: ValueKey(message.id), message: message);
+                  return false;
                 },
+                child: ListView.builder(
+                  controller: controller.scrollController,
+                  padding: const EdgeInsets.only(top: 8, bottom: 8),
+                  itemCount: n + (streaming ? 1 : 0),
+                  itemBuilder: (_, i) {
+                    if (i == n && streaming) {
+                      return _streamBubble(context, text, isDark);
+                    }
+                    final message = controller.messages[i];
+                    return ChatBubble(key: ValueKey(message.id), message: message);
+                  },
+                ),
               ),
             );
           })),

@@ -16,6 +16,7 @@ import 'hive_service.dart';
 /// It runs through proot, with no root and no extra Android permissions.
 /// The root filesystem is downloaded only after the user chooses Install.
 class SandboxService extends GetxService {
+  static const basicToolsInstalledKey = 'alpine_basic_tools_installed';
   static const rootfsUrl =
       'https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.9-aarch64.tar.gz';
 
@@ -198,6 +199,7 @@ class SandboxService extends GetxService {
     if (await root.exists()) await root.delete(recursive: true);
     installed.value = false;
     status.value = '';
+    await Get.find<HiveService>().setSetting(basicToolsInstalledKey, false);
   }
 
   Future<void> _lock = Future.value();

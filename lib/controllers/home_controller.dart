@@ -26,7 +26,7 @@ class HomeController extends GetxController {
             mc.canLoadLastModel &&
             !inf.isModelLoaded.value &&
             !inf.isLoadingModel.value) {
-          await mc.loadModel(mc.lastLoadedModelName);
+          await mc.reloadLastModel();
         }
       } catch (_) {}
     });

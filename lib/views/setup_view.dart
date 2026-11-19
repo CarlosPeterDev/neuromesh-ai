@@ -16,7 +16,7 @@ import '../services/hive_service.dart';
 import '../services/memory_service.dart';
 import '../services/sandbox_service.dart';
 import '../services/voice_models.dart';
-import 'quick_start.dart';
+import '../core/constants.dart';
 import 'chat_tools.dart';
 
 const kSetupDone = 'setup_done';
@@ -52,7 +52,8 @@ class _SetupViewState extends State<SetupView> {
   bool memoryUpdate = true;
   bool? _alpineAvailable;
   bool sandbox = false;
-  bool sandboxTools = false;
+  late bool sandboxTools =
+      _hive.getSetting<bool>(SandboxService.basicToolsInstalledKey) != true;
   bool sandboxNoAsk = false;
   bool _sandboxPermissionChanged = false;
   // Performance
@@ -60,7 +61,11 @@ class _SetupViewState extends State<SetupView> {
   bool autoTitle = true;
   bool loadLast = false;
 
-  bool get _hasModel => Get.find<ModelController>().downloadedFiles.isNotEmpty;
+  bool get _artemisReady {
+    final models = Get.find<ModelController>();
+    return models.isDownloaded(_recommendedModel.filename) &&
+        models.isVisionFileReady(_recommendedModel);
+  }
   bool _has(String id) => Get.find<VoiceModelStore>().installed.contains(id);
   String get _sttId => _ram >= 6 ? 'whisper-base' : 'whisper-tiny';
   bool get _pro => SandboxService.supported;
@@ -91,13 +96,13 @@ class _SetupViewState extends State<SetupView> {
       autoContext = _hive.getSetting<bool>('auto_context', defaultValue: true) ?? true;
       autoTitle = _hive.getSetting<bool>('auto_title', defaultValue: true) ?? true;
       loadLast = _hive.getSetting<bool>('auto_load_last', defaultValue: false) ?? false;
-      chatModel = false;
+      chatModel = !_artemisReady;
       stt = !_has(_sttId);
       ttsEn = !_has('piper-en-amy');
       ttsAr = !_has('piper-ar-kareem');
       vad = !_has('silero-vad');
     } else {
-      chatModel = !_hasModel;
+      chatModel = !_artemisReady;
       stt = !_has(_sttId);
       ttsEn = !_has('piper-en-amy');
       ttsAr = !_has('piper-ar-kareem');
@@ -105,7 +110,7 @@ class _SetupViewState extends State<SetupView> {
     }
   }
 
-  AiModel get _recommendedModel => quickStartModels(_ram).last;
+  final _recommendedModel = AiModel.fromMap(AppConstants.artemisStarter);
 
   Future<void> _apply() async {
     if (_busy) return;
@@ -174,7 +179,7 @@ class _SetupViewState extends State<SetupView> {
       if (ttsAr && !_has('piper-ar-kareem')) 'piper-ar-kareem',
       if (vad && !_has('silero-vad')) 'silero-vad',
     ];
-    final useChatModel = chatModel && !_hasModel;
+    final useChatModel = chatModel && !_artemisReady;
     final alpine = _alpineAvailable == true ? Get.find<SandboxService>() : null;
     final installSandbox = alpine != null && sandbox && !alpine.installed.value;
     final installTools = alpine != null && sandboxTools &&
@@ -248,7 +253,9 @@ class _SetupViewState extends State<SetupView> {
         if (!result.trimRight().endsWith('[exit code 0]')) {
           Get.find<AppLogService>().warning('Alpine developer tools setup failed',
               details: result);
-          Get.snackbar('Alpine is installed', 'The optional developer tools could not be installed. You can retry from Setup.');
+          Get.snackbar('Alpine is installed', 'The developer tools could not be installed. You can retry from Setup.');
+        } else {
+          await _hive.setSetting(SandboxService.basicToolsInstalledKey, true);
         }
       }
     } catch (error) {
@@ -300,10 +307,10 @@ class _SetupViewState extends State<SetupView> {
             _sw(
                 Icons.code_rounded,
                 'Alpine developer tools',
-                'Optional. Downloads Python, Node.js, Git and other command-line tools.',
+                'Python, Node.js, Git and other command-line tools for the terminal and agent.',
                 sandboxTools,
                 (value) => sandboxTools = value,
-                rec: false),
+                rec: true),
         ]));
   }
 
@@ -331,8 +338,16 @@ class _SetupViewState extends State<SetupView> {
         const SectionHeader('Downloads'),
         AppGroup(children: [
           _sw(Icons.wifi_rounded, 'Download over Wi-Fi only', 'Big files never use mobile data', wifiOnly, (v) => wifiOnly = v),
-          if (!_hasModel || _setUpBefore)
-            _sw(Icons.chat_bubble_outline_rounded, 'Small chat model: ${rec.name}', '${rec.size}. Fits your phone and runs fast.', chatModel, (v) => chatModel = v),
+          if (_artemisReady)
+            AppRow(
+              icon: Icons.chat_bubble_outline_rounded,
+              title: rec.name,
+              subtitle: 'Model and vision helper installed',
+            )
+          else
+            _sw(Icons.chat_bubble_outline_rounded, rec.name,
+                '532 MB model and 207 MB matching vision helper',
+                chatModel, (value) => chatModel = value),
           _sw(Icons.hearing_rounded, 'Listening (speech to text)', '${voiceModelById(_sttId)?.title ?? _sttId}  ·  ${voiceModelById(_sttId)?.sizeLabel ?? ''}${_has(_sttId) ? '  ·  installed' : ''}', stt, (v) => stt = v),
           _sw(Icons.record_voice_over_rounded, 'English voice', 'Piper Amy  ·  67 MB${_has('piper-en-amy') ? '  ·  installed' : ''}', ttsEn, (v) => ttsEn = v),
           _sw(Icons.record_voice_over_rounded, 'Arabic voice', 'Piper Kareem  ·  67 MB${_has('piper-ar-kareem') ? '  ·  installed' : ''}', ttsAr, (v) => ttsAr = v),
@@ -341,7 +356,7 @@ class _SetupViewState extends State<SetupView> {
         ]),
         const SectionHeader('Agent'),
         AppGroup(children: [
-          _sw(Icons.handyman_outlined, 'Let the AI use tools', 'Files, web search, voice, images. It only uses them when needed.', tools, (v) => tools = v),
+          _sw(Icons.handyman_outlined, 'Let the AI use tools', 'Files, web search, voice, images, and Alpine commands when the terminal is installed.', tools, (v) => tools = v),
           _sw(Icons.psychology_alt_rounded, 'Remember things I tell it', 'Saves short facts about you on this device', autoMemory, (v) => autoMemory = v),
           _sw(Icons.update_rounded, 'Update memory automatically', 'Reads recent chats once a day', memoryUpdate, (v) => memoryUpdate = v),
           if (_alpineAvailable == true)
