@@ -46,7 +46,7 @@ The device follow-up covers grounded web search and attachment replies, fitting 
 
 The Android cluster supports saved device weights plus speed, context and model-capacity profiles. The requested split applies on the next GGUF load and is bounded by available memory. Windows and Linux use the host shell by default. **Settings → Desktop command access** controls per-command, per-type, or all-command approval and can use a user-configured SSH VM. Multi-device inference and native Windows/SSH behavior still need device checks. [Cluster and desktop follow-up](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/24)
 
-Hugging Face files, the active download list, the download queue, and My models show **Model**, **Helper**, or **Unknown**. The repository view keeps file sizes and compatibility notes. Model memory estimates stay in the local library and load checks. [Model files follow-up](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/26)
+Hugging Face files, the active download list, the download queue, and My models show **Model**, **Helper**, or **Unknown**. The repository view keeps file sizes and compatibility notes. Model memory estimates stay in the local library and load checks. File details and the download confirmation offer a companion preview before you start a download. [Model files follow-up](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/26)
 
 ## Next tasks
 

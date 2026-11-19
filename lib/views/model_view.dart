@@ -1514,6 +1514,7 @@ class ModelView extends GetView<ModelController> {
               icon: Icons.wifi_rounded,
               color: t.orange,
             ),
+            ModelCompanionsButton(model: model),
             const SizedBox(height: 20),
             Row(
               children: [
