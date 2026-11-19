@@ -19,6 +19,7 @@ import '../core/haptics.dart';
 import 'diagnostics_view.dart';
 import 'memory_view.dart';
 import 'workload_placement_view.dart';
+import 'model_transfer_view.dart';
 
 const _tabular = [FontFeature.tabularFigures()];
 
@@ -43,13 +44,17 @@ class _SettingsViewState extends State<SettingsView> {
   static const _keywords = <String, String>{
     'Appearance': 'theme dark light font text size',
     'Inference mode': 'local cloud ollama provider',
-    'Model parameters': 'temperature context size max tokens seed stop sequences top p top k',
-    'GGUF & LiteRT': 'performance cpu gpu vulkan threads hardware acceleration ram',
+    'Model parameters':
+        'thinking reasoning temperature context size max tokens seed stop sequences top p top k',
+    'GGUF & LiteRT':
+        'performance cpu gpu vulkan threads hardware acceleration ram',
     'Image generation': 'image size resolution diffusion steps backend',
     'Memory': 'preferences facts remember automatic learning personal',
     'Workload placement': 'voice tts stt speech audio transcribe image device cluster',
     'Phone cluster': 'pair devices master worker server',
     'Report an error': 'diagnostics zip crash bug upload report delivery',
+    'Device transfer':
+        'move backup migrate restore chats models settings Wi-Fi',
     'Toolbox': 'backup export import files profiles roles prompts',
     'Device': 'free ram storage battery hardware',
     'App updates': 'version release upgrade',
@@ -115,131 +120,12 @@ class _SettingsViewState extends State<SettingsView> {
                 chevron: true,
                 onTap: () => Get.to(() => const MemoryView()),
               ),
-              _navRow(
-                context,
-                icon: Icons.memory_rounded,
-                title: 'Inference mode',
-                value: controller.inferenceMode.value == 'local'
-                    ? 'Local'
-                    : 'Cloud',
-                builder: (ctx) => _buildInferenceGroup(ctx),
-              ),
-              _navRow(
-                context,
-                icon: Icons.chat_bubble_outline_rounded,
-                title: 'System prompt',
-                value: controller.globalSystemPrompt.value.trim().isEmpty
-                    ? 'Default'
-                    : 'Custom',
-                builder: (ctx) => _buildSystemPromptGroup(ctx),
-                reactive: false,
-              ),
-              _navRow(
-                context,
-                icon: Icons.tune_rounded,
-                title: 'Model parameters',
-                value: controller.temperature.value.toStringAsFixed(2),
-                builder: (ctx) => Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _buildModelParametersGroup(ctx),
-                      const SectionHeader('Stop sequences'),
-                      _buildStopSequencesGroup(ctx),
-                    ]),
-              ),
-            ]),
-            const SectionHeader('On-device performance'),
-            AppGroup(dividerIndent: 60, children: [
-              _navRow(
-                context,
-                icon: Icons.speed_rounded,
-                title: 'GGUF & LiteRT',
-                value: switch (controller.liteRtPerformanceMode.value) {
-                  'gpu_fast' => 'GPU fast',
-                  'cpu_safe' => 'CPU safe',
-                  _ => 'Auto fast',
-                },
-                builder: (ctx) => _buildLiteRtGroup(ctx),
-              ),
-              _navRow(
-                context,
-                icon: Icons.image_outlined,
-                title: 'Image generation',
-                value: controller.imageGenBackend.value == Backend.cpu
-                    ? 'CPU'
-                    : 'GPU',
-                builder: (ctx) => _buildImageGenerationGroup(ctx),
-              ),
-            ]),
-            const SectionHeader('Connected devices'),
-            AppGroup(dividerIndent: 60, children: [
-              if (Get.isRegistered<ClusterService>())
-                AppRow(
-                  icon: Icons.hub_outlined,
-                  title: 'Phone cluster',
-                  trailing: Text(
-                      switch (Get.find<ClusterService>().role) {
-                        ClusterRole.master => 'Master',
-                        ClusterRole.worker => 'Worker',
-                        ClusterRole.off => 'Off',
-                      },
-                      style: AppTokens.of(context).caption.copyWith(fontSize: 14)),
-                  chevron: true,
-                  onTap: () => Get.to(() => const ClusterView()),
-                ),
-              AppRow(
-                icon: Icons.devices_other_rounded,
-                title: 'Workload placement',
-                subtitle: 'Choose phones for speech, recognition and images',
-                chevron: true,
-                onTap: () => Get.to(() => const WorkloadPlacementView()),
-              ),
-            ]),
-            const SectionHeader('Utilities'),
-            AppGroup(dividerIndent: 60, children: [
-              AppRow(
-                icon: Icons.handyman_outlined,
-                title: 'Toolbox',
-                subtitle: 'Roles, prompts, profiles, export, backup',
-                chevron: true,
-                onTap: () => Get.to(() => const ToolboxView()),
-              ),
-            ]),
-            const SectionHeader('Support & app info'),
-            AppGroup(dividerIndent: 60, children: [
-              if (showUpdates) _buildUpdatesRow(context),
-              _navRow(
-                context,
-                icon: Icons.smartphone_rounded,
-                title: 'Device',
-                value: '${device.totalRamGB.value.toStringAsFixed(1)} GB RAM',
-                builder: (ctx) => AppGroup(children: [_buildDeviceCard(ctx)]),
-                reactive: false,
-              ),
-              AppRow(
-                icon: Icons.bug_report_outlined,
-                title: 'Report an error',
-                chevron: true,
-                onTap: () => Get.to(() => const DiagnosticsView()),
-              ),
-              AppRow(
-                icon: Icons.article_outlined,
-                title: 'Logs',
-                chevron: true,
-                onTap: () => Get.to(() => const LogView()),
-              ),
-              AppRow(
-                leading: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.asset('assets/icons/appicon.png',
-                      width: 32, height: 32),
-                ),
-                title: 'NeuroMesh AI',
-                subtitle: controller.appVersion.value.isEmpty
-                    ? 'Connect Devices. Multiply Intelligence.'
-                    : 'Version ${controller.appVersion.value}',
-              ),
-            ]),
+              title: 'NeuroMesh AI',
+              subtitle: controller.appVersion.value.isEmpty
+                  ? 'Connect Devices. Multiply Intelligence.'
+                  : 'Version ${controller.appVersion.value}',
+            ),
+          ]),
         ]);
         return ListView(
           padding: kPagePadding,
@@ -758,6 +644,17 @@ class _SettingsViewState extends State<SettingsView> {
 
   Widget _buildModelParametersGroup(BuildContext context) {
     return AppGroup(children: [
+      AppRow(
+        icon: Icons.psychology_outlined,
+        title: 'Local model thinking',
+        subtitle: controller.normalThinking.value
+            ? 'Think normally on supported models'
+            : 'Answer directly on supported models',
+        trailing: Switch(
+          value: controller.normalThinking.value,
+          onChanged: controller.setNormalThinking,
+        ),
+      ),
       _modelParameterSlider(
         context,
         label: 'Temperature',

@@ -116,9 +116,13 @@ class DesktopEngine {
     required int maxTokens,
     required double temperature,
     String? imagePath,
+    bool normalThinking = false,
     void Function(String token)? onToken,
   }) async {
     if (_proc == null) return 'ERROR: no model is loaded.';
+    if (imagePath != null && imagePath.isNotEmpty && !visionLoaded) {
+      return 'ERROR: Load this model with its vision helper to read images.';
+    }
     final messages = <Map<String, dynamic>>[
       {'role': 'system', 'content': systemPrompt},
       for (final m in conversationHistory ?? const <Map<String, String>>[])
@@ -150,6 +154,7 @@ class DesktopEngine {
       req.add(utf8.encode(jsonEncode({
         'messages': messages,
         'stream': true,
+        'chat_template_kwargs': {'enable_thinking': normalThinking},
         'max_tokens': maxTokens,
         'temperature': temperature,
       })));

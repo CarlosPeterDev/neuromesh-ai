@@ -37,6 +37,22 @@ void main() {
         explicitlyRequestsWebSearch('Search my files for the report'), isFalse);
   });
 
+  test('news fallback reads dated headlines and publisher domains', () {
+    final results = parseNewsRss('''
+<rss><channel>
+  <item><title>Model &amp; benchmark</title>
+    <link>https://news.google.com/rss/articles/abc</link>
+    <pubDate>Thu, 19 Nov 2026 00:00:00 GMT</pubDate>
+    <source url="https://www.example.org">Example</source>
+  </item>
+</channel></rss>
+''');
+    expect(results.single.title, 'Model & benchmark');
+    expect(results.single.publisher, 'www.example.org');
+    expect(results.single.snippet, contains('19 Nov 2026'));
+    expect(needsWebSearch('What is the strongest ai model for coding'), isTrue);
+  });
+
   test('auto detection', () {
     expect(needsWebSearch('What is the weather in Cairo today?'), true);
     expect(needsWebSearch('latest news about AI'), true);

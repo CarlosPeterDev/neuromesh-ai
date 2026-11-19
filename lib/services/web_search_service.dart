@@ -5,9 +5,6 @@ import 'package:http/http.dart' as http;
 
 import '../utils/page_text.dart';
 import '../utils/web_search_parse.dart';
-import 'hive_service.dart';
-
-enum WebSearchMode { off, auto, always }
 
 class WebContext {
   final String block;
@@ -22,39 +19,12 @@ class WebContext {
         ].join('\n')}';
 }
 
-/// Free web search with no account or key: DuckDuckGo's HTML page, with
-/// Wikipedia as a backup. Your question is sent to those sites, so this is
-/// off by default.
+/// Automatic web search for time-sensitive and explicitly requested queries.
 class WebSearchService extends GetxService {
-  static const _kMode = 'web_search_mode';
-  final mode = WebSearchMode.off.obs;
-
   static const _ua =
-      'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Mobile Safari/537.36';
+      'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36';
 
-  @override
-  void onInit() {
-    super.onInit();
-    final v = Get.find<HiveService>().getSetting<String>(_kMode) ?? 'off';
-    mode.value = WebSearchMode.values.firstWhere((m) => m.name == v,
-        orElse: () => WebSearchMode.off);
-  }
-
-  Future<void> setMode(WebSearchMode m) async {
-    mode.value = m;
-    await Get.find<HiveService>().setSetting(_kMode, m.name);
-  }
-
-  bool shouldSearch(String question) {
-    switch (mode.value) {
-      case WebSearchMode.off:
-        return false;
-      case WebSearchMode.always:
-        return question.trim().length >= 3;
-      case WebSearchMode.auto:
-        return needsWebSearch(question);
-    }
-  }
+  bool shouldSearch(String question) => needsWebSearch(question);
 
   static final _fresh = RegExp(
       r'\b(latest|newest|newly|recent(ly)?|current(ly)?|today|tonight|now|this (week|month|year)|just (released|launched)|new|release[sd]?|news|update[sd]?|202\d)\b|اليوم|الآن|آخر|أخر|أحدث|احدث|جديد',
@@ -84,53 +54,73 @@ class WebSearchService extends GetxService {
   Future<List<WebResult>> search(String query, {int max = 4, String? freshness}) async {
     final q = query.trim().replaceAll(RegExp(r'\s+'), ' ');
     final trimmed = q.length > 200 ? q.substring(0, 200) : q;
-    for (final df in [if (freshness != null) freshness, null]) {
-      try {
-        final res = await http
-            .post(Uri.parse('https://html.duckduckgo.com/html/'),
-                headers: {
-                  'User-Agent': _ua,
-                  'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                body: {'q': trimmed, if (df != null) 'df': df})
-            .timeout(const Duration(seconds: 12));
-        if (res.statusCode == 200) {
-          final r = parseDdgHtml(res.body, max: max);
-          if (r.isNotEmpty) return r;
-        }
-      } catch (_) {}
-    }
-    // Backup: Wikipedia.
-    try {
-      final ar = RegExp(r'[؀-ۿ]').hasMatch(trimmed);
-      final lang = ar ? 'ar' : 'en';
-      final uri = Uri.https('$lang.wikipedia.org', '/w/api.php', {
-        'action': 'query',
-        'generator': 'search',
-        'gsrsearch': trimmed,
-        'gsrlimit': '3',
-        'prop': 'extracts',
-        'exintro': '1',
-        'explaintext': '1',
-        'exchars': '700',
-        'format': 'json',
-      });
-      final res = await http
-          .get(uri, headers: {'User-Agent': _ua}).timeout(const Duration(seconds: 12));
-      if (res.statusCode == 200) return parseWikipedia(res.body, lang);
-    } catch (_) {}
-    return [];
+    if (trimmed.isEmpty || max <= 0) return [];
+    final ar = RegExp(r'[؀-ۿ]').hasMatch(trimmed);
+    final lang = ar ? 'ar' : 'en';
+    final ddg = Uri.https('html.duckduckgo.com', '/html/', {
+      'q': trimmed,
+      if (freshness != null) 'df': freshness,
+    });
+    final news = Uri.https('news.google.com', '/rss/search', {
+      'q': trimmed,
+      'hl': lang,
+      'gl': 'US',
+      'ceid': 'US:$lang',
+    });
+    final wiki = Uri.https('$lang.wikipedia.org', '/w/api.php', {
+      'action': 'query',
+      'generator': 'search',
+      'gsrsearch': trimmed,
+      'gsrlimit': '3',
+      'prop': 'extracts',
+      'exintro': '1',
+      'explaintext': '1',
+      'exchars': '700',
+      'format': 'json',
+    });
+    final groups = await Future.wait([
+      _provider(ddg, (body) => parseDdgHtml(body, max: max)),
+      _provider(news, (body) => parseNewsRss(body, max: max)),
+      if (freshness == null)
+        _provider(wiki, (body) => parseWikipedia(body, lang)),
+    ]);
+    final seen = <String>{};
+    return groups
+        .expand((group) => group)
+        .where((result) => seen.add(result.url))
+        .take(max)
+        .toList();
   }
+
+  Future<List<WebResult>> _provider(
+      Uri uri, List<WebResult> Function(String) parse) async {
+    final client = http.Client();
+    try {
+      final response = await client.get(uri,
+          headers: {'User-Agent': _ua}).timeout(const Duration(seconds: 5));
+      return response.statusCode == 200 ? parse(response.body) : [];
+    } catch (_) {
+      return [];
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Search indexes can return syndicated headline links. The feed already
+  /// supplies their titles and dates, so don't ingest the aggregator's UI.
+  static bool _isNewsLink(String url) =>
+      Uri.tryParse(url)?.host == 'news.google.com';
 
   /// Reads a page and returns the passages that best match [query].
   Future<String> pageText(String url, String query, {int maxChars = 1800}) =>
       _pageText(url, query, maxChars: maxChars);
 
-  Future<String> _pageText(String url, String query, {int maxChars = 1100}) async {
+  Future<String> _pageText(String url, String query,
+      {int maxChars = 1100}) async {
+    if (_isNewsLink(url)) return '';
     try {
-      final res = await http
-          .get(Uri.parse(url), headers: {'User-Agent': _ua})
-          .timeout(const Duration(seconds: 7));
+      final res = await http.get(Uri.parse(url),
+          headers: {'User-Agent': _ua}).timeout(const Duration(seconds: 4));
       if (res.statusCode != 200) return '';
       final ct = res.headers['content-type'] ?? '';
       if (!ct.contains('text/html') && !ct.contains('text/plain')) return '';
@@ -155,11 +145,14 @@ class WebSearchService extends GetxService {
       return hit.$2;
     }
     final fresh = freshnessFor(question) ?? freshnessFor(query);
-    final merged = <WebResult>[];
-    for (final q in researchQueries(question, previous: previous)) {
-      merged.addAll(await search(q, max: 8, freshness: fresh));
-    }
-    final results = dedupeByHost(merged, (r) => r.url).take(6).toList();
+    final matches = await Future.wait(
+      researchQueries(question, previous: previous)
+          .map((q) => search(q, max: 8, freshness: fresh)),
+    );
+    final results = dedupeByHost(matches.expand((group) => group).toList(),
+            (r) => r.publisher == null ? r.url : 'https://${r.publisher}')
+        .take(6)
+        .toList();
     if (results.isEmpty) return null;
     // Read the top four pages and keep only the passages that match.
     final pages = await Future.wait(

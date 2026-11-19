@@ -159,8 +159,6 @@ class InferenceService extends GetxService {
           modelPath,
           context: finalContextSize,
           autoContext: autoContext,
-          modelName: modelName,
-          recovering: recoveringCluster,
           safeRetry: safeRetry,
         );
         clusterWorkers = plan.workers;
@@ -418,7 +416,32 @@ class InferenceService extends GetxService {
       );
     }
 
+    final visionAttempt = imagePath == null
+        ? null
+        : <String, Object>{
+            'startedUtc': startTime.toUtc().toIso8601String(),
+            'model': loadedModelName.value,
+            'context': contextTokensTotal.value,
+            'stage': 'Reading image',
+          };
+    Future<void> recordVision(String stage) async {
+      if (visionAttempt == null || !isCurrent()) return;
+      try {
+        await _hive.setSetting('last_vision_attempt', {
+          ...visionAttempt,
+          'stage': stage,
+          'elapsedMs': DateTime.now().difference(startTime).inMilliseconds,
+        });
+      } catch (_) {
+        // Diagnostics must not prevent inference on a full disk.
+      }
+    }
+
     try {
+      if (visionAttempt != null) {
+        await recordVision('Preparing image and waiting for first token');
+      }
+      if (!isCurrent()) return '';
       final temperature = _hive.getSetting<double>(
             AppConstants.keyTemperature,
             defaultValue: AppConstants.defaultTemperature,
@@ -444,6 +467,8 @@ class InferenceService extends GetxService {
         imagePath: imagePath,
         audioPath: audioPath,
         source: source,
+        normalThinking: source == 'chat' &&
+            (_hive.getSetting<bool>('local_normal_thinking') ?? false),
         onToken: (rawToken) {
           if (!isCurrent()) return;
           var token = rawToken;
@@ -481,6 +506,12 @@ class InferenceService extends GetxService {
       );
       tokenFlushTimer?.cancel();
       if (!isCurrent()) return result;
+      if (visionAttempt != null) {
+        await recordVision(result.startsWith('ERROR:') || result.trim().isEmpty
+            ? 'Image request did not complete'
+            : 'Image reply completed');
+        if (!isCurrent()) return result;
+      }
       if (result.startsWith('ERROR:') || result.trim().isEmpty) {
         final recovered = await recoverCluster();
         if (recovered != null) return recovered;
@@ -521,6 +552,9 @@ class InferenceService extends GetxService {
       return finalText;
     } catch (e) {
       tokenFlushTimer?.cancel();
+      if (visionAttempt != null) {
+        await recordVision('Image request raised an inference error');
+      }
       final recovered = await recoverCluster();
       if (recovered != null) return recovered;
       if (isCurrent()) {

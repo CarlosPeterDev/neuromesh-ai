@@ -381,6 +381,7 @@ class InferenceEngine {
     String? imagePath,
     String? audioPath,
     String source = 'chat',
+    bool normalThinking = false,
     void Function(String token)? onToken,
   }) async {
     if (_desk != null) {
@@ -391,6 +392,7 @@ class InferenceEngine {
           maxTokens: maxTokens,
           temperature: temperature,
           imagePath: imagePath,
+          normalThinking: normalThinking,
           onToken: onToken);
     }
     if (_isLiteRt) {
@@ -444,6 +446,8 @@ class InferenceEngine {
       finish(buffer.toString());
     };
 
+    final qwen3 = RegExp(r'qwen[-_ ]?3(?![0-9])', caseSensitive: false)
+        .hasMatch(modelName);
     // ── Use generateChat() for native template handling ──
     Stream<String>? stream;
     try {
@@ -452,7 +456,7 @@ class InferenceEngine {
           imagePath: imagePath);
       stream = _controller!.generateChat(
         messages: messages,
-        template: null,
+        template: qwen3 && !normalThinking ? 'qwen3-direct' : null,
         maxTokens: maxTokens,
         temperature: temperature,
         topP: 0.9,
@@ -463,6 +467,7 @@ class InferenceEngine {
       );
       print('[Inference] generateChat() started (${messages.length} messages)');
     } catch (e) {
+      if (imagePath != null) return 'ERROR: Could not prepare image input.';
       print('[Inference] generateChat() failed: $e — fallback to generate()');
       try {
         await _controller!.stop();
@@ -515,8 +520,9 @@ class InferenceEngine {
     // Prefill timeout
     _idleTimer = Timer(const Duration(seconds: 60), () {
       if (tokenCount == 0) {
-        finish(
-            'ERROR: Model did not respond. Try a smaller model or shorter conversation.');
+        finish(imagePath == null
+            ? 'ERROR: Model did not respond. Try a smaller model or shorter conversation.'
+            : 'ERROR: Image processing took too long. Try a smaller image and check the model’s vision helper.');
       }
     });
 

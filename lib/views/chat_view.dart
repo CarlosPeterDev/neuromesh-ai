@@ -1,3 +1,4 @@
+import '../widgets/chat_math.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -27,7 +28,6 @@ import '../core/ui.dart';
 import '../widgets/thought_disclosure.dart';
 import '../core/haptics.dart';
 import 'voice_views.dart';
-import '../services/web_search_service.dart';
 import 'chat_tools.dart';
 
 // ── Apple-style color helpers ──
@@ -195,15 +195,6 @@ class ChatView extends GetView<ChatController> {
             icon: const Icon(Icons.search_rounded, size: 20),
             onPressed: () => _findInThisChat(context),
           );
-        }),
-        Obx(() {
-          final w = Get.find<WebSearchService>();
-          final on = w.mode.value != WebSearchMode.off;
-          return IconButton(
-              tooltip: on ? 'Web search: ${w.mode.value.name} (tap to turn off)' : 'Turn on web search (auto)',
-              icon: Icon(Icons.travel_explore_rounded,
-                  size: 20, color: on ? Colors.blue : null),
-              onPressed: () => w.setMode(on ? WebSearchMode.off : WebSearchMode.auto));
         }),
         IconButton(
             tooltip: 'Tools & permissions',
@@ -534,6 +525,9 @@ class ChatView extends GetView<ChatController> {
               Expanded(
                   child: MarkdownBody(
                       data: answer,
+                      inlineSyntaxes: chatMathSyntax(),
+                      blockSyntaxes: const [ChatMathBlock()],
+                      builders: chatMathBuilders(),
                       selectable: true,
                       styleSheet: _streamMd(context, isDark))),
               _BlinkingCursor(color: Theme.of(context).hintColor),

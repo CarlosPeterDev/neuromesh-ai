@@ -6,6 +6,10 @@ enum ModelFileRole {
       'Adds image input to a compatible vision model. Attach it to its matching model, then reload.'),
   draft('Speed helper',
       'Draft weights for faster generation. Requires a matching main model and a runtime with the required speculative-decoding support. Draft attachment is not available in this build.'),
+  quantizationData('Quantization data',
+      'Used to create quantized files. Download the actual quantized model for inference.'),
+  patch('Weights patch',
+      'Requires matching base weights and the publisher’s merge process. Download a complete model to load it directly.'),
   adapter('LoRA adapter',
       'Changes a compatible base model. Load with the matching model and an adapter-capable runtime. Standalone adapter loading is not supported here.'),
   imageAddon('Image helper',
@@ -18,9 +22,18 @@ enum ModelFileRole {
 }
 
 ModelFileRole modelFileRole(String path) {
-  final name = path.split(RegExp(r'[/\\]')).last.toLowerCase();
+  final parts = path.toLowerCase().split(RegExp(r'[/\\]'));
+  final name = parts.last;
   if (name.endsWith('.gguf') && name.contains('mmproj')) {
     return ModelFileRole.projector;
+  }
+  if (name.endsWith('.gguf') &&
+      (RegExp(r'[-_.]patch-all-\d+\.gguf$').hasMatch(name) ||
+          parts.contains('patch-unsloth'))) {
+    return ModelFileRole.patch;
+  }
+  if (name.endsWith('-imatrix.gguf') || name.endsWith('_imatrix.gguf')) {
+    return ModelFileRole.quantizationData;
   }
   if (isFastMtpDraft(name)) {
     return ModelFileRole.draft;
@@ -31,7 +44,7 @@ ModelFileRole modelFileRole(String path) {
   if ((name.endsWith('.safetensors') || name.endsWith('.gguf')) &&
       (RegExp(r'(^|[-_.])(vae|taesd|controlnet|clip_l|clip_g|t5xxl)([-_.]|$)')
               .hasMatch(name) ||
-          path.toLowerCase().split(RegExp(r'[/\\]')).any((part) => const {
+          parts.any((part) => const {
                 'vae',
                 'text_encoder',
                 'text_encoder_2',

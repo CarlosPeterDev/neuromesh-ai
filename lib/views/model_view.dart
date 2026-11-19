@@ -147,14 +147,15 @@ class ModelView extends GetView<ModelController> {
       builder: (ctx) => AppGroup(dividerIndent: 60, children: [
         AppRow(
           icon: Icons.insert_drive_file_outlined,
-          title: 'Import file',
-          subtitle: 'Choose a model or helper file',
+          title: 'Import files',
+          subtitle: 'Choose one or more model or helper files',
           chevron: true,
           onTap: () async {
             Navigator.pop(ctx);
-            final model = await controller.importModelFromStorage();
-            if (context.mounted && model != null) {
-              await _showImportedModel(context, model);
+            final imported = await controller.importModelsFromStorage();
+            if (!context.mounted) return;
+            if (imported.length == 1) {
+              await _showImportedModel(context, imported.single);
             }
           },
         ),
@@ -1689,10 +1690,13 @@ class ModelView extends GetView<ModelController> {
           ? controller.defaultLocalFilter
           : controller.localFilter.value;
       final fitBytes = controller.modelBytes(model);
-      final fit = model.fileKind != ModelFileKind.model ||
-              controller.isImageModel(model) || fitBytes <= 0
-          ? ModelFit.unknown
-          : fitFor(needGBForBytes(fitBytes));
+      final fit = library
+          ? _libraryFit(model)
+          : model.fileKind != ModelFileKind.model ||
+                  controller.isImageModel(model) ||
+                  fitBytes <= 0
+              ? ModelFit.unknown
+              : fitFor(needGBForBytes(fitBytes));
       // "Recommended" only for models that really fit this phone (or the
       // cluster): never for ones that are too big for the memory.
       final recommended = !library &&
@@ -1822,8 +1826,12 @@ class ModelView extends GetView<ModelController> {
     if (installed.isEmpty) return [_buildEmptyLibrary(context)];
     final filter = controller.libraryKindFilter;
     final picked = filter.value;
-    final models =
-        installed.where((model) => picked == null || model.fileKind == picked).toList();
+    final fit = controller.libraryFitFilter.value;
+    final models = installed
+        .where((model) =>
+            (picked == null || model.fileKind == picked) &&
+            (fit == null || _libraryFit(model) == fit))
+        .toList();
     final t = AppTokens.of(context);
     final helpers = models.where((m) => m.fileKind == ModelFileKind.helper).toList();
     final mainModels = models.where((m) => m.fileKind == ModelFileKind.model).toList();
@@ -1864,7 +1872,32 @@ class ModelView extends GetView<ModelController> {
           _sortAction(),
         ]),
       ),
-      ModelFileFilter(selected: picked, onChanged: (kind) => filter.value = kind),
+      ModelFileFilter(
+          selected: picked,
+          onChanged: (kind) {
+            filter.value = kind;
+            if (kind != null && kind != ModelFileKind.model) {
+              controller.libraryFitFilter.value = null;
+            }
+          }),
+      if (picked == null || picked == ModelFileKind.model)
+        Wrap(
+          spacing: 6,
+          children: [
+            for (final option in [
+              null,
+              ModelFit.fits,
+              ModelFit.heavy,
+              ModelFit.tooBig
+            ])
+              FilterChip(
+                label:
+                    Text(option == null ? 'Any memory fit' : fitText(option)),
+                selected: fit == option,
+                onSelected: (_) => controller.libraryFitFilter.value = option,
+              ),
+          ],
+        ),
       if (models.isEmpty) const Text('No files match this filter.'),
       ...group('Helpers', helpers),
       ...group('Unknown', unknown),
@@ -1872,6 +1905,15 @@ class ModelView extends GetView<ModelController> {
       ...group('Vision', vision),
       ...group('Image', image),
     ];
+  }
+
+  ModelFit _libraryFit(AiModel model) {
+    final bytes = controller.modelBytes(model);
+    if (model.fileKind != ModelFileKind.model ||
+        controller.isImageModel(model) ||
+        bytes <= 0) return ModelFit.unknown;
+    final result = fitFor(needGBForBytes(bytes));
+    return result == ModelFit.recommended ? ModelFit.fits : result;
   }
 
   static final _quantPattern = RegExp(

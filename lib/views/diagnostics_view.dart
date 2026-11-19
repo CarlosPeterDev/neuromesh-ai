@@ -14,6 +14,7 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
   late Future<String> _report;
   bool _includeErrors = false;
   bool _sending = false;
+  String _sendPhase = 'Preparing upload…';
   bool _sent = false;
   String? _sendError;
   String _description = '';
@@ -34,10 +35,13 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
     if (_sending || _sent) return;
     setState(() {
       _sending = true;
+      _sendPhase = 'Preparing upload…';
       _sendError = null;
     });
     try {
-      await DiagnosticsService.sendReport(preview);
+      await DiagnosticsService.sendReport(preview, onProgress: (phase) {
+        if (mounted) setState(() => _sendPhase = phase);
+      });
       if (mounted) setState(() => _sent = true);
     } on ReportSubmissionError catch (error) {
       if (mounted) setState(() => _sendError = error.message);
@@ -57,8 +61,8 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
               final report = ready ? snapshot.data : null;
               final note = diagnosticText(_description.trim());
               final canSend = DiagnosticsService.canSendReport;
-              final preview = report == null || note.isEmpty
-                  ? report
+              final preview = report == null
+                  ? null
                   : 'Problem description\n$note\n\n$report';
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -136,6 +140,7 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
                           if (!canSend)
                             const Text(
                                 'Support uploads are unavailable in this build.'),
+                          if (_sending) const LinearProgressIndicator(),
                           FilledButton.icon(
                             icon: Icon(_sent
                                 ? Icons.check_rounded
@@ -143,7 +148,7 @@ class _DiagnosticsViewState extends State<DiagnosticsView> {
                             label: Text(_sent
                                 ? 'Report sent'
                                 : _sending
-                                    ? 'Sending…'
+                                    ? _sendPhase
                                     : 'Send report'),
                             onPressed: !canSend || _sending || _sent
                                 ? null

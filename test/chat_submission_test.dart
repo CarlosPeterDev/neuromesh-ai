@@ -163,7 +163,8 @@ void main() {
     const first = 'What is the strongest AI model today for coding?';
     chat.textController.text = first;
     await chat.sendMessage();
-    expect(cloud.calls, 0);
+    expect(cloud.calls, 1);
+    expect(cloud.lastInput, contains('Published benchmark results'));
     chat.textController.text = 'Please search because this is old';
     await chat.sendMessage();
 

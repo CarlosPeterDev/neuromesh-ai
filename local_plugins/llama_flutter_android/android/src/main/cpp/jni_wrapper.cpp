@@ -12,6 +12,8 @@
 #include <cstring>
 #include <fstream>
 #include <mutex>
+#include <memory>
+#include <exception>
 #include <android/log.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -34,7 +36,9 @@ static llama_context* g_ctx = nullptr;
 static const llama_vocab* g_vocab = nullptr;
 static llama_sampler* g_sampler = nullptr;
 static std::atomic<bool> g_stop_flag{false};
-static int g_n_past = 0;  // Track the number of tokens already in KV cache
+static std::mutex g_inference_mutex;
+static std::atomic<int> g_context_size{0};
+static std::atomic<int> g_n_past{0};  // Track the number of tokens already in KV cache
 // Exactly the tokens held in the KV cache (sequence 0), in order. Lets each
 // turn reuse the cached prefix it shares with the previous prompt + reply
 // instead of re-feeding (and duplicating) the whole conversation.
@@ -737,6 +741,8 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     JNIEnv* env, jobject thiz,
     jstring path, jlong n_threads, jlong ctx_size, jlong n_gpu_layers,
     jobject progress_callback) {
+    const std::lock_guard<std::mutex> inference_lock(g_inference_mutex);
+    g_context_size = 0;
     
     if (!path) {
         throwLoadError(env, "GGUF model path is missing");
@@ -878,6 +884,8 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     ctx_params.n_threads_batch = n_threads;
     
     // Memory optimization: reduce memory usage by limiting batch processing
+    ctx_params.n_ubatch = 256;
+    ctx_params.abort_callback = [](void*) { return g_stop_flag.load(); };
     ctx_params.n_batch = 512;  // Process smaller batches to reduce memory spikes
     // Don't push CPU-resident tensor ops to the GPU in CPU-only mode, nor
     // over Wi-Fi to a worker in cluster mode.
@@ -933,6 +941,7 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     }
     
     // Reset KV cache position counter for new model
+    g_context_size = llama_n_ctx(g_ctx);
     g_n_past = 0;
     g_cached_tokens.clear();
 
@@ -953,6 +962,7 @@ static void freeMtmd() {
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadMmproj(
         JNIEnv* env, jobject /* this */, jstring path, jlong n_threads) {
+    const std::lock_guard<std::mutex> inference_lock(g_inference_mutex);
     freeMtmd();
     if (!g_model) return env->NewStringUTF("Load the text model first");
     if (!path) return env->NewStringUTF("Vision file path is missing");
@@ -965,7 +975,8 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     params.use_gpu = false;
     params.n_threads = (int)std::max<jlong>(1, n_threads);
     params.print_timings = false;
-    params.warmup = false;  // skip a dummy encode at load time
+    params.warmup = false;
+    params.image_max_tokens = 256;  // Bound dynamic-resolution projector work on mobile CPUs.
 
     {
         std::lock_guard<std::mutex> lock(g_load_log_mutex);
@@ -973,7 +984,11 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
         g_capture_load_error = true;
     }
     mtmd_helper_log_set(androidLlamaLog, nullptr);
-    g_mtmd = mtmd_init_from_file(mmproj_path, g_model, params);
+    try {
+        g_mtmd = mtmd_init_from_file(mmproj_path, g_model, params);
+    } catch (const std::exception& e) {
+        LOGE("Vision projector initialization failed: %s", e.what());
+    }
     env->ReleaseStringUTFChars(path, mmproj_path);
     const std::string detail = consumeLoadError();
 
@@ -992,7 +1007,65 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     return nullptr;
 }
 
-static jobject g_token_callback = nullptr;
+static bool prepareImagePrompt(JNIEnv* env, const std::string& image_file,
+                               const std::string& prompt, int& generation_budget) {
+    auto fail = [env](const char* message) {
+        env->ThrowNew(env->FindClass("java/lang/RuntimeException"), message);
+        return false;
+    };
+    try {
+        auto wrapped = mtmd_helper_bitmap_init_from_file(
+            g_mtmd, image_file.c_str(), false, mtmd_helper_init_opt_default());
+        if (wrapped.video_ctx) mtmd_helper_video_free(wrapped.video_ctx);
+        std::unique_ptr<mtmd_bitmap, decltype(&mtmd_bitmap_free)>
+            bitmap(wrapped.bitmap, mtmd_bitmap_free);
+        if (!bitmap) return fail("Couldn't read the image file");
+
+        mtmd_input_text text{};
+        text.text = prompt.c_str();
+        text.text_len = prompt.size();
+        text.add_special = true;
+        text.parse_special = true;
+        std::unique_ptr<mtmd_input_chunks, decltype(&mtmd_input_chunks_free)>
+            chunks(mtmd_input_chunks_init(), mtmd_input_chunks_free);
+        const mtmd_bitmap* images[] = {bitmap.get()};
+        if (g_stop_flag) return false;
+        if (mtmd_tokenize(g_mtmd, chunks.get(), &text, images, 1) != 0) {
+            return fail("Couldn't tokenize the image and chat prompt");
+        }
+        bitmap.reset();
+
+        const auto positions = mtmd_helper_get_n_pos(chunks.get());
+        const auto tokens = mtmd_helper_get_n_tokens(chunks.get());
+        const auto occupied = std::max<int64_t>(positions, tokens);
+        generation_budget = (int)std::max<int64_t>(0, llama_n_ctx(g_ctx) - occupied);
+        if (generation_budget < 64) {
+            return fail("The image and chat exceed the context. Start a new chat or increase the context size.");
+        }
+        llama_memory_clear(llama_get_memory(g_ctx), false);
+        g_cached_tokens.clear();
+        g_n_past = 0;
+        g_cache_reusable = false;
+        llama_pos next = 0;
+        const auto count = mtmd_input_chunks_size(chunks.get());
+        LOGI("Evaluating image prompt: %zu tokens, %d positions", tokens, (int)positions);
+        for (size_t i = 0; i < count; ++i) {
+            if (g_stop_flag) return false;
+            const auto* chunk = mtmd_input_chunks_get(chunks.get(), i);
+            if (mtmd_helper_eval_chunk_single(g_mtmd, g_ctx, chunk, next, 0,
+                    (int)llama_n_ubatch(g_ctx), i + 1 == count, &next) != 0) {
+                if (g_stop_flag) return false;
+                return fail("Couldn't complete image encoding with this model and vision helper");
+            }
+        }
+        g_n_past = next;
+        LOGI("Image prompt ready");
+        return !g_stop_flag;
+    } catch (const std::exception& e) {
+        LOGE("Image processing failed: %s", e.what());
+        return fail("Image processing failed. Try a smaller image and check the matching vision helper.");
+    }
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGenerate(
@@ -1004,12 +1077,7 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
     jlong seed, jboolean penalize_newline,
     jobject token_callback) {
     
-    if (g_token_callback != nullptr) {
-        env->DeleteGlobalRef(g_token_callback);
-        g_token_callback = nullptr;
-    }
-    g_token_callback = env->NewGlobalRef(token_callback);
-    
+    const std::lock_guard<std::mutex> inference_lock(g_inference_mutex);
     if (!g_model || !g_ctx || !g_vocab) {
         jclass exception = env->FindClass("java/lang/IllegalStateException");
         env->ThrowNew(exception, "Model not loaded");
@@ -1017,6 +1085,7 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
     }
 
     const char* prompt_str = env->GetStringUTFChars(prompt, nullptr);
+    if (!prompt_str) return;
     g_stop_flag = false;
 
     std::string image_file;
@@ -1035,81 +1104,15 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         return;
     }
 
-    llama_batch batch = llama_batch_init(512, 0, 1);
-
+    int image_generation_budget = 0;
     if (with_image) {
-        // Image turn: tokenize text + image into chunks and evaluate them from
-        // an empty cache (image embeddings can't be prefix-matched).
-        std::string sanitized = sanitizeUTF8(prompt_str, strlen(prompt_str));
+        const std::string sanitized = sanitizeUTF8(prompt_str, strlen(prompt_str));
         env->ReleaseStringUTFChars(prompt, prompt_str);
-        LOGI("Image prompt: %zu chars, marker %s", sanitized.size(),
-             sanitized.find(mtmd_default_marker()) != std::string::npos ? "present" : "MISSING");
+        if (!prepareImagePrompt(env, image_file, sanitized, image_generation_budget)) return;
+    }
 
-        mtmd_helper_bitmap_wrapper wrapped = mtmd_helper_bitmap_init_from_file(
-            g_mtmd, image_file.c_str(), /*placeholder=*/false,
-            mtmd_helper_init_opt_default());
-        // Video is compiled out (MTMD_VIDEO=OFF), but free it if ever set.
-        if (wrapped.video_ctx) mtmd_helper_video_free(wrapped.video_ctx);
-        mtmd_bitmap* bitmap = wrapped.bitmap;
-        if (!bitmap) {
-            llama_batch_free(batch);
-            jclass exception = env->FindClass("java/lang/RuntimeException");
-            env->ThrowNew(exception, "Couldn't read the image file");
-            return;
-        }
-        // Zero-init: newer mtmd added fields (e.g. text_len) that must not
-        // be left uninitialised.
-        mtmd_input_text text{};
-        text.text = sanitized.c_str();
-        text.text_len = sanitized.size();
-        text.add_special = true;
-        text.parse_special = true;
-        mtmd_input_chunks* chunks = mtmd_input_chunks_init();
-        const mtmd_bitmap* bitmaps[] = {bitmap};
-        const int32_t tok_res = mtmd_tokenize(g_mtmd, chunks, &text, bitmaps, 1);
-        mtmd_bitmap_free(bitmap);
-        if (tok_res != 0) {
-            mtmd_input_chunks_free(chunks);
-            llama_batch_free(batch);
-            jclass exception = env->FindClass("java/lang/RuntimeException");
-            env->ThrowNew(exception, tok_res == 1
-                ? "The prompt is missing the image marker"
-                : "Couldn't process the image");
-            return;
-        }
-
-        const int n_ctx_img = llama_n_ctx(g_ctx);
-        const llama_pos n_pos = mtmd_helper_get_n_pos(chunks);
-        if (n_pos + 64 > n_ctx_img) {
-            mtmd_input_chunks_free(chunks);
-            llama_batch_free(batch);
-            jclass exception = env->FindClass("java/lang/RuntimeException");
-            env->ThrowNew(exception,
-                "The image and conversation are too long for the context size. "
-                "Start a new chat or raise the context size.");
-            return;
-        }
-
-        llama_memory_seq_rm(llama_get_memory(g_ctx), 0, 0, -1);
-        g_cached_tokens.clear();
-        llama_pos new_n_past = 0;
-        LOGI("Evaluating image prompt: %d positions", (int)n_pos);
-        const int32_t eval_res = mtmd_helper_eval_chunks(
-            g_mtmd, g_ctx, chunks, 0, 0, 512, true, &new_n_past);
-        mtmd_input_chunks_free(chunks);
-        if (eval_res != 0) {
-            llama_memory_seq_rm(llama_get_memory(g_ctx), 0, 0, -1);
-            g_n_past = 0;
-            g_cache_reusable = true;
-            llama_batch_free(batch);
-            jclass exception = env->FindClass("java/lang/RuntimeException");
-            env->ThrowNew(exception, "Failed to encode the image");
-            return;
-        }
-        g_n_past = (int)new_n_past;
-        g_cache_reusable = false;
-    } else {
-
+    llama_batch batch = llama_batch_init(512, 0, 1);
+    if (!with_image) {
     // Never log prompt text: it is the user's conversation.
     const int prompt_len = strlen(prompt_str);
 
@@ -1171,7 +1174,12 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         n_keep++;
     }
     if (n_keep >= tokens.size()) n_keep = tokens.size() - 1;
-    llama_memory_seq_rm(llama_get_memory(g_ctx), 0, (llama_pos)n_keep, -1);
+    auto* memory = llama_get_memory(g_ctx);
+    if (n_keep == 0 || !llama_memory_seq_rm(memory, 0, (llama_pos)n_keep, -1)) {
+        // Hybrid/recurrent models can reject a partial rollback.
+        llama_memory_clear(memory, false);
+        n_keep = 0;
+    }
     g_cached_tokens.resize(n_keep);
     g_n_past = (int)n_keep;
     LOGI("Prompt: %zu tokens, %zu reused from cache, %zu to process",
@@ -1182,6 +1190,11 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
     int tokens_processed = (int)n_keep;
 
     while (tokens_processed < (int)tokens.size()) {
+        if (g_stop_flag) {
+            g_cache_reusable = false;
+            llama_batch_free(batch);
+            return;
+        }
         batch.n_tokens = 0;
         int batch_size = std::min((int)tokens.size() - tokens_processed, max_batch_size);
 
@@ -1196,7 +1209,12 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
 
         int decode_result = llama_decode(g_ctx, batch);
         if (decode_result != 0) {
-            LOGE("❌ DECODE FAILED! Result code: %d", decode_result);
+            g_cache_reusable = false;
+            if (g_stop_flag) {
+                llama_batch_free(batch);
+                return;
+            }
+            LOGE("Prompt decode failed with code %d", decode_result);
             llama_batch_free(batch);
             jclass exception = env->FindClass("java/lang/RuntimeException");
             env->ThrowNew(exception, "Failed to decode prompt");
@@ -1278,7 +1296,9 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
 
     // Generation loop
     LOGI("Starting generation loop: max_tokens=%lld", max_tokens);
-    for (int i = 0; i < max_tokens && !g_stop_flag; i++) {
+    const auto budget = std::min<jlong>(max_tokens, with_image
+        ? image_generation_budget : (int)llama_n_ctx(g_ctx) - g_n_past.load());
+    for (int i = 0; i < budget && !g_stop_flag; i++) {
         llama_token new_token_id = llama_sampler_sample(g_sampler, g_ctx, -1);
 
         // Check for end of generation (EOS/EOD tokens)
@@ -1292,7 +1312,7 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         int32_t length = llama_token_to_piece(g_vocab, new_token_id, buffer, sizeof(buffer), 0, true);
         std::string piece;
         
-        if (length > 0) {
+        if (length > 0 && length <= (int32_t)sizeof(buffer)) {
             piece = sanitizeUTF8(buffer, length);
         } else {
             piece = "";
@@ -1300,8 +1320,9 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         
         // Call Kotlin callback
         jstring token_str = env->NewStringUTF(piece.c_str());
-        env->CallObjectMethod(g_token_callback, invokeMethod, token_str);
+        env->CallObjectMethod(token_callback, invokeMethod, token_str);
         env->DeleteLocalRef(token_str);
+        if (env->ExceptionCheck() || i + 1 == budget) break;
 
         // Prepare next batch
         batch.n_tokens = 0;
@@ -1313,6 +1334,7 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         batch.n_tokens++;
 
         if (llama_decode(g_ctx, batch) != 0) {
+            g_cache_reusable = false;
             LOGE("Failed to decode after sampling token %d", i + 1);
             break;
         }
@@ -1323,15 +1345,6 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
     }
     LOGI("Generation loop finished.");
 
-    if (g_token_callback != nullptr) {
-        env->DeleteGlobalRef(g_token_callback);
-        g_token_callback = nullptr;
-    }
-
-    // After generation completion, ensure the KV cache is properly managed
-    // In some llama.cpp versions, KV cache management may be needed between generations
-    // For chat applications, we want to maintain conversation context
-    
     llama_batch_free(batch);
     env->DeleteLocalRef(callbackClass);
 }
@@ -1346,6 +1359,8 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeStop(
 extern "C" JNIEXPORT void JNICALL
 Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeFreeModel(
     JNIEnv* env, jobject thiz) {
+    const std::lock_guard<std::mutex> inference_lock(g_inference_mutex);
+    g_context_size = 0;
     
     if (g_sampler) {
         llama_sampler_free(g_sampler);
@@ -1377,12 +1392,13 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGetTo
 extern "C" JNIEXPORT jint JNICALL
 Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGetContextSize(
     JNIEnv* env, jobject thiz) {
-    return g_ctx ? llama_n_ctx(g_ctx) : 0;
+    return g_context_size.load();
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeClearContext(
     JNIEnv* env, jobject thiz) {
+    const std::lock_guard<std::mutex> inference_lock(g_inference_mutex);
     if (!g_ctx) {
         LOGE("Cannot clear context: context is null");
         return;
@@ -1390,7 +1406,7 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeClear
     
     llama_memory_t mem = llama_get_memory(g_ctx);
     if (mem) {
-        llama_memory_seq_rm(mem, 0, 0, -1);
+        llama_memory_clear(mem, false);
         g_n_past = 0;
         g_cached_tokens.clear();
         g_cache_reusable = true;

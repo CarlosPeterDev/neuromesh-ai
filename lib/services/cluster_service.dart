@@ -42,8 +42,9 @@ class _Phone {
   final ClusterWorker? worker; // null: the master itself
   final double capacityMb;
   final double speed; // GB/s
+  final double roundTripMs;
   double assignedMb = 0;
-  _Phone(this.worker, this.capacityMb, this.speed);
+  _Phone(this.worker, this.capacityMb, this.speed, {this.roundTripMs = 0});
 }
 
 /// Phone cluster: spread a GGUF model across phones on the same Wi-Fi.
@@ -352,17 +353,30 @@ class ClusterService extends GetxService {
   final lastWorkerReply = <String, DateTime>{}.obs;
   final unreachableWorkers = <String>{}.obs;
 
+  final _workerRoundTripMs = <String, double>{};
+
   Future<List<ClusterWorker>> relocateWorkers() async {
-    final missing = <ClusterWorker>[];
-    for (final w in workers) {
-      if (await LlamaCluster.probe(w.endpoint)) {
+    final snapshot = workers.toList();
+    final reachable = await Future.wait(snapshot.map((w) async {
+      final clock = Stopwatch()..start();
+      try {
+        if (!await LlamaCluster.probe(w.endpoint)) return false;
+        final observed = clock.elapsedMicroseconds / 1000;
+        final previous = _workerRoundTripMs[w.endpoint];
+        _workerRoundTripMs[w.endpoint] =
+            previous == null ? observed : previous * 0.6 + observed * 0.4;
         lastWorkerReply[w.endpoint] = DateTime.now();
         unreachableWorkers.remove(w.endpoint);
-      } else {
-        missing.add(w);
-        unreachableWorkers.add(w.endpoint);
+        return true;
+      } catch (_) {
+        return false;
       }
-    }
+    }));
+    final missing = [
+      for (var i = 0; i < snapshot.length; i++)
+        if (!reachable[i]) snapshot[i],
+    ];
+    unreachableWorkers.addAll(missing.map((w) => w.endpoint));
     if (missing.isEmpty) return const [];
     final seen = await LlamaCluster.discover();
     var moved = 0;
@@ -462,8 +476,6 @@ class ClusterService extends GetxService {
     String modelPath, {
     required int context,
     required bool autoContext,
-    String? modelName,
-    bool recovering = false,
     bool safeRetry = false,
   }) async {
     clearSplit();
@@ -515,7 +527,8 @@ class ClusterService extends GetxService {
     final phones = [
       master,
       for (final w in available)
-        _Phone(w, (w.ramMb ?? 2000) * 0.75, w.bandwidth ?? _unknownSpeed),
+        _Phone(w, (w.ramMb ?? 2000) * 0.75, w.bandwidth ?? _unknownSpeed,
+            roundTripMs: _workerRoundTripMs[w.endpoint] ?? 5),
     ];
     final capacity = phones.fold<double>(reserveMb, (total, phone) {
       if (activeProfile == ClusterProfile.manual && phone.worker == null &&
@@ -555,18 +568,25 @@ class ClusterService extends GetxService {
 
     if (available.isEmpty) return local(tokens);
     if (needMb <= masterCapacity) {
-      if (activeProfile == ClusterProfile.speed) return local(tokens);
-      if (activeProfile == ClusterProfile.automatic) {
-        final share = !recovering && await _askFitsHere(
-            modelName ?? modelPath.split('/').last, modelMb, available.length);
-        if (!share) return local(tokens);
-      }
+      if (activeProfile == ClusterProfile.speed ||
+          activeProfile == ClusterProfile.automatic) return local(tokens);
     }
 
     final layerMemoryMb = needMb - reserveMb;
     if (activeProfile == ClusterProfile.speed ||
-        (activeProfile == ClusterProfile.automatic && needMb > masterCapacity)) {
-      _fillFastestFirst(phones, layerMemoryMb);
+        (activeProfile == ClusterProfile.automatic &&
+            needMb > masterCapacity)) {
+      final shares = placeSequentialLayers([
+        for (final p in phones)
+          (
+            capacityMb: p.capacityMb,
+            bandwidthGbps: p.speed,
+            latencyMs: p.roundTripMs
+          ),
+      ], layerMemoryMb);
+      for (var i = 0; i < phones.length; i++) {
+        phones[i].assignedMb = shares[i];
+      }
     } else {
       final shares = distributeClusterLoad([
         for (final phone in phones)
@@ -605,16 +625,6 @@ class ClusterService extends GetxService {
     return (workers: used.length, context: tokens);
   }
 
-  /// Fastest first, each up to its free memory, until the model is placed.
-  static void _fillFastestFirst(List<_Phone> phones, double needMb) {
-    final bySpeed = [...phones]..sort((a, b) => b.speed.compareTo(a.speed));
-    var left = needMb;
-    for (final p in bySpeed) {
-      p.assignedMb = math.min(p.capacityMb, left);
-      left -= p.assignedMb;
-    }
-  }
-
   /// LiteRT models can't be split across phones (the cluster is llama.cpp).
   /// When this phone is a master with workers, asks before loading one here
   /// alone. True to go ahead.
@@ -641,37 +651,6 @@ class ClusterService extends GetxService {
       ),
     );
     return go == true;
-  }
-
-  /// "Fits on this phone" sheet. True to share with workers anyway.
-  Future<bool> _askFitsHere(String model, double modelMb, int workerCount) async {
-    final context = Get.context;
-    if (context == null) return false;
-    final share = await showAppSheet<bool>(
-      context,
-      title: 'This model fits on this phone',
-      subtitle: '${model.replaceAll(RegExp(r'\.gguf$'), '')} needs about '
-          '${_gb(modelMb)}, and this phone has room for it. Running it here '
-          'is faster, because sharing sends every word over Wi-Fi. Share it '
-          'to free up memory on this phone.',
-      builder: (ctx) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          PrimaryButton(
-            label: 'Load on this phone only',
-            icon: Icons.smartphone_rounded,
-            onPressed: () => Navigator.pop(ctx, false),
-          ),
-          const SizedBox(height: 10),
-          TonalButton.neutral(
-            ctx,
-            label: 'Share with $workerCount worker${workerCount == 1 ? '' : 's'}',
-            onTap: () => Navigator.pop(ctx, true),
-          ),
-        ],
-      ),
-    );
-    return share == true;
   }
 
   /// Reads where the model actually went after a cluster load. Workers'

@@ -1,3 +1,4 @@
+import 'chat_math.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -183,6 +184,9 @@ class _ThoughtDisclosureState extends State<ThoughtDisclosure>
               ),
               child: MarkdownBody(
                 data: widget.thought.trim(),
+                inlineSyntaxes: chatMathSyntax(),
+                blockSyntaxes: const [ChatMathBlock()],
+                builders: chatMathBuilders(),
                 selectable: true,
                 styleSheet: widget.styleSheet,
               ),

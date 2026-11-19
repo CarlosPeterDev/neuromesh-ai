@@ -205,9 +205,14 @@ class ModelTransferServer {
         _backupDirectory = await cache.createTemp('cluster-backup-');
         _backupKey = ClusterBackup.randomBytes(32);
         for (final part in backupParts) {
-          final packet = await ClusterBackup.build(part, _backupKey!);
-          _backups[part] = await File('${_backupDirectory!.path}/${part.name}.bin')
-              .writeAsBytes(packet, flush: true);
+          final file = File('${_backupDirectory!.path}/${part.name}.bin');
+          if (part == ClusterBackupPart.files) {
+            await ClusterBackup.writeWorkspace(file, _backupKey!);
+          } else {
+            final packet = await ClusterBackup.build(part, _backupKey!);
+            await file.writeAsBytes(packet, flush: true);
+          }
+          _backups[part] = file;
         }
       }
       _offer = await collectItems(includeModels: includeModels);
@@ -637,8 +642,12 @@ class ModelTransferClient {
     if (it.kind == 'backup') {
       final key = _backupKey;
       final part = ClusterBackupPart.fromTransferId(it.id);
-      if (key == null || part == null || it.files.length != 1 ||
-          it.size < 28 || it.size > ClusterBackup.maxBytes + 28) {
+      if (key == null ||
+          part == null ||
+          it.files.length != 1 ||
+          it.size < 28 ||
+          (part != ClusterBackupPart.files &&
+              it.size > ClusterBackup.maxBytes + 28)) {
         throw const FormatException('Invalid backup or missing backup key.');
       }
       final cache = await getTemporaryDirectory();
@@ -646,7 +655,11 @@ class ModelTransferClient {
       try {
         final file = File('${dir.path}/backup.bin');
         await _getFile(it.files.single, file);
-        await ClusterBackup.restore(part, key, await file.readAsBytes());
+        if (part == ClusterBackupPart.files) {
+          await ClusterBackup.restoreWorkspace(file, key);
+        } else {
+          await ClusterBackup.restore(part, key, await file.readAsBytes());
+        }
       } finally {
         await dir.delete(recursive: true);
       }

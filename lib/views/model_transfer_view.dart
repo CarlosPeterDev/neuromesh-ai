@@ -24,7 +24,8 @@ class _ModelTransferViewState extends State<ModelTransferView> {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: Text(widget.clusterBackup ? 'Cluster backup & transfer' : 'Transfer models'),
+          title: Text(
+              widget.clusterBackup ? 'Device transfer' : 'Transfer models'),
           bottom: const TabBar(tabs: [Tab(text: 'Send'), Tab(text: 'Receive')]),
         ),
         body: TabBarView(children: [_SendTab(clusterBackup: widget.clusterBackup), const _ReceiveTab()]),
@@ -90,6 +91,19 @@ class _SendTabState extends State<_SendTab> {
       const SizedBox(height: 16),
       if (widget.clusterBackup) ...[
         CheckboxListTile(
+          title: const Text('Select all app data'),
+          value: _includeModels &&
+              _backupParts.length == ClusterBackupPart.values.length,
+          onChanged: on || _busy
+              ? null
+              : (value) => setState(() {
+                    _includeModels = value == true;
+                    _backupParts.clear();
+                    if (_includeModels)
+                      _backupParts.addAll(ClusterBackupPart.values);
+                  }),
+        ),
+        CheckboxListTile(
           title: const Text('Installed models'),
           value: _includeModels,
           onChanged: on || _busy ? null : (value) =>
@@ -107,7 +121,8 @@ class _SendTabState extends State<_SendTab> {
               }
             }),
           ),
-        const Text('Backup categories are encrypted. Share the code only with the device you want to receive this data.'),
+        const Text(
+            'Personal backups are encrypted. The receiving device merges workspace files and can reinstall Alpine through Setup.'),
       ],
       if (on) ...[
         Center(
@@ -232,9 +247,10 @@ class _ReceiveTabState extends State<_ReceiveTab> {
       final failed = await c.download(chosen, onProgress: (p) {
         if (mounted) setState(() => _progress = p);
       });
-      if (mounted) setState(() => _result = failed.isEmpty
-          ? 'Done. The selected items were received.'
-          : 'Finished with problems:\n${failed.join('\n')}');
+      if (mounted)
+        setState(() => _result = failed.isEmpty
+            ? 'The selected items were received. Reopen the app to apply restored preferences.'
+            : 'Finished with problems:\n${failed.join('\n')}');
     } on TransferCancelled {
       if (mounted) setState(() => _result = 'Stopped.');
     } catch (e) {
@@ -281,6 +297,22 @@ class _ReceiveTabState extends State<_ReceiveTab> {
             child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
       if (_items.isNotEmpty) ...[
         const SizedBox(height: 12),
+        CheckboxListTile(
+          title: const Text('Select all available items'),
+          value: _items
+              .where((item) => !_have.contains(item.id))
+              .every((item) => _picked.contains(item.id)),
+          onChanged: busy
+              ? null
+              : (selected) => setState(() {
+                    _picked.clear();
+                    if (selected == true) {
+                      _picked.addAll(_items
+                          .where((item) => !_have.contains(item.id))
+                          .map((item) => item.id));
+                    }
+                  }),
+        ),
         for (final it in _items)
           CheckboxListTile(
             value: _picked.contains(it.id),
@@ -303,7 +335,8 @@ class _ReceiveTabState extends State<_ReceiveTab> {
           FilledButton.icon(
               onPressed: _picked.isEmpty ? null : _receive,
               icon: const Icon(Icons.download_rounded),
-              label: Text('Receive ${_picked.length} model${_picked.length == 1 ? '' : 's'}')),
+              label: Text(
+                  'Receive ${_picked.length} item${_picked.length == 1 ? '' : 's'}')),
       ],
       if (_result != null)
         Padding(padding: const EdgeInsets.only(top: 12), child: Text(_result!)),
