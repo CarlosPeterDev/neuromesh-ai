@@ -988,8 +988,12 @@ class ChatController extends GetxController {
         r'\b(files?|attachments?|documents?|workspace|html|pdf|docx|read|summari[sz]e|summary|what (?:is|does) (?:in |inside )?it)\b|ملف|لخص',
         caseSensitive: false,
       ).hasMatch(visibleText);
+      final referencesRecentFile = fileQuestion && RegExp(
+        r'\b(?:read|summari[sz]e|summary|summery|describe|contents?|(?:this|that|the) (?:file|attachment|document))\b|اقرأ|لخص',
+        caseSensitive: false,
+      ).hasMatch(visibleText);
       final recentFile =
-          fileName == null && fileQuestion && explicitFiles.isEmpty
+          fileName == null && referencesRecentFile && explicitFiles.isEmpty
               ? messages.reversed
                   .where((m) =>
                       m.role == 'user' &&

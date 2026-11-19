@@ -1546,6 +1546,7 @@ class AgentService extends GetxService {
         current = msg;
       }
     }
+    final printedToolNames = {for (final tool in _allBuiltIns) tool.name};
     for (var step = 0; step < maxSteps; step++) {
       if (cancelled() || _cancel) break;
       final buf = StringBuffer();
@@ -1565,8 +1566,8 @@ class AgentService extends GetxService {
           final tail = text.lastIndexOf('<');
           final partial =
               tail >= 0 && '<tool_call>'.startsWith(text.substring(tail));
-          onVisible(
-              _stripPrintedTools(partial ? text.substring(0, tail) : text));
+          onVisible(_stripPrintedTools(
+              partial ? text.substring(0, tail) : text, printedToolNames));
         }
       });
       last = last.trim();
@@ -1574,7 +1575,7 @@ class AgentService extends GetxService {
       if (last.startsWith('ERROR:')) return ToolLoopResult(last, trace, false);
       final call = parseToolCall(last);
       if (call == null) {
-        last = _stripPrintedTools(last);
+        last = _stripPrintedTools(last, printedToolNames);
         if (nudges == 0 && !ranTool && isGenericOffer(last)) {
           nudges++;
           hist.add({'role': 'assistant', 'content': last});
@@ -1663,17 +1664,15 @@ class AgentService extends GetxService {
   static bool isGenericOffer(String answer) =>
       _genericOffer.hasMatch(answer.trim());
 
-  String _stripPrintedTools(String reply) {
-    final names = {for (final tool in _allBuiltIns) tool.name};
-    final found = RegExp(r'^\s*([a-z][a-z_0-9]+)\s*\{[^\n]*\}\s*$');
-    return reply
-        .split('\n')
-        .where((line) {
-          final name = found.firstMatch(line)?.group(1);
-          return name == null || !names.contains(name);
-        })
-        .join('\n')
-        .trim();
+  static final _printedTool =
+      RegExp(r'^\s*([a-z][a-z_0-9]+)\s*\{[^\n]*\}\s*$');
+
+  static String _stripPrintedTools(String reply, Set<String> names) {
+    if (!reply.contains('{')) return reply;
+    return reply.split('\n').where((line) {
+      final name = _printedTool.firstMatch(line)?.group(1);
+      return name == null || !names.contains(name);
+    }).join('\n').trim();
   }
 
   static final _wantsFile = RegExp(
