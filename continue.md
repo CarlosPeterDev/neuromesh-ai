@@ -1,79 +1,45 @@
-# NeuroMesh AI — development state
+# NeuroMesh AI development handoff
 
-Updated: 2026-11-19. Repository: carlospeter582011-prog/neuromesh-ai.
-This file records verified results separately from device-dependent behavior.
+## Start here
 
-## Verified release
+NeuroMesh AI is a Flutter workspace for private local AI with optional cloud providers. Users can download or import models, chat with files, work with a tool-using agent, and connect compatible devices. Android uses Kotlin/JNI and bundled llama.cpp. The Windows and Linux packages include a CPU llama-server. See [GitHub](https://github.com/carlospeter582011-prog/neuromesh-ai) and [installation and build instructions](README.md).
 
-Release `v1.0.90` and the moving `latest` contain individually downloadable normal
-ARM64/universal APKs, AAB, Windows EXE, Linux DEB and AppImage. No Pro installer or
-ZIP installer is published. Android/Windows were built by workflow run
-44469443561; Linux was recovered on Ubuntu 24.04 by run 44476354845 after dependency
-downloads exceeded the original timeout. The application code is shared; Linux
-recovery changed build/packaging configuration only.
+Read this file, check the current branch and working tree, and review the latest GitHub runs and open pull requests before choosing work. Update this file when the next task, release status, or known limitations change.
 
-Verified checks:
-- Dart analysis and the Flutter unit/widget suite passed in the Android build.
-- Both Android APK signatures verified and their signing certificates matched.
-- The standalone APK contains ARM64 libraries only. Its downloaded SHA-256 matches
-  the release asset. Version code is 5090.
-- Clean installation and reinstall succeeded on an Android 12/API 31 emulator.
-- Windows and Linux builds and their native image-runtime smoke tests passed.
-- Linux llama-server started with `--version`; the executable dependency check
-  reported no unresolved libraries. Both DEB and AppImage were required to exist.
-- GitHub Latest and v1.0.90 expose matching asset names, sizes and digests.
+## Release and verification
 
-These checks do not establish successful model inference, microphone/echo behavior,
-Bluetooth audio or installation on Carlos's physical Lenovo tablet.
+- The last published build checked on 2026-11-19 was **v1.0.90**, built from `ebfae00`. It has Android ARM64 and universal APKs, a Play AAB, a Windows x64 installer, and Linux x64 DEB and AppImage installers. Android packages are development-signed. [Release](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/tag/v1.0.90)
+- The v1.0.90 Android job passed analysis, tests, bundle and APK checks, and install and reinstall on an Android 12 x86_64 emulator. Windows packaging passed in that run. Linux packaging passed in a later Ubuntu 24.04 recovery run. Its assets were added to the release separately. The v1.0.90 checksum file covers the Android packages. [Original run](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44469443561) · [Linux recovery](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44476354845)
+- Real ARM64 Android inference, Windows and Linux runtime behavior on user devices, and Play internal-track installation still need verification for this build. Confirm any newer results before reporting them.
+- Changes for the next release are tracked in [GitHub issue #13](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/13). The workflow assembles and hashes all six installers before publishing and marks both tags as prereleases when the Android packages are development-signed. The next full build must exercise the changed workflow.
 
-## Implemented capabilities and code locations
+The v1.0.90 checks also confirmed matching APK signing certificates, ARM64-only libraries in the slim APK, and matching assets across the version and moving download pages. Linux `llama-server --version` ran and its runtime dependencies resolved. The voice fixes merged after v1.0.90 prevent interrupted audio from restarting during player setup or when a worker falls back to local speech. On-device microphone, echo, Bluetooth audio, and the physical Lenovo tablet still need testing. [Voice playback PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/14) · [Worker fallback PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/16)
 
-- Skills: `SkillsService`, `SkillsView` and `ContextMentionButton` support creating,
-  editing, importing SKILL.md or a single-skill ZIP, enable/disable switches, and
-  explicit @skill:name / @file mentions. Context is retrieved in bounded pages;
-  preserve source indentation. A small model can still miss instructions.
-- Agent steps: `widgets/agent_steps.dart` renders live summaries, a step list and
-  optional details. Tool traces should not be shown as raw JSON in normal chat.
-- Models: GGUF metadata/helper classification, compatibility guidance and helper
-  search are generic. A helper, a missing split, or an unsupported architecture
-  cannot be made into a standalone text model simply by bypassing validation.
-  See model_helpers, gguf_metadata and image_bundle tests.
-- Voice: calls reuse a chat and workspace, retain messages, allow files, show agent
-  steps and support selected/cloned voices and interruption. Native speech and
-  real microphone sensitivity remain device-dependent.
-- Android Linux workspace: Alpine rootfs is optional and downloaded inside the
-  normal app. Only the loader libraries are bundled. Desktop commands use the
-  computer's shell. Downloaded skills do not bypass existing tool permissions.
-- Diagnostics: model load stages, metadata, device state, native failures and logs
-  feed a previewable ZIP report. Developer delivery is compiled from private CI
-  secrets; downloaders do not enter bot credentials. See SECURITY.md for the
-  unavoidable extractability of credentials embedded in client binaries.
-- Security/transfer regression suites cover secure MCP token handling, tunnel
-  host keys, worker addressing and cluster backup scopes. Hardware/network
-  interoperability still requires real devices.
+## Where to work
 
-## Work following v1.0.90
+| Area | Entry points and current behavior |
+| --- | --- |
+| Chat and agent | `lib/controllers/chat_controller.dart`, `lib/views/chat_view.dart`, `lib/services/agent_service.dart`. Chat supports text, attachments, cloud and local inference. Agent tools cover files, approved actions, MCP, and memory. |
+| Projects, Skills and attachments | `lib/services/agent_service.dart`, `lib/services/skills_service.dart`, `lib/utils/skill_context.dart`, `lib/utils/page_text.dart`. Chats can use named workspaces. Explicit skill mentions are scoped to a chat. Local agent chat can retrieve additional context pages as needed. |
+| Models and local inference | `lib/controllers/model_controller.dart`, `lib/services/hf_service.dart`, `lib/services/model_helper_service.dart`, `lib/services/inference_*.dart`. Some helper files are linked to a main model. Runtime and architecture compatibility depend on the model and platform. |
+| Voice, images and devices | `lib/services/voice_service.dart`, `lib/services/voice_worker.dart`, `lib/services/local_image_service.dart`, `lib/services/cluster_service.dart`, `lib/services/cluster_backup.dart`, `lib/services/openai_server_service.dart`. Platform capabilities vary. |
+| Diagnostics | `lib/services/diagnostics_service.dart`, `lib/views/diagnostics_view.dart`, and `workers/diagnostics/`. The report UI previews the ZIP before sending. See [diagnostic delivery configuration](SECURITY.md#developer-diagnostic-delivery). |
+| Packaging | `.github/workflows/android-release.yml`, `android/app/build.gradle.kts`, `scripts/package_linux.sh`, and `installer/neuromesh.iss`. Build jobs use Flutter 3.38.x. Android uses JDK 17 and application ID `com.neuromesh.ai`. |
 
-Voice playback cancellation is being hardened at asynchronous preparation/start
-boundaries. Regression tests exercise stopping before preparation completes,
-stopping while the native player starts, listener cleanup, and normal playback.
-Do not describe this follow-up as present in v1.0.90; verify its CI/release first.
+## Run the checks
 
-## Release and verification rules
+```bash
+git submodule update --init --recursive
+flutter pub get
+flutter analyze --no-fatal-infos --no-fatal-warnings
+flutter test
+python -m unittest discover -s scripts -p 'test_report_build_config.py'
+```
 
-- Keep Linux release builders on Ubuntu 24.04. Dependency installation excludes
-  recommended extras, uses bounded retries, and has a 20-minute hard deadline.
-- Require both Linux package formats; packaging failures must stop publication.
-- Main releases use 1.0.<run_number>; Android versionCode is 5000 + run_number.
-  Desktop metadata must use the same version name as its installer.
-- Production signing requires the owner's four ANDROID_KEYSTORE_* secrets.
-  Without them Android artifacts are development-signed. A newly generated
-  development signer does not provide a stable certificate for future upgrades.
-- Google Play submission requires separate authorization. No store submission has
-  been performed. Never claim physical-device or full inference tests passed
-  unless they actually ran.
+Full release packaging also needs the dependencies in the GitHub workflow. Linux packaging uses Ubuntu 24.04. The release uses version name `1.0.<run_number>` and Android version code `5000 + run_number`. The Android release path builds the Play AAB and standalone APKs with `PLAY_BUILD=true`. Alpine downloads on demand on supported ARM64 devices. CI generates an ephemeral development key if production signing is unavailable, so plan a clean install when testing different development builds. Follow [release signing](SECURITY.md#release-signing) and [Play Store preparation](docs/PLAY_STORE.md).
 
-## Origin
+## Next tasks
 
-Imported from the MIT-licensed PrivateLM 1.0.7-cluster source. App ID is
-com.neuromesh.ai, Dart package neuromesh_ai, URI scheme neuromesh://.
+1. Review issue #13 and its linked pull request. Confirm the next full Actions run has the Android, Windows, Linux and publication jobs green. Check the release page lists six installers and that `sha256sum -c SHA256SUMS.txt` verifies each file.
+2. On a real ARM64 phone, record the release version, device and Android version. Install and open the app, load a small GGUF, generate a reply, and exercise chat attachments and project workspace recovery. Record pass or fail and link a redacted report for failures.
+3. Smoke-test the Windows installer and both Linux packages on target hosts. Record app launch, model loading and generation results. Verify signing and try the Play internal track before broader distribution.
