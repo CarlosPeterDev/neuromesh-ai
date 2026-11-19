@@ -19,6 +19,7 @@ import '../core/haptics.dart';
 import 'diagnostics_view.dart';
 import 'memory_view.dart';
 import 'workload_placement_view.dart';
+import 'model_transfer_view.dart';
 
 const _tabular = [FontFeature.tabularFigures()];
 
@@ -43,13 +44,14 @@ class _SettingsViewState extends State<SettingsView> {
   static const _keywords = <String, String>{
     'Appearance': 'theme dark light font text size',
     'Inference mode': 'local cloud ollama provider',
-    'Model parameters': 'temperature context size max tokens seed stop sequences top p top k',
+    'Model parameters': 'thinking reasoning temperature context size max tokens seed stop sequences top p top k',
     'GGUF & LiteRT': 'performance cpu gpu vulkan threads hardware acceleration ram',
     'Image generation': 'image size resolution diffusion steps backend',
     'Memory': 'preferences facts remember automatic learning personal',
     'Workload placement': 'voice tts stt speech audio transcribe image device cluster',
     'Phone cluster': 'pair devices master worker server',
     'Report an error': 'diagnostics zip crash bug upload report delivery',
+    'Device transfer': 'move backup migrate restore chats models settings Wi-Fi',
     'Toolbox': 'backup export import files profiles roles prompts',
     'Device': 'free ram storage battery hardware',
     'App updates': 'version release upgrade',
@@ -203,6 +205,14 @@ class _SettingsViewState extends State<SettingsView> {
                 subtitle: 'Roles, prompts, profiles, export, backup',
                 chevron: true,
                 onTap: () => Get.to(() => const ToolboxView()),
+              ),
+              AppRow(
+                icon: Icons.swap_horiz_rounded,
+                title: 'Device transfer',
+                subtitle: 'Move models and app data over Wi-Fi',
+                chevron: true,
+                onTap: () => Get.to(
+                    () => const ModelTransferView(clusterBackup: true)),
               ),
             ]),
             const SectionHeader('Support & app info'),
@@ -758,6 +768,17 @@ class _SettingsViewState extends State<SettingsView> {
 
   Widget _buildModelParametersGroup(BuildContext context) {
     return AppGroup(children: [
+      AppRow(
+        icon: Icons.psychology_outlined,
+        title: 'Local model thinking',
+        subtitle: controller.normalThinking.value
+            ? 'Think normally on supported models'
+            : 'Answer directly on supported models',
+        trailing: Switch(
+          value: controller.normalThinking.value,
+          onChanged: controller.setNormalThinking,
+        ),
+      ),
       _modelParameterSlider(
         context,
         label: 'Temperature',

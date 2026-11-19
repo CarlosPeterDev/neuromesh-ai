@@ -43,7 +43,8 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
         clusterChannel?.dispose()
         clusterChannel = null
         scope.cancel()
-        if (isModelLoaded.get()) {
+        if (isModelLoaded.getAndSet(false)) {
+            nativeStop()
             nativeFreeModel()
         }
         LlamaHostApi.setUp(binding.binaryMessenger, null)
@@ -142,6 +143,13 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
             // it to return, and only then accept tokens again, so its last
             // token or "done" can't leak into this reply.
             previous?.let { nativeStop(); it.join() }
+            ensureActive()
+            if (!isModelLoaded.get()) {
+                withContext(Dispatchers.Main) {
+                    callback(Result.failure(IllegalStateException("Model not loaded")))
+                }
+                return@launch
+            }
             isStopping.set(false)
             try {
                 nativeGenerate(
@@ -164,27 +172,14 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
                     request.penalizeNewline
                 ) { token ->
                     if (!isStopping.get()) {
-                        scope.launch {
-                            withContext(Dispatchers.Main) {
-                                flutterApi.onToken(token) { result ->
-                                    // Handle result if needed
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (!isStopping.get()) {
-                    scope.launch {
-                        withContext(Dispatchers.Main) {
-                            flutterApi.onDone { result ->
-                                // Handle result if needed
-                            }
+                        scope.launch(Dispatchers.Main) {
+                            if (!isStopping.get()) flutterApi.onToken(token) { }
                         }
                     }
                 }
 
                 withContext(Dispatchers.Main) {
+                    if (!isStopping.get()) flutterApi.onDone { }
                     callback(Result.success(Unit))
                 }
             } catch (e: Exception) {
@@ -212,13 +207,13 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
     }
 
     override fun dispose(callback: (Result<Unit>) -> Unit) {
+        val previous = generationJob
+        val shouldFree = isModelLoaded.getAndSet(false)
+        stop { }
         scope.launch {
             try {
-                stop { }
-                if (isModelLoaded.get()) {
-                    nativeFreeModel()
-                    isModelLoaded.set(false)
-                }
+                previous?.join()
+                if (shouldFree) nativeFreeModel()
                 
                 // Stop foreground service
                 val intent = Intent(context, InferenceService::class.java)
@@ -254,6 +249,13 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
             // it to return, and only then accept tokens again, so its last
             // token or "done" can't leak into this reply.
             previous?.let { nativeStop(); it.join() }
+            ensureActive()
+            if (!isModelLoaded.get()) {
+                withContext(Dispatchers.Main) {
+                    callback(Result.failure(IllegalStateException("Model not loaded")))
+                }
+                return@launch
+            }
             isStopping.set(false)
             try {
                 // Only the newest image is sent (earlier ones stay as text).
@@ -296,27 +298,14 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
                     request.penalizeNewline
                 ) { token ->
                     if (!isStopping.get()) {
-                        scope.launch {
-                            withContext(Dispatchers.Main) {
-                                flutterApi.onToken(token) { result ->
-                                    // Handle result if needed
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (!isStopping.get()) {
-                    scope.launch {
-                        withContext(Dispatchers.Main) {
-                            flutterApi.onDone { result ->
-                                // Handle result if needed
-                            }
+                        scope.launch(Dispatchers.Main) {
+                            if (!isStopping.get()) flutterApi.onToken(token) { }
                         }
                     }
                 }
 
                 withContext(Dispatchers.Main) {
+                    if (!isStopping.get()) flutterApi.onDone { }
                     callback(Result.success(Unit))
                 }
             } catch (e: Exception) {

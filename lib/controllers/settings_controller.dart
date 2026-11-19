@@ -49,6 +49,7 @@ class SettingsController extends GetxController {
   final temperature = 0.1.obs;
   final maxTokens = 512.obs;
   final contextSize = 2048.obs;
+  final normalThinking = false.obs;
   final liteRtPerformanceMode = AppConstants.defaultLiteRtPerformanceMode.obs;
 
   final imageSteps = 1.obs;
@@ -192,6 +193,8 @@ class SettingsController extends GetxController {
             AppConstants.keyGlobalSystemPrompt,
             defaultValue: AppConstants.systemPrompt) ??
         AppConstants.systemPrompt;
+    normalThinking.value =
+        _hive.getSetting<bool>('local_normal_thinking') ?? false;
     temperature.value = _hive.getSetting(AppConstants.keyTemperature,
             defaultValue: AppConstants.defaultTemperature) ??
         AppConstants.defaultTemperature;
@@ -685,6 +688,11 @@ class SettingsController extends GetxController {
 
   void cancelModelDebounce() {
     _modelDebounceTimer?.cancel();
+  }
+
+  Future<void> setNormalThinking(bool value) async {
+    normalThinking.value = value;
+    await _hive.setSetting('local_normal_thinking', value);
   }
 
   Future<void> setTemperature(double value) async {

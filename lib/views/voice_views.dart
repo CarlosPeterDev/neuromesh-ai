@@ -347,42 +347,66 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   CameraController? _cam;
   bool _camBusy = false;
 
-  /// Video call: the camera opens and the model sees a frame with every
-  /// sentence you say. Needs a vision model.
+  CameraLensDirection _cameraDirection = CameraLensDirection.front;
+  List<CameraDescription> _callCameras = const [];
+
+  /// The vision model receives a camera frame with the next spoken turn.
   Future<void> _toggleCamera() async {
-    if (_cam != null) {
-      final c = _cam;
-      setState(() => _cam = null);
-      await c?.dispose();
+    if (_camBusy) return;
+    if (_cam case final active?) {
+      setState(() {
+        _cam = null;
+        _camBusy = true;
+      });
+      try {
+        await active.dispose();
+      } finally {
+        if (mounted) setState(() => _camBusy = false);
+      }
       return;
     }
     if (!Get.find<InferenceService>().isVisionLoaded.value) {
       Get.snackbar('Video call needs a vision model',
-          'Load a model that can see images (Models → filter: Vision), then try again.');
+          'Load a model with a matching vision helper and try again.');
       return;
     }
-    if (_camBusy) return;
-    _camBusy = true;
+    await _openCallCamera(_cameraDirection);
+  }
+
+  Future<void> _openCallCamera(CameraLensDirection direction) async {
+    final previous = _cam;
+    setState(() {
+      _camBusy = true;
+      _cam = null;
+    });
+    CameraController? next;
     try {
-      final cams = await availableCameras();
-      if (cams.isEmpty) throw Exception('No camera found.');
-      final cam = cams.firstWhere(
-          (c) => c.lensDirection == CameraLensDirection.front,
-          orElse: () => cams.first);
-      final ctl =
-          CameraController(cam, ResolutionPreset.low, enableAudio: false);
-      await ctl.initialize();
-      if (!mounted) {
-        await ctl.dispose();
-        return;
-      }
-      setState(() => _cam = ctl);
-    } catch (e) {
-      Get.snackbar('Camera unavailable', '$e');
+      await previous?.dispose();
+      if (_callCameras.isEmpty) _callCameras = await availableCameras();
+      if (_callCameras.isEmpty) throw StateError('No camera found.');
+      final camera = _callCameras.firstWhere(
+          (camera) => camera.lensDirection == direction,
+          orElse: () => _callCameras.first);
+      next = CameraController(camera, ResolutionPreset.low, enableAudio: false);
+      await next.initialize();
+      if (!mounted) return;
+      setState(() {
+        _cameraDirection = camera.lensDirection;
+        _cam = next;
+      });
+      next = null;
+    } catch (error) {
+      if (mounted) Get.snackbar('Camera unavailable', '$error');
     } finally {
-      _camBusy = false;
+      await next?.dispose();
+      if (mounted) setState(() => _camBusy = false);
     }
   }
+
+  CameraLensDirection get _otherCamera =>
+      _cameraDirection == CameraLensDirection.front
+          ? CameraLensDirection.back
+          : CameraLensDirection.front;
 
   Future<String?> _snap() async {
     final c = _cam;
@@ -1430,10 +1454,20 @@ class _VoiceCallViewState extends State<VoiceCallView> {
               IconButton.filledTonal(
                   iconSize: 28,
                   tooltip: 'Video call (vision models)',
-                  onPressed: _toggleCamera,
+                  onPressed: _camBusy ? null : _toggleCamera,
                   icon: Icon(_cam != null
                       ? Icons.videocam
                       : Icons.videocam_off_outlined)),
+              if (_cam != null &&
+                  _callCameras
+                      .any((camera) => camera.lensDirection == _otherCamera))
+                IconButton(
+                  tooltip: 'Switch camera',
+                  onPressed: _camBusy || _cam!.value.isTakingPicture
+                      ? null
+                      : () => _openCallCamera(_otherCamera),
+                  icon: const Icon(Icons.cameraswitch_outlined),
+                ),
               const SizedBox(width: 16),
               IconButton.filled(
                   iconSize: 28,

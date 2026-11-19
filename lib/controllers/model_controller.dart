@@ -8,6 +8,7 @@ import 'package:get/get.dart';
 import '../services/download_service.dart';
 import '../utils/llama_archs.dart';
 import '../utils/model_file_role.dart';
+import '../utils/model_fit.dart';
 import '../services/gguf_metadata.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
@@ -61,6 +62,7 @@ class ModelController extends GetxController {
   final fileSizes = <String, int>{}.obs;
   final modelScope = 'local'.obs;
   final externalDownloadKind = Rxn<ModelFileKind>();
+  final libraryFitFilter = Rxn<ModelFit>();
   final libraryKindFilter = Rxn<ModelFileKind>();
   final localFilter = ''.obs;
   final importFileName = ''.obs;
@@ -1388,164 +1390,92 @@ class ModelController extends GetxController {
     await _localImage.unloadModel();
   }
 
-  Future<AiModel?> importModelFromStorage() async {
-    if (isImporting.value) {
-      showToast('Import in Progress', 'Wait for the current import to finish.',
-          tone: ToastTone.warning);
-      return null;
-    }
-
+  Future<List<AiModel>> importModelsFromStorage() async {
+    if (isImporting.value) return [];
     if (Platform.isAndroid) {
-      return _importModelWithAndroidPicker();
+      List<FolderModelFile>? files;
+      isImporting.value = true;
+      importStatus.value = 'Select model and helper files…';
+      try {
+        final result = await _androidImportChannel
+            .invokeMapMethod<String, dynamic>('pickModelFiles');
+        files = _pickedModelFiles(result);
+      } on PlatformException catch (error) {
+        showToast('Import failed', error.message ?? error.code,
+            tone: ToastTone.error);
+      } finally {
+        isImporting.value = false;
+        importStatus.value = '';
+      }
+      return files == null ? <AiModel>[] : await importFolderFiles(files);
     }
 
-    String? partialImportPath;
+    final imported = <String>[];
+    final failed = <String>[];
+    isImporting.value = true;
+    importStatus.value = 'Select model and helper files…';
     try {
-      FilePickerResult? result = await FilePicker.pickFiles(
+      final result = await FilePicker.pickFiles(
         type: FileType.any,
+        allowMultiple: true,
         withData: false,
-        withReadStream: true,
       );
-
-      if (result != null) {
-        final picked = result.files.single;
-        final filename = picked.name;
-        final lower = filename.toLowerCase();
-
-        if (!lower.endsWith('.gguf') &&
-            !lower.endsWith('.litertlm') &&
-            !lower.endsWith('.safetensors')) {
-          showToast('Unsupported Model',
-              'Only .gguf, .litertlm, and .safetensors files can be imported.',
-              tone: ToastTone.warning);
-          return null;
+      for (final picked in result?.files ?? const <PlatformFile>[]) {
+        final name = picked.name;
+        if (!_modelImportName(name) ||
+            picked.path == null ||
+            picked.size <= 0) {
+          failed.add(name);
+          continue;
         }
-
-        final file = picked.path == null ? null : File(picked.path!);
-        final totalBytes = picked.size > 0
-            ? picked.size
-            : file == null
-                ? 0
-                : await file.length();
-        if (totalBytes <= 0) {
-          showToast('Import Failed', 'The selected file is empty.',
-              tone: ToastTone.error);
-          return null;
-        }
-
-        final sourceStream = picked.readStream ?? file?.openRead();
-        if (sourceStream == null) {
-          showToast(
-            'Import Failed',
-            'Unable to read the selected file. Try selecting it from local storage.',
-            tone: ToastTone.error,
-          );
-          return null;
-        }
-
-        final modelsDir = await _download.modelsDir;
-        final destPath = '$modelsDir/$filename';
-        final partPath = '$destPath.part';
-        partialImportPath = partPath;
-        final destFile = File(destPath);
-        final partFile = File(partPath);
-        var shouldReplace = false;
-
-        if (await destFile.exists()) {
-          final replace = await _confirmReplace(filename);
-          if (!replace) return null;
-          shouldReplace = true;
-        }
-
-        isImporting.value = true;
-        importFileName.value = filename;
-        importStatus.value = 'Copying to app storage...';
+        final destination = File(await _download.modelPath(name));
+        if (await destination.exists() && !await _confirmReplace(name))
+          continue;
+        final partial = File('${destination.path}.part');
+        importFileName.value = name;
+        importStatus.value = 'Copying to app storage…';
         importCopiedBytes.value = 0;
-        importTotalBytes.value = totalBytes;
+        importTotalBytes.value = picked.size;
         importBytesPerSecond.value = 0;
-
-        if (await partFile.exists()) {
-          await partFile.delete();
-        }
-
-        await _copyWithProgress(sourceStream, partFile);
-        if (shouldReplace && await destFile.exists()) {
-          await destFile.delete();
-        }
-        await partFile.rename(destPath);
-        fileSizes[filename] = await File(destPath).length();
-
-        await refreshDownloaded();
-        modelScope.value = 'local';
-        importStatus.value = 'Import complete';
-        return availableModels
-            .firstWhereOrNull((model) => model.filename == filename);
-      }
-    } catch (e) {
-      if (partialImportPath != null) {
-        final partialFile = File(partialImportPath);
-        if (await partialFile.exists()) {
-          await partialFile.delete();
+        try {
+          await _copyWithProgress(File(picked.path!).openRead(), partial);
+          if (await partial.length() != picked.size) {
+            throw const FileSystemException(
+                'Selected file size changed while copying.');
+          }
+          await partial.rename(destination.path);
+          fileSizes[name] = picked.size;
+          imported.add(name);
+        } catch (error) {
+          if (await partial.exists()) await partial.delete();
+          failed.add(name);
+          Get.find<AppLogService>()
+              .error('Model import failed', details: error);
         }
       }
-      Get.find<AppLogService>().error('Model import failed', details: e);
-      showToast('Import Failed', '$e', tone: ToastTone.error);
+      return await _finishBatchImport(imported, failed);
+    } catch (error) {
+      showToast('Import failed', '$error', tone: ToastTone.error);
+      return [];
     } finally {
-      isImporting.value = false;
-      importFileName.value = '';
-      importStatus.value = '';
-      importCopiedBytes.value = 0;
-      importTotalBytes.value = 0;
-      importBytesPerSecond.value = 0;
+      _clearImportProgress();
     }
-    return null;
   }
 
-  Future<AiModel?> _importModelWithAndroidPicker() async {
-    try {
-      isImporting.value = true;
-      importFileName.value = '';
-      importStatus.value = 'Select a model file...';
-      importCopiedBytes.value = 0;
-      importTotalBytes.value = 0;
-      importBytesPerSecond.value = 0;
+  bool _modelImportName(String name) =>
+      RegExp(r'^[^/\\]+\.(?:gguf|litertlm|safetensors)$', caseSensitive: false)
+          .hasMatch(name);
 
-      final result =
-          await _androidImportChannel.invokeMapMethod<String, dynamic>(
-        'pickAndImportModel',
-        {'modelsDir': await _download.modelsDir},
+  List<FolderModelFile>? _pickedModelFiles(Map<String, dynamic>? result) {
+    if (result == null || result['cancelled'] == true) return null;
+    return (result['files'] as List? ?? []).map((item) {
+      final file = item as Map;
+      return FolderModelFile(
+        uri: file['uri'] as String,
+        name: file['name'] as String,
+        size: (file['size'] as num).toInt(),
       );
-
-      if (result?['cancelled'] == true) return null;
-
-      final filename = result?['filename'] as String?;
-      if (filename != null && filename.isNotEmpty) {
-        fileSizes[filename] = (result?['bytes'] as num?)?.toInt() ??
-            await _download.getModelSize(filename);
-        await refreshDownloaded();
-        modelScope.value = 'local';
-        return availableModels
-            .firstWhereOrNull((model) => model.filename == filename);
-      }
-    } on PlatformException catch (e) {
-      Get.find<AppLogService>().error(
-        'Android model import failed',
-        details: '${e.code}: ${e.message}',
-      );
-      showToast('Import Failed', e.message ?? e.code, tone: ToastTone.error);
-    } catch (e) {
-      Get.find<AppLogService>()
-          .error('Android model import failed', details: e);
-      showToast('Import Failed', '$e', tone: ToastTone.error);
-    } finally {
-      isImporting.value = false;
-      importFileName.value = '';
-      importStatus.value = '';
-      importCopiedBytes.value = 0;
-      importTotalBytes.value = 0;
-      importBytesPerSecond.value = 0;
-    }
-    return null;
+    }).toList();
   }
 
   /// Folder import is Android only (storage access framework tree picker).
@@ -1557,15 +1487,7 @@ class ModelController extends GetxController {
     try {
       final result = await _androidImportChannel
           .invokeMapMethod<String, dynamic>('pickModelFolder');
-      if (result == null || result['cancelled'] == true) return null;
-      return (result['files'] as List? ?? [])
-          .map((f) => Map<String, dynamic>.from(f as Map))
-          .map((f) => FolderModelFile(
-                uri: f['uri'] as String,
-                name: f['name'] as String,
-                size: (f['size'] as num).toInt(),
-              ))
-          .toList();
+      return _pickedModelFiles(result);
     } on PlatformException catch (e) {
       Get.find<AppLogService>()
           .error('Folder scan failed', details: '${e.code}: ${e.message}');
@@ -1584,23 +1506,32 @@ class ModelController extends GetxController {
           tone: ToastTone.warning);
       return [];
     }
-    final modelsDir = await _download.modelsDir;
     final imported = <String>[];
     final failed = <String>[];
     isImporting.value = true;
     try {
+      final modelsDir = await _download.modelsDir;
       for (final file in files) {
+        if (!_modelImportName(file.name) || file.size <= 0) {
+          failed.add(file.name);
+          continue;
+        }
         importFileName.value = file.name;
         importStatus.value = 'Copying to app storage...';
         importCopiedBytes.value = 0;
         importTotalBytes.value = file.size;
         importBytesPerSecond.value = 0;
         try {
-          final result =
-              await _androidImportChannel.invokeMapMethod<String, dynamic>(
-            'importModelUri',
-            {'uri': file.uri, 'modelsDir': modelsDir},
-          );
+          final args = {'uri': file.uri, 'modelsDir': modelsDir};
+          var result = await _androidImportChannel
+              .invokeMapMethod<String, dynamic>('importModelUri', args);
+          if (result?['exists'] == true) {
+            final name = result?['filename'] as String? ?? file.name;
+            if (!await _confirmReplace(name)) continue;
+            result = await _androidImportChannel
+                .invokeMapMethod<String, dynamic>(
+                    'importModelUri', {...args, 'replace': true});
+          }
           final name = result?['filename'] as String? ?? file.name;
           fileSizes[name] = (result?['bytes'] as num?)?.toInt() ?? file.size;
           imported.add(name);
@@ -1610,31 +1541,38 @@ class ModelController extends GetxController {
               details: '${file.name} · ${e.code}: ${e.message}');
         }
       }
+      return await _finishBatchImport(imported, failed);
+    } finally {
+      _clearImportProgress();
+    }
+  }
+
+  Future<List<AiModel>> _finishBatchImport(
+      List<String> imported, List<String> failed) async {
+    if (imported.isNotEmpty) {
       await refreshDownloaded();
       modelScope.value = 'local';
-      if (failed.isEmpty) {
-        showToast(
-            'Import Successful',
-            imported.length == 1
-                ? '1 file imported.'
-                : '${imported.length} files imported.',
-            tone: ToastTone.success);
-      } else {
-        showToast('Some imports failed',
-            '${imported.length} imported · couldn\'t import ${failed.join(', ')}',
-            tone: ToastTone.warning);
-      }
-      return availableModels
-          .where((model) => imported.contains(model.filename))
-          .toList();
-    } finally {
-      isImporting.value = false;
-      importFileName.value = '';
-      importStatus.value = '';
-      importCopiedBytes.value = 0;
-      importTotalBytes.value = 0;
-      importBytesPerSecond.value = 0;
     }
+    if (failed.isNotEmpty) {
+      showToast('Import finished',
+          '${imported.length} imported · couldn’t import ${failed.join(', ')}',
+          tone: ToastTone.warning);
+    } else if (imported.isNotEmpty) {
+      showToast('Import complete', '${imported.length} file(s) imported.',
+          tone: ToastTone.success);
+    }
+    return availableModels
+        .where((model) => imported.contains(model.filename))
+        .toList();
+  }
+
+  void _clearImportProgress() {
+    isImporting.value = false;
+    importFileName.value = '';
+    importStatus.value = '';
+    importCopiedBytes.value = 0;
+    importTotalBytes.value = 0;
+    importBytesPerSecond.value = 0;
   }
 
   Future<void> _copyWithProgress(

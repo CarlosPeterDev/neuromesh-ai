@@ -239,6 +239,7 @@ class _SetupViewState extends State<SetupView> {
   Future<void> _installSandbox(SandboxService sb, {required bool withTools}) async {
     try {
       await sb.install();
+      await _hive.setSetting('restore_alpine_recommended', false);
       if (withTools) {
         final result = await sb.run(
           'apk add --no-cache ${sandboxProfiles['basic']}',
@@ -267,33 +268,43 @@ class _SetupViewState extends State<SetupView> {
     }
     final alpine = Get.find<SandboxService>();
     return Obx(() => Column(children: [
-      if (alpine.installed.value)
-        AppRow(
-          icon: Icons.terminal_rounded,
-          title: 'Alpine Linux installed',
-          subtitle: 'Open the terminal',
-          chevron: true,
-          onTap: () => Get.to(() => const AlpineTerminalView()),
-        )
-      else if (alpine.busy.value)
-        AppRow(
-          icon: Icons.terminal_rounded,
-          title: 'Installing Alpine Linux',
-          subtitle: alpine.status.value,
-          trailing: SizedBox.square(
-            dimension: 20,
-            child: CircularProgressIndicator(value: alpine.downloadProgress.value),
-          ),
-        )
-      else
-        _sw(Icons.terminal_rounded, 'Install Alpine Linux',
-            'About 4 MB. Opens a local terminal that shares this chat’s workspace.',
-            sandbox, (value) => sandbox = value),
-      if (alpine.installed.value || (sandbox && !alpine.busy.value))
-        _sw(Icons.code_rounded, 'Alpine developer tools',
-            'Optional. Downloads Python, Node.js, Git and other command-line tools.',
-            sandboxTools, (value) => sandboxTools = value, rec: false),
-    ]));
+          if (alpine.installed.value)
+            AppRow(
+              icon: Icons.terminal_rounded,
+              title: 'Alpine Linux installed',
+              subtitle: 'Open the terminal',
+              chevron: true,
+              onTap: () => Get.to(() => const AlpineTerminalView()),
+            )
+          else if (alpine.busy.value)
+            AppRow(
+              icon: Icons.terminal_rounded,
+              title: 'Installing Alpine Linux',
+              subtitle: alpine.status.value,
+              trailing: SizedBox.square(
+                dimension: 20,
+                child: CircularProgressIndicator(
+                    value: alpine.downloadProgress.value),
+              ),
+            )
+          else
+            _sw(
+                Icons.terminal_rounded,
+                'Install Alpine Linux',
+                _hive.getSetting<bool>('restore_alpine_recommended') == true
+                    ? 'Your previous device used Alpine. Reinstall it to open the restored workspace in the terminal.'
+                    : 'About 4 MB. Opens a local terminal that shares this chat’s workspace.',
+                sandbox,
+                (value) => sandbox = value),
+          if (alpine.installed.value || (sandbox && !alpine.busy.value))
+            _sw(
+                Icons.code_rounded,
+                'Alpine developer tools',
+                'Optional. Downloads Python, Node.js, Git and other command-line tools.',
+                sandboxTools,
+                (value) => sandboxTools = value,
+                rec: false),
+        ]));
   }
 
   Widget _sw(IconData icon, String title, String sub, bool v, void Function(bool) on, {bool rec = true}) =>

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -106,6 +107,7 @@ class DiagnosticsService {
       for (final (title, key) in [
         ('Last model load failure', ModelLoadDiagnostics.failureKey),
         ('Unfinished load checkpoint', ModelLoadDiagnostics.pendingKey),
+        ('Last local image-reading attempt', 'last_vision_attempt'),
       ]) {
         final snapshot = hive.getSetting<Map>(key);
         if (snapshot == null) continue;
@@ -184,9 +186,10 @@ class DiagnosticsService {
     String preview, {
     http.Client? client,
     TelegramReportDelivery? destination,
+    void Function(String phase)? onProgress,
   }) async {
     final uri = _submissionEndpoint;
-    final direct = destination ?? _buildDestination;
+    final direct = destination ?? (uri == null ? _buildDestination : null);
     if (uri == null && direct == null) {
       throw const ReportSubmissionError(
           'Report delivery is not configured in this build.');
@@ -199,6 +202,7 @@ class DiagnosticsService {
 
     final transport = client ?? http.Client();
     try {
+      onProgress?.call('Sending report…');
       final response = await (direct != null
               ? direct.send(preview, transport)
               : transport
@@ -208,6 +212,30 @@ class DiagnosticsService {
                     ..bodyBytes = bytes)
                   .then(http.Response.fromStream))
           .timeout(const Duration(seconds: 25));
+      onProgress?.call('Checking delivery…');
+      Object? payload;
+      try {
+        payload = jsonDecode(response.body);
+      } on FormatException {
+        // Intermediaries may return an HTML error page.
+      }
+      if (response.statusCode == 200 &&
+          payload is Map &&
+          payload['ok'] == true) {
+        return;
+      }
+      final code = payload is Map ? payload['code'] : null;
+      if ((direct != null &&
+              const {400, 401, 403, 404}.contains(response.statusCode)) ||
+          code == 'telegram_rejected_delivery') {
+        throw const ReportSubmissionError(
+            'Telegram rejected delivery. Check the bot token, chat ID, and the bot’s access to that chat.');
+      }
+      if (code == 'delivery_not_configured' ||
+          const {401, 403, 404}.contains(response.statusCode)) {
+        throw const ReportSubmissionError(
+            'The support endpoint or its delivery credentials need to be configured.');
+      }
       if (response.statusCode == 429) {
         throw const ReportSubmissionError(
             'Too many reports were sent. Try again in a minute.');
@@ -224,14 +252,13 @@ class DiagnosticsService {
         throw const ReportSubmissionError(
             'Support delivery is temporarily unavailable.');
       }
-      if (response.statusCode == 200) {
-        final result = jsonDecode(response.body);
-        if (result is Map && result['ok'] == true) return;
-      }
       throw const ReportSubmissionError(
           'Could not send the report. Try again later.');
     } on ReportSubmissionError {
       rethrow;
+    } on TimeoutException {
+      throw const ReportSubmissionError(
+          'The support service timed out. Delivery could not be confirmed.');
     } catch (_) {
       throw const ReportSubmissionError(
           'Delivery could not be confirmed. Check your connection.');

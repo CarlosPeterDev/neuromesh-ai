@@ -121,6 +121,12 @@ void main() {
             'Create audio file that says hello Carlos using tts tool with voice af_heart'),
         isNull);
     expect(literalSpeechText('Can you create a file'), isNull);
+    expect(literalSpeechText('Create a file audio says hello Carlos'),
+        'hello Carlos');
+    expect(
+        literalSpeechText(
+            'Use the tts tool and create audio file says hello carlos'),
+        'hello carlos');
     expect(
         literalSpeechText(
             'Use the TTS tool to create a file says hello Carlos'),

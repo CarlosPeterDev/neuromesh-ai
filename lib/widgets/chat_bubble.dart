@@ -1,3 +1,4 @@
+import 'chat_math.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -221,7 +222,12 @@ class ChatBubble extends StatelessWidget {
                 selectable: true,
                 // Plain URLs become tappable links too, not only [text](url).
                 extensionSet: md.ExtensionSet.gitHubFlavored,
-                builders: {'pre': _CodeBlockBuilder(context)},
+                inlineSyntaxes: chatMathSyntax(),
+                blockSyntaxes: const [ChatMathBlock()],
+                builders: {
+                  ...chatMathBuilders(),
+                  'pre': _CodeBlockBuilder(context)
+                },
                 styleSheet: answerStyle(context),
                 sizedImageBuilder: (cfg) => cfg.uri.toString().startsWith(nmFileScheme)
                     ? agentImage(cfg.uri, cfg.alt, project: message.workspaceProject)

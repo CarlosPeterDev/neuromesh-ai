@@ -29,6 +29,7 @@ import '../services/skills_service.dart';
 import '../utils/skill_context.dart';
 import '../services/rag_service.dart';
 import '../services/agent_service.dart';
+import '../services/agent_tools.dart';
 import '../services/download_service.dart';
 import '../widgets/tool_confirm.dart';
 import '../services/web_search_service.dart';
@@ -1095,26 +1096,21 @@ class ChatController extends GetxController {
       var finalPrompt = genPrompt;
       WebContext? webCtx;
       final explicitSearch = explicitlyRequestsWebSearch(visibleText);
-      final freshQuestion = !fileQuestion && asksForCurrentFacts(visibleText);
       final web = Get.isRegistered<WebSearchService>()
           ? Get.find<WebSearchService>()
           : null;
       final searchRequested = explicitSearch ||
           (evidenceName == null &&
               !fileQuestion &&
-              (web?.shouldSearch(visibleText) == true ||
-                  (local &&
-                      freshQuestion &&
-                      contextAgent.wantsTools(visibleText))));
+              imagePath == null &&
+              fileType != 'audio' &&
+              web?.shouldSearch(visibleText) == true);
       String? unavailableEvidence;
       if (textEvidence && !readable) {
         unavailableEvidence =
             'I couldn’t read "$evidenceName". Reattach the file so I can answer from its contents.';
       } else if (explicitFiles.isNotEmpty && referencedFiles.isEmpty) {
         unavailableEvidence = 'I couldn’t read the referenced workspace files.';
-      } else if (freshQuestion && !searchRequested) {
-        unavailableEvidence =
-            'Live search is off for this chat. Ask me to search the web to check the current answer.';
       }
       if (unavailableEvidence == null && searchRequested) {
         streamingResponse.value = '🔍 Searching the web…';
@@ -1184,8 +1180,34 @@ class ChatController extends GetxController {
         history.removeRange(0, history.length - 1);
       }
 
+      final directSpeech = webCtx == null &&
+          fileName == null &&
+          imagePath == null &&
+          imageBase64 == null &&
+          visibleText == text &&
+          literalSpeechText(visibleText) != null &&
+          (skillContext?.documents.isEmpty ?? true);
       if (unavailableEvidence != null) {
         rawResponse = unavailableEvidence;
+      } else if (directSpeech) {
+        final result = await contextAgent.inProject(
+            project,
+            () => contextAgent.runToolLoop(
+                  generate: (_, __, ___) async => '',
+                  prompt: visibleText,
+                  userText: visibleText,
+                  history: const [],
+                  confirm: confirmToolCall,
+                  cancelled: () => generationId != _generationSerial,
+                  onVisible: (_) {},
+                  onStatus: (_) {},
+                  onTrace: (trace) {
+                    if (generationId == _generationSerial) {
+                      streamingResponse.value = trace.join('\n');
+                    }
+                  },
+                ));
+        rawResponse = result.markdown;
       } else if (inferenceMode == 'local') {
         final localImage = Get.find<LocalImageService>();
 
@@ -1293,6 +1315,7 @@ class ChatController extends GetxController {
                       caseSensitive: false)
                   .hasMatch(visibleText);
           final useTools = webCtx == null &&
+              streamingAttachmentType.value == null &&
               !readOnlyFileQuestion &&
               agent.wantsTools(visibleText,
                   hasFile: needsFileTools ||
@@ -1344,8 +1367,10 @@ class ChatController extends GetxController {
             );
           }
 
-          await _compactHistory(
-              history, system, finalPrompt, inference, generationId, sessionId);
+          if (imagePath == null) {
+            await _compactHistory(history, system, finalPrompt, inference,
+                generationId, sessionId);
+          }
           if (generationId != _generationSerial) return;
 
           if (!useTools) {

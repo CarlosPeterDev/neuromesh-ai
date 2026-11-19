@@ -10,12 +10,12 @@ class ParsedToolCall {
 }
 
 final _literalSpeechRequest = RegExp(
-  r'^\s*(?:please\s+)?(?:create|make|generate)\s+(?:an?\s+)?(?:audio|wav)\s+file\s+(?:that\s+)?(?:says?|saying)\s+(.+?)\s+using\s+(?:the\s+)?(?:tts|text.to.speech)\s+tool[.!]?\s*$',
+  r'^\s*(?:please\s+)?(?:create|make|generate)\s+(?:an?\s+)?(?:(?:audio|wav)\s+file|file\s+(?:audio|wav))\s+(?:that\s+)?(?:says?|saying)\s+(.+?)(?:\s+using\s+(?:the\s+)?(?:tts|text.to.speech)(?:\s+tool)?[.!]?)?\s*$',
   caseSensitive: false,
 );
 
 final _toolFirstSpeechRequest = RegExp(
-  r'^\s*(?:please\s+)?use\s+(?:the\s+)?(?:tts|text.to.speech)(?:\s+tool)?\s+to\s+(?:create|make|generate)\s+(?:an?\s+)?(?:(?:audio|wav)\s+)?file\s+(?:that\s+)?(?:says?|saying)\s+(.+?)\s*$',
+  r'^\s*(?:please\s+)?use\s+(?:the\s+)?(?:tts|text.to.speech)(?:\s+tool)?\s+(?:to|and)\s+(?:create|make|generate)\s+(?:an?\s+)?(?:(?:audio|wav)\s+)?file\s+(?:that\s+)?(?:says?|saying)\s+(.+?)\s*$',
   caseSensitive: false,
 );
 
@@ -25,6 +25,9 @@ String? literalSpeechText(String request) {
       _toolFirstSpeechRequest.firstMatch(request);
   var text = match?.group(1)?.trim();
   if (text == null || text.isEmpty) return null;
+  if (RegExp(r'\s+using\s+(?:the\s+)?(?:tts|text.to.speech)\b',
+          caseSensitive: false)
+      .hasMatch(text)) return null;
   if ((text.startsWith('"') && text.endsWith('"')) ||
       (text.startsWith('“') && text.endsWith('”'))) {
     text = text.substring(1, text.length - 1).trim();

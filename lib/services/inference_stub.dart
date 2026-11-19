@@ -58,6 +58,7 @@ class InferenceEngine {
     String? imagePath,
     String? audioPath,
     String source = 'chat',
+    bool normalThinking = false,
     void Function(String token)? onToken,
   }) async {
     return 'ERROR: Local inference is not available on this platform. Use Cloud mode.';

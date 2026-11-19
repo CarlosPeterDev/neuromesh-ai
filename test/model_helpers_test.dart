@@ -19,6 +19,10 @@ void main() {
     expect(modelFileRole('vae/diffusion_pytorch_model.safetensors'),
         ModelFileRole.imageAddon);
     expect(modelFileRole('adapter_model.safetensors'), ModelFileRole.adapter);
+    expect(modelFileRole('Huihui-Qwen3.8-27B-abliterated-patch-all-5.gguf'),
+        ModelFileRole.patch);
+    expect(modelFileKind('Qwen3.5-0.8B-Artemis-imatrix.gguf'),
+        ModelFileKind.helper);
   });
 
   test(

@@ -29,7 +29,7 @@ interface ChatTemplate {
  * 
  * Reference: https://github.com/QwenLM/Qwen
  */
-class ChatMLTemplate : ChatTemplate {
+class ChatMLTemplate(private val assistantPrefix: String = "") : ChatTemplate {
     override val name = "chatml"
     
     override fun format(messages: List<TemplateChatMessage>): String {
@@ -41,7 +41,7 @@ class ChatMLTemplate : ChatTemplate {
         }
         
         // Add the final assistant turn start for generation prompt
-        builder.append("<|im_start|>assistant\n")
+        builder.append("<|im_start|>assistant\n").append(assistantPrefix)
         
         return builder.toString()
     }
@@ -654,6 +654,7 @@ object ChatTemplateManager {
         "qwen" to ChatMLTemplate(),
         "qwen2" to ChatMLTemplate(),
         "qwen2.5" to ChatMLTemplate(),
+        "qwen3-direct" to ChatMLTemplate("<think>\n\n</think>\n\n"),
         "command-r" to ChatMLTemplate(),
         
         // Llama family

@@ -1,6 +1,5 @@
 package com.neuromesh.ai
 
-import android.app.AlertDialog
 import android.app.AlarmManager
 import android.app.DownloadManager
 import android.app.PendingIntent
@@ -34,7 +33,6 @@ class MainActivity : FlutterActivity() {
 
     private var importChannel: MethodChannel? = null
     private var pendingImportResult: MethodChannel.Result? = null
-    private var pendingModelsDir: String? = null
     private val monitoredInAppDownloads = ConcurrentHashMap.newKeySet<Long>()
 
     private val deviceBridge by lazy { DeviceBridge(this) }
@@ -51,17 +49,11 @@ class MainActivity : FlutterActivity() {
         importChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, importChannelName)
         importChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
-                "pickAndImportModel" -> {
+                "pickModelFiles" -> {
                     if (pendingImportResult != null) {
                         result.error("IMPORT_BUSY", "Another model import is already running.", null)
                         return@setMethodCallHandler
                     }
-                    val modelsDir = call.argument<String>("modelsDir")
-                    if (modelsDir.isNullOrBlank()) {
-                        result.error("INVALID_DIR", "Models directory is missing.", null)
-                        return@setMethodCallHandler
-                    }
-                    pendingModelsDir = modelsDir
                     pendingImportResult = result
                     openModelPicker()
                 }
@@ -89,14 +81,22 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     val uri = Uri.parse(uriString)
+                    val filename = sanitizeFilename(displayNameFor(uri))
+                    if (!isModelImportName(filename)) {
+                        result.error("UNSUPPORTED_MODEL", "Select a GGUF, LiteRT-LM or safetensors file.", null)
+                        return@setMethodCallHandler
+                    }
                     val size = sizeFor(uri)
                     if (size <= 0L) {
                         result.error("EMPTY_MODEL", "The file is empty or unreadable.", null)
                         return@setMethodCallHandler
                     }
                     pendingImportResult = result
-                    pendingModelsDir = modelsDir
-                    val destination = File(modelsDir, sanitizeFilename(displayNameFor(uri)))
+                    val destination = File(modelsDir, filename)
+                    if (destination.exists() && call.argument<Boolean>("replace") != true) {
+                        finishImportSuccess(mapOf("exists" to true, "filename" to destination.name))
+                        return@setMethodCallHandler
+                    }
                     copyUriToModel(uri, destination, size, destination.exists())
                 }
                 "downloadToDownloads" -> {
@@ -656,10 +656,14 @@ class MainActivity : FlutterActivity() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
-        startActivityForResult(intent, importRequestCode)
+        try {
+            startActivityForResult(intent, importRequestCode)
+        } catch (e: Exception) {
+            finishImportError("PICK_FAILED", "Could not open the document picker.")
+        }
     }
 
     @Deprecated("Deprecated in Java")
@@ -671,58 +675,27 @@ class MainActivity : FlutterActivity() {
             return
         }
         if (requestCode != importRequestCode) return
-
-        if (resultCode != RESULT_OK || data?.data == null) {
+        if (resultCode != RESULT_OK || data == null) {
             finishImportSuccess(mapOf("cancelled" to true))
             return
         }
-
-        val uri = data.data!!
-        try {
-            contentResolver.takePersistableUriPermission(
-                uri,
-                data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-        } catch (_: Exception) {
-            // Some providers do not allow persistable grants; the one-shot grant is enough here.
+        val uris = mutableSetOf<Uri>()
+        data.data?.let { uris.add(it) }
+        data.clipData?.let { clip ->
+            for (i in 0 until clip.itemCount) {
+                clip.getItemAt(i).uri?.let { uris.add(it) }
+            }
         }
-
-        val filename = displayNameFor(uri)
-        val lower = filename.lowercase()
-        if (!lower.endsWith(".gguf") && !lower.endsWith(".litertlm") && !lower.endsWith(".safetensors")) {
-            finishImportError(
-                "UNSUPPORTED_MODEL",
-                "Only .gguf, .litertlm, and .safetensors files can be imported."
-            )
-            return
-        }
-
-        val size = sizeFor(uri)
-        if (size <= 0L) {
-            finishImportError("EMPTY_MODEL", "The selected file is empty or unreadable.")
-            return
-        }
-
-        val modelsDir = pendingModelsDir
-        if (modelsDir.isNullOrBlank()) {
-            finishImportError("INVALID_DIR", "Models directory is missing.")
-            return
-        }
-
-        val destination = File(modelsDir, sanitizeFilename(filename))
-        if (destination.exists()) {
-            AlertDialog.Builder(this)
-                .setTitle("Model already imported")
-                .setMessage("${destination.name} already exists in app storage. Replace it?")
-                .setNegativeButton("Cancel") { _, _ ->
-                    finishImportSuccess(mapOf("cancelled" to true))
+        thread(name = "inspect-model-import") {
+            try {
+                val files = uris.map { uri ->
+                    mapOf("uri" to uri.toString(), "name" to displayNameFor(uri),
+                          "size" to sizeFor(uri))
                 }
-                .setPositiveButton("Replace") { _, _ ->
-                    copyUriToModel(uri, destination, size, true)
-                }
-                .show()
-        } else {
-            copyUriToModel(uri, destination, size, false)
+                finishImportSuccess(mapOf("files" to files))
+            } catch (e: Exception) {
+                finishImportError("PICK_FAILED", "Could not read the selected files.")
+            }
         }
     }
 
@@ -830,7 +803,9 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
-                if (replacing && destination.exists()) destination.delete()
+                if (copied != totalBytes) {
+                    throw IllegalStateException("Selected file size changed while copying.")
+                }
                 if (!partFile.renameTo(destination)) {
                     throw IllegalStateException("Unable to finalize imported model.")
                 }
@@ -939,7 +914,6 @@ class MainActivity : FlutterActivity() {
         mainHandler.post {
             pendingImportResult?.success(payload)
             pendingImportResult = null
-            pendingModelsDir = null
         }
     }
 
@@ -947,7 +921,6 @@ class MainActivity : FlutterActivity() {
         mainHandler.post {
             pendingImportResult?.error(code, message, null)
             pendingImportResult = null
-            pendingModelsDir = null
         }
     }
 
@@ -974,6 +947,11 @@ class MainActivity : FlutterActivity() {
                 }
             }
         return -1L
+    }
+
+    private fun isModelImportName(name: String): Boolean {
+        return name.substringAfterLast('.', "").lowercase() in
+            setOf("gguf", "litertlm", "safetensors")
     }
 
     private fun sanitizeFilename(filename: String): String {

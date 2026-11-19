@@ -29,4 +29,12 @@ void main() {
       isNull,
     );
   });
+  test('a high-latency worker is skipped when faster placement can fit', () {
+    final shares = placeSequentialLayers([
+      (capacityMb: 650.0, bandwidthGbps: 5.0, latencyMs: 0.0),
+      (capacityMb: 500.0, bandwidthGbps: 8.0, latencyMs: 3.0),
+      (capacityMb: 300.0, bandwidthGbps: 30.0, latencyMs: 90.0),
+    ], 1000);
+    expect(shares, [500.0, 500.0, 0.0]);
+  });
 }

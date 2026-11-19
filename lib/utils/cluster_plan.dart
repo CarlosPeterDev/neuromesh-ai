@@ -35,3 +35,54 @@ List<double>? distributeClusterLoad(
   }
   return shares;
 }
+
+/// Estimates sequential layer time from memory bandwidth and the fixed RPC
+/// cost of adding a device. Probes measure reachability and connection latency,
+/// while advertised bandwidth is a memory benchmark, not generation speed.
+List<double> placeSequentialLayers(
+    List<({double capacityMb, double bandwidthGbps, double latencyMs})> phones,
+    double requiredMb) {
+  if (phones.isEmpty) return [];
+  List<double>? best;
+  var bestCost = double.infinity;
+  final bySpeed = List.generate(phones.length, (i) => i)
+    ..sort(
+        (a, b) => phones[b].bandwidthGbps.compareTo(phones[a].bandwidthGbps));
+
+  void compare(List<int> devices) {
+    final shares = List<double>.filled(phones.length, 0);
+    var remaining = requiredMb;
+    var cost = 0.0;
+    for (final index in devices) {
+      final p = phones[index];
+      final share = math.min(remaining, p.capacityMb);
+      if (share <= 0) continue;
+      shares[index] = share;
+      remaining -= share;
+      // MB / GB per second approximates milliseconds. Include a small fixed
+      // network penalty even when a TCP probe completed below clock resolution.
+      cost += share / math.max(p.bandwidthGbps, 0.5);
+      if (index != 0) cost += math.max(p.latencyMs * 4, 4);
+    }
+    if (remaining <= 1e-6 && cost < bestCost) {
+      best = shares;
+      bestCost = cost;
+    }
+  }
+
+  // Check all worker combinations for small clusters. Larger clusters use
+  // device prefixes to keep planning time bounded.
+  if (phones.length <= 9) {
+    for (var mask = 0; mask < (1 << (phones.length - 1)); mask++) {
+      compare([
+        for (final index in bySpeed)
+          if (index == 0 || (mask & (1 << (index - 1))) != 0) index,
+      ]);
+    }
+  } else {
+    for (var count = 1; count <= bySpeed.length; count++) {
+      compare(bySpeed.take(count).toList());
+    }
+  }
+  return best ?? List<double>.filled(phones.length, 0);
+}

@@ -346,10 +346,22 @@ class _ClusterViewState extends State<ClusterView> {
         mainAxisSize: MainAxisSize.min,
         children: [
           for (final (profile, details) in const [
-            (ClusterProfile.automatic, 'Keep your context setting and balance speed with available RAM.'),
-            (ClusterProfile.speed, 'Use this device if it fits. Otherwise place work on the fastest available devices and use up to 2,048 context tokens.'),
-            (ClusterProfile.context, 'Share work across available memory and estimate the largest window the GGUF and devices can hold, up to 32,768 tokens.'),
-            (ClusterProfile.capacity, 'Use available memory for model layers and keep context at 512 tokens to make room for larger models.'),
+            (
+              ClusterProfile.automatic,
+              'Keep your context setting. Add workers when the model needs more memory, using their bandwidth and connection latency.'
+            ),
+            (
+              ClusterProfile.speed,
+              'Use this device if it fits. Otherwise choose workers using their bandwidth and connection latency and use up to 2,048 context tokens.'
+            ),
+            (
+              ClusterProfile.context,
+              'Share work across available memory and estimate the largest window the GGUF and devices can hold, up to 32,768 tokens.'
+            ),
+            (
+              ClusterProfile.capacity,
+              'Use available memory for model layers and keep context at 512 tokens to make room for larger models.'
+            ),
           ])
             ListTile(
               title: Text(_profileLabel(profile)),

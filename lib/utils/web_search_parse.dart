@@ -1,10 +1,13 @@
 import 'dart:convert';
 
+import 'package:xml/xml.dart';
+
 class WebResult {
   final String title;
   final String url;
   final String snippet;
-  const WebResult(this.title, this.url, this.snippet);
+  final String? publisher;
+  const WebResult(this.title, this.url, this.snippet, {this.publisher});
 }
 
 String _clean(String s) => s
@@ -52,6 +55,34 @@ List<WebResult> parseDdgHtml(String html, {int max = 5}) {
   return out;
 }
 
+/// Parses dated publisher headlines from a Google News search feed.
+List<WebResult> parseNewsRss(String body, {int max = 5}) {
+  try {
+    final results = <WebResult>[];
+    for (final item in XmlDocument.parse(body).findAllElements('item')) {
+      final title = _clean(item.getElement('title')?.innerText ?? '');
+      final url = Uri.tryParse(item.getElement('link')?.innerText.trim() ?? '');
+      final source = item.getElement('source');
+      final host = Uri.tryParse(source?.getAttribute('url') ?? '')?.host;
+      if (title.isEmpty ||
+          url?.scheme != 'https' ||
+          url?.host != 'news.google.com' ||
+          host == null ||
+          host.isEmpty) {
+        continue;
+      }
+      final date = item.getElement('pubDate')?.innerText.trim();
+      results.add(WebResult(title, url.toString(),
+          '${source?.innerText ?? host}${date == null ? '' : ' · $date'}',
+          publisher: host));
+      if (results.length >= max) break;
+    }
+    return results;
+  } on XmlException {
+    return [];
+  }
+}
+
 /// Parses the Wikipedia generator=search extract response.
 List<WebResult> parseWikipedia(String body, String lang, {int max = 3}) {
   try {
@@ -77,11 +108,17 @@ final _recency = RegExp(
 final _arabic = RegExp(
     r'(اليوم|الآن|حاليا|حالياً|آخر|أخر|أخبار|اخبار|سعر|أسعار|طقس|الطقس|نتيجة|نتائج|ابحث|دور|بحث|ماذا حدث|هذا الأسبوع|هذا الشهر|202\d)');
 
+final _modelRanking = RegExp(
+    r'\b(?:best|strongest|leading|top)\b.{0,45}\b(?:ai|llm|language model|model)s?\b',
+    caseSensitive: false);
+
 /// Cheap check for "this question probably needs fresh information".
 bool needsWebSearch(String question) {
   final q = question.trim();
   if (q.length < 8) return false;
-  return _recency.hasMatch(q) || _arabic.hasMatch(q);
+  return _recency.hasMatch(q) ||
+      _arabic.hasMatch(q) ||
+      _modelRanking.hasMatch(q);
 }
 
 /// Questions whose answers depend on current information.
