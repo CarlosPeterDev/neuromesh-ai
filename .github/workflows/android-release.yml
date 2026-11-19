@@ -274,16 +274,17 @@ jobs:
   # next to the app; the AI's shell commands use the computer's own shell.
   desktop:
     if: github.event_name != 'pull_request'
-    needs: build
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-24.04]
-    env:
-      RELEASE_VERSION: ${{ needs.build.outputs.version }}
     steps:
+      - name: Compute desktop version
+        shell: bash
+        run: echo "RELEASE_VERSION=${BASE_VERSION}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -297,8 +298,27 @@ jobs:
       - name: Linux build tools
         if: runner.os == 'Linux'
         run: |
-          sudo timeout --kill-after=30s 300s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
-          sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 1200s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends clang cmake ninja-build pkg-config libgtk-3-dev libasound2-dev libsecret-1-dev liblzma-dev libayatana-appindicator3-dev libmpv-dev mpv libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+          set -euo pipefail
+          packages=(clang cmake ninja-build pkg-config libgtk-3-dev libasound2-dev libsecret-1-dev
+            liblzma-dev libayatana-appindicator3-dev libmpv-dev libgstreamer1.0-dev
+            libgstreamer-plugins-base1.0-dev)
+          apt_options=(-o Acquire::Retries=1 -o Acquire::http::Timeout=12 -o Acquire::https::Timeout=12)
+          fetch_packages() {
+            sudo timeout --kill-after=20s 150s apt-get "${apt_options[@]}" update &&
+              sudo timeout --kill-after=20s 360s apt-get "${apt_options[@]}" install \
+                -y --download-only --no-install-recommends "${packages[@]}"
+          }
+          if ! fetch_packages; then
+            echo "::warning::Runner Ubuntu mirror stalled. Trying a signed Ubuntu archive mirror."
+            source_list="$RUNNER_TEMP/ubuntu-fallback.list"
+            for suite in noble noble-updates noble-security; do
+              echo "deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://mirror.math.princeton.edu/pub/ubuntu/ $suite main restricted universe multiverse"
+            done > "$source_list"
+            apt_options+=(-o "Dir::Etc::sourcelist=$source_list" -o Dir::Etc::sourceparts=-)
+            fetch_packages
+          fi
+          sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=20s 480s apt-get \
+            "${apt_options[@]}" install -y --no-download --no-install-recommends "${packages[@]}"
           flutter config --enable-linux-desktop
 
       - name: Windows desktop

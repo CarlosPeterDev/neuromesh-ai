@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../services/desktop_command_service.dart';
+import '../views/desktop_access_view.dart';
 import 'package:get/get.dart';
 
 import '../controllers/home_controller.dart';
@@ -57,7 +59,7 @@ class NavSection {
   const NavSection(this.title, this.icon, this.entries);
 }
 
-/// Every screen of the app, grouped. The drawer's Menu tab renders this list,
+/// Every screen of the app, grouped. The drawer's Settings tab renders this list,
 /// so adding a screen here makes it appear in the menu.
 ///
 /// To add a new screen, add one NavEntry below.
@@ -88,6 +90,9 @@ List<NavSection> buildNavSections() => [
         NavEntry('Roles', 'Your own personas for chats',
             Icons.theater_comedy_outlined,
             page: () => const RolesView()),
+        if (hasDesktopShell)
+          NavEntry('Desktop command access', 'Local shell, VM and approvals',
+              Icons.terminal_rounded, page: () => const DesktopAccessView()),
         if (SandboxService.supported)
           NavEntry('Linux sandbox', 'Download Alpine and run commands',
               Icons.terminal_rounded,

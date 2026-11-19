@@ -13,6 +13,8 @@ import '../core/constants.dart';
 import '../core/ui.dart';
 import 'app_log_service.dart';
 import 'hive_service.dart';
+import 'gguf_metadata.dart';
+import '../utils/cluster_plan.dart';
 import 'inference_service.dart';
 import '../controllers/model_controller.dart';
 
@@ -71,6 +73,26 @@ class ClusterService extends GetxService {
   final enabled = false.obs;
 
   final found = <ClusterWorker>[].obs;
+  final profile = ClusterProfile.automatic.obs;
+  final loadWeights = <String, int>{}.obs;
+  static const localDeviceKey = 'local';
+
+  static String workerKey(ClusterWorker worker) =>
+      'worker:${worker.id ?? worker.endpoint}';
+
+  int weightFor(String device) => loadWeights[device] ?? 50;
+
+  Future<void> setLoadProfile(ClusterProfile value) async {
+    profile.value = value;
+    await _hive.setSetting('cluster_load_profile', value.name);
+  }
+
+  Future<void> setLoadWeights(Map<String, int> values) async {
+    loadWeights.assignAll(values.map((key, value) => MapEntry(key, value.clamp(0, 100))));
+    await _hive.setSetting('cluster_load_weights', Map<String, int>.of(loadWeights));
+    await setLoadProfile(ClusterProfile.manual);
+  }
+
   final isScanning = false.obs;
 
   /// This phone's worker service.
@@ -109,6 +131,15 @@ class ClusterService extends GetxService {
     enabled.value = _hive.getSetting<bool>(AppConstants.keyClusterEnabled) ?? false;
     final saved = _hive.getSetting<List>(AppConstants.keyClusterWorkers) ?? const [];
     workers.assignAll(saved.whereType<Map>().map(ClusterWorker.fromMap));
+    final savedProfile = _hive.getSetting<String>('cluster_load_profile');
+    profile.value = ClusterProfile.values.firstWhere((value) => value.name == savedProfile,
+        orElse: () => ClusterProfile.automatic);
+    final weights = _hive.getSetting<Map>('cluster_load_weights') ?? {};
+    loadWeights.assignAll({
+      for (final entry in weights.entries)
+        if (entry.key is String && entry.value is int)
+          entry.key as String: (entry.value as int).clamp(0, 100),
+    });
     if (isSupported) {
       if (Platform.isIOS) {
         DeviceInfoPlugin().iosInfo.then((info) => deviceName = info.modelName);
@@ -427,64 +458,138 @@ class ClusterService extends GetxService {
     return online.contains(false);
   }
 
-  Future<int> applyForNextLoad(String modelPath, {String? modelName, bool recovering = false}) async {
+  Future<({int workers, int context})> applyForNextLoad(
+    String modelPath, {
+    required int context,
+    required bool autoContext,
+    String? modelName,
+    bool recovering = false,
+    bool safeRetry = false,
+  }) async {
     clearSplit();
-    if (!isSupported) return 0;
-    if (!enabled.value || workers.isEmpty) {
-      await LlamaCluster.clear();
-      return 0;
+    Future<({int workers, int context})> local(int tokens) async {
+      if (isSupported) await LlamaCluster.clear();
+      return (workers: 0, context: tokens);
     }
 
-    // Workers that are off or away are left out, not fatal: the model may
-    // fit without them.
+    if (!isSupported || !enabled.value || workers.isEmpty) {
+      return local(context);
+    }
+
+    final activeProfile = profile.value;
     final offline = await relocateWorkers();
-    final available = workers.where((w) => !offline.any((o) => o.endpoint == w.endpoint)).toList();
+    final available = workers.where((w) =>
+        !offline.any((o) => o.endpoint == w.endpoint) &&
+        (activeProfile != ClusterProfile.manual || weightFor(workerKey(w)) > 0)).toList();
     if (offline.isNotEmpty) {
       final names = offline.map((w) => w.model ?? w.name).join(', ');
       showToast('Phone cluster', 'Not reachable, loading without: $names');
     }
 
-    final modelMb = await File(modelPath).length() / (1024 * 1024);
-    final needMb = modelMb * 1.1; // + KV cache and working buffers
+    final masterWeight = weightFor(localDeviceKey);
+    if (activeProfile == ClusterProfile.manual &&
+        available.isEmpty && masterWeight == 0) {
+      throw StateError('No enabled devices are reachable. Increase a device’s cluster weight.');
+    }
+
+    const bytesPerMb = 1024 * 1024;
+    final modelMb = await File(modelPath).length() / bytesPerMb;
+    final metadata = await readGgufInfo(modelPath);
+    final masterCapacity = await LlamaCluster.localFreeRamMb() * 0.7;
+    if (masterCapacity <= 0) {
+      throw StateError('Could not measure free memory on the master. Retry after checking the cluster.');
+    }
+    final mayEstimate = metadata != null && metadata.trainedContext >= 512 &&
+        metadata.kvCacheBytes(512) > 0;
+    final estimatedOverheadMb = !mayEstimate
+        ? modelMb * 0.1
+        : (metadata.estimateBytes(512) - metadata.fileBytes) / bytesPerMb;
+    // The master always owns the output weights and runs the session, even
+    // when the user assigns every transformer layer to workers.
+    final reserveMb = math.min(estimatedOverheadMb, 256.0 + math.min(modelMb * 0.08, 512.0));
+    if (masterCapacity <= reserveMb) {
+      throw StateError('The master needs more free memory for the output and session buffers.');
+    }
     _localSpeed ??= await LlamaCluster.benchmark();
-    // Free RAM: workers report theirs when they start. The master also runs
-    // the app and the KV cache, so it offers less of its own.
-    final master = _Phone(null, await LlamaCluster.localFreeRamMb() * 0.7, _localSpeed!);
+    final master = _Phone(null, masterCapacity - reserveMb, _localSpeed!);
     final phones = [
       master,
       for (final w in available)
         _Phone(w, (w.ramMb ?? 2000) * 0.75, w.bandwidth ?? _unknownSpeed),
     ];
-    final totalMb = phones.fold<double>(0, (a, p) => a + p.capacityMb);
-    if (needMb > totalMb) {
-      throw Exception('This model (${_gb(modelMb)}) is too big for these '
-          '${phones.length} phones: together they have about ${_gb(totalMb)} '
-          'free.${offline.isEmpty ? '' : ' Not reachable: ${offline.map((w) => w.model ?? w.name).join(', ')}.'} '
-          'Add another worker, close apps on the phones, or pick a '
-          'smaller model.');
+    final capacity = phones.fold<double>(reserveMb, (total, phone) {
+      if (activeProfile == ClusterProfile.manual && phone.worker == null &&
+          masterWeight == 0) return total;
+      return total + phone.capacityMb;
+    });
+    var tokens = context;
+    if (!safeRetry) {
+      switch (activeProfile) {
+        case ClusterProfile.speed:
+          tokens = math.min(tokens, 2048);
+        case ClusterProfile.capacity:
+          tokens = 512;
+        case ClusterProfile.context:
+          if (mayEstimate) {
+            tokens = math.min(metadata.trainedContext, 32768);
+          }
+        case ClusterProfile.automatic:
+        case ClusterProfile.manual:
+          break;
+      }
+    }
+    if (mayEstimate) {
+      tokens = math.min(tokens, metadata.trainedContext);
+      if (autoContext || activeProfile == ClusterProfile.context) {
+        final fitting = metadata.maxContextFitting((capacity * bytesPerMb).floor());
+        if (fitting != null) tokens = math.min(tokens, fitting);
+      }
+    }
+    final needMb = mayEstimate ? metadata.estimateBytes(tokens) / bytesPerMb
+        : modelMb * 1.1;
+    if (needMb > capacity) {
+      throw Exception('About ${_gb(needMb)} is needed at $tokens tokens. '
+          'Enabled devices offer about ${_gb(capacity)}. '
+          'Lower the context window, enable more devices, or choose a smaller model.');
     }
 
-    if (available.isEmpty) {
-      await LlamaCluster.clear();
-      return 0;
-    }
-    if (needMb <= master.capacityMb) {
-      final share = !recovering && await _askFitsHere(
-          modelName ?? modelPath.split('/').last, modelMb, available.length);
-      if (!share) {
-        await LlamaCluster.clear();
-        return 0;
+    if (available.isEmpty) return local(tokens);
+    if (needMb <= masterCapacity) {
+      if (activeProfile == ClusterProfile.speed) return local(tokens);
+      if (activeProfile == ClusterProfile.automatic) {
+        final share = !recovering && await _askFitsHere(
+            modelName ?? modelPath.split('/').last, modelMb, available.length);
+        if (!share) return local(tokens);
       }
-      _splitBySpeed(phones, needMb);
+    }
+
+    final layerMemoryMb = needMb - reserveMb;
+    if (activeProfile == ClusterProfile.speed ||
+        (activeProfile == ClusterProfile.automatic && needMb > masterCapacity)) {
+      _fillFastestFirst(phones, layerMemoryMb);
     } else {
-      _fillFastestFirst(phones, needMb);
+      final shares = distributeClusterLoad([
+        for (final phone in phones)
+          (
+            capacity: phone.capacityMb,
+            weight: switch (activeProfile) {
+              ClusterProfile.manual => weightFor(phone.worker == null
+                  ? localDeviceKey : workerKey(phone.worker!)).toDouble(),
+              ClusterProfile.context || ClusterProfile.capacity => phone.capacityMb,
+              _ => phone.speed,
+            },
+          )
+      ], layerMemoryMb);
+      if (shares == null) {
+        throw StateError('The selected devices do not have enough available memory.');
+      }
+      for (var i = 0; i < phones.length; i++) {
+        phones[i].assignedMb = shares[i];
+      }
     }
 
     final used = phones.where((p) => p.worker != null && p.assignedMb > 0).toList();
-    if (used.isEmpty) {
-      await LlamaCluster.clear();
-      return 0;
-    }
+    if (used.isEmpty) return local(tokens);
     try {
       await LlamaCluster.setCluster(
         [for (final p in used) p.worker!],
@@ -497,7 +602,7 @@ class ClusterService extends GetxService {
           'phone, or set this phone\'s Phone cluster to Off.');
     }
     _activeWorkerEndpoints.addAll(used.map((phone) => phone.worker!.endpoint));
-    return used.length;
+    return (workers: used.length, context: tokens);
   }
 
   /// Fastest first, each up to its free memory, until the model is placed.
@@ -507,32 +612,6 @@ class ClusterService extends GetxService {
     for (final p in bySpeed) {
       p.assignedMb = math.min(p.capacityMb, left);
       left -= p.assignedMb;
-    }
-  }
-
-  /// Shares in proportion to speed, capped at each phone's free memory
-  /// (what a capped phone can't take goes to the others).
-  static void _splitBySpeed(List<_Phone> phones, double needMb) {
-    var open = [...phones];
-    var left = needMb;
-    while (open.isNotEmpty && left > 0.5) {
-      final speedSum = open.fold<double>(0, (a, p) => a + p.speed);
-      final capped = [
-        for (final p in open)
-          if (p.assignedMb + left * p.speed / speedSum >= p.capacityMb) p,
-      ];
-      if (capped.isEmpty) {
-        for (final p in open) {
-          p.assignedMb += left * p.speed / speedSum;
-        }
-        left = 0;
-      } else {
-        for (final p in capped) {
-          left -= p.capacityMb - p.assignedMb;
-          p.assignedMb = p.capacityMb;
-        }
-        open = open.where((p) => !capped.contains(p)).toList();
-      }
     }
   }
 

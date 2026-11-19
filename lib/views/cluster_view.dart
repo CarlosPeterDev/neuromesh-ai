@@ -8,6 +8,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../core/ui.dart';
 import '../services/cluster_service.dart';
+import '../services/inference_service.dart';
+import '../utils/cluster_plan.dart';
 import 'workload_placement_view.dart';
 import 'model_transfer_view.dart';
 
@@ -219,6 +221,32 @@ class _ClusterViewState extends State<ClusterView> {
         _SplitCard(shares: cluster.split),
         const SizedBox(height: 16),
       ],
+      const SectionHeader('Load settings'),
+      AppGroup(children: [
+        AppRow(
+          icon: Icons.tune_rounded,
+          title: 'Performance profile',
+          subtitle: _profileLabel(cluster.profile.value),
+          chevron: true,
+          onTap: () => _chooseProfile(context),
+        ),
+        AppRow(
+          icon: Icons.splitscreen_rounded,
+          title: 'Assign load per device',
+          subtitle: 'Set relative layer weights and exclude devices.',
+          chevron: true,
+          onTap: () => _editDeviceWeights(context),
+        ),
+        if (Get.find<InferenceService>().contextTokensTotal.value > 0)
+          AppRow(
+            icon: Icons.memory_rounded,
+            title: 'Loaded context window',
+            subtitle: '${Get.find<InferenceService>().contextTokensTotal.value} tokens',
+          ),
+      ]),
+      const SectionFootnote(
+        'Changes apply on the next GGUF load. Estimates use reported free memory and measured memory bandwidth. Network speed and layer sizes affect the result.',
+      ),
       PrimaryButton(
         label: 'Scan a worker\'s QR code',
         icon: Icons.qr_code_scanner_rounded,
@@ -253,6 +281,11 @@ class _ClusterViewState extends State<ClusterView> {
                   'Last reply ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(reply))}',
                 if (w.ramMb != null) '${_gb(w.ramMb!)} free',
                 if (w.bandwidth != null) '${w.bandwidth!.toStringAsFixed(1)} GB/s',
+                if (cluster.profile.value == ClusterProfile.manual)
+                  cluster.weightFor(ClusterService.workerKey(w)) == 0
+                      ? 'Excluded'
+                      : 'Weight ${cluster.weightFor(ClusterService.workerKey(w))}',
+
               ].join(' · '),
               trailing: IconButton(
                 icon: Icon(Icons.close_rounded, color: t.muted),
@@ -262,10 +295,7 @@ class _ClusterViewState extends State<ClusterView> {
             ),
         ]),
       const SectionFootnote(
-        'Used the next time you load a GGUF model. If the model fits on this '
-        'phone you can keep it here, which is faster. If it doesn\'t, the '
-        'fastest phones get the biggest share and phones that aren\'t needed '
-        'are left out.',
+        'Check that workers are reachable before loading a model. Unreachable devices do not receive layers.',
       ),
       const SectionHeader('Other ways to add'),
       Row(children: [
@@ -298,6 +328,84 @@ class _ClusterViewState extends State<ClusterView> {
         ]),
       ],
     ];
+  }
+
+  String _profileLabel(ClusterProfile profile) => switch (profile) {
+        ClusterProfile.automatic => 'Automatic',
+        ClusterProfile.speed => 'Best speed',
+        ClusterProfile.context => 'Largest context window',
+        ClusterProfile.capacity => 'Largest model',
+        ClusterProfile.manual => 'Manual device weights',
+      };
+
+  Future<void> _chooseProfile(BuildContext context) async {
+    final selected = await showAppSheet<ClusterProfile>(
+      context,
+      title: 'Recommended cluster settings',
+      builder: (sheet) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final (profile, details) in const [
+            (ClusterProfile.automatic, 'Keep your context setting and balance speed with available RAM.'),
+            (ClusterProfile.speed, 'Use this device if it fits. Otherwise place work on the fastest available devices and use up to 2,048 context tokens.'),
+            (ClusterProfile.context, 'Share work across available memory and estimate the largest window the GGUF and devices can hold, up to 32,768 tokens.'),
+            (ClusterProfile.capacity, 'Use available memory for model layers and keep context at 512 tokens to make room for larger models.'),
+          ])
+            ListTile(
+              title: Text(_profileLabel(profile)),
+              subtitle: Text(details),
+              trailing: cluster.profile.value == profile ? const Icon(Icons.check_rounded) : null,
+              onTap: () => Navigator.pop(sheet, profile),
+            ),
+        ],
+      ),
+    );
+    if (selected != null) await cluster.setLoadProfile(selected);
+  }
+
+  Future<void> _editDeviceWeights(BuildContext context) async {
+    final devices = [
+      (ClusterService.localDeviceKey, 'This device'),
+      for (final worker in cluster.workers)
+        (ClusterService.workerKey(worker), worker.model ?? worker.name),
+    ];
+    final values = {
+      for (final (key, _) in devices) key: cluster.weightFor(key),
+    };
+    final saved = await showAppSheet<bool>(
+      context,
+      title: 'Layer weights by device',
+      subtitle: 'Higher weights request more layers. A weight of zero excludes a device from layer assignment. The master still runs the session. Device memory caps and layer sizes can change the final split.',
+      builder: (sheet) => StatefulBuilder(builder: (context, update) {
+        final total = values.values.fold<int>(0, (sum, value) => sum + value);
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final (key, name) in devices) ...[
+              ListTile(
+                dense: true,
+                title: Text(name),
+                trailing: Text(total == 0
+                    ? '0%'
+                    : '${(values[key]! * 100 / total).round()}% target'),
+              ),
+              Slider(
+                value: values[key]!.toDouble(),
+                max: 100,
+                divisions: 20,
+                label: '${values[key]}',
+                onChanged: (value) => update(() => values[key] = value.round()),
+              ),
+            ],
+            FilledButton(
+              onPressed: total == 0 ? null : () => Navigator.pop(sheet, true),
+              child: const Text('Save device weights'),
+            ),
+          ],
+        );
+      }),
+    );
+    if (saved == true) await cluster.setLoadWeights(values);
   }
 
   Future<void> _scanQr() async {

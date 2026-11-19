@@ -2,6 +2,8 @@ import 'dart:io' show File, FileSystemEntityType;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../services/desktop_command_service.dart';
+import 'desktop_access_view.dart';
 import '../services/sandbox_service.dart';
 import 'scheduled_tasks_view.dart';
 import 'package:get/get.dart';
@@ -179,7 +181,16 @@ class _ChatToolsViewState extends State<ChatToolsView> {
             style: t.caption),
         const SizedBox(height: 8),
         Obx(() => AppGroup(children: [
+              if (hasDesktopShell)
+                AppRow(
+                  icon: Icons.terminal_rounded,
+                  title: 'Desktop command access',
+                  subtitle: 'Choose the computer or a VM and review approvals',
+                  chevron: true,
+                  onTap: () => Get.to(() => const DesktopAccessView()),
+                ),
               for (final tool in _agent.catalog)
+                if (!hasDesktopShell || tool.name != 'run_shell')
                 _PolicyRow(
                   title: tool.name,
                   subtitle: tool.description,
@@ -193,7 +204,7 @@ class _ChatToolsViewState extends State<ChatToolsView> {
                 alignment: Alignment.centerLeft,
                 child: TextButton(
                     onPressed: _agent.resetPolicies,
-                    child: const Text('Reset all to defaults')))),
+                    child: const Text('Reset tool approvals')))),
 
         // ── connections ──
         const SectionHeader('Connections (MCP)'),

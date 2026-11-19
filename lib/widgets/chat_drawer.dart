@@ -49,7 +49,7 @@ class _ChatDrawerState extends State<ChatDrawer> {
   final _search = TextEditingController();
   String _query = '';
   Set<String> _matchIds = {};
-  bool _menuTab = false;
+  bool _settingsTab = false;
 
   /// Chats that contain [q] anywhere in their messages.
   Set<String> _searchMessages(String q) {
@@ -246,7 +246,7 @@ class _ChatDrawerState extends State<ChatDrawer> {
             padding: const EdgeInsets.fromLTRB(20, 14, 8, 10),
             child: Row(children: [
               Expanded(
-                child: Text(_menuTab ? 'Menu' : 'Chats',
+                child: Text(_settingsTab ? 'Settings' : 'Chats',
                     style: GoogleFonts.inter(
                         fontSize: 24,
                         fontWeight: FontWeight.w700,
@@ -260,7 +260,7 @@ class _ChatDrawerState extends State<ChatDrawer> {
               ),
             ]),
           ),
-          // Chats / Menu switch
+          // Chats / Settings switch
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Container(
@@ -269,31 +269,31 @@ class _ChatDrawerState extends State<ChatDrawer> {
               decoration: BoxDecoration(
                   color: field, borderRadius: BorderRadius.circular(10)),
               child: Row(children: [
-                for (final e in const [(false, 'Chats'), (true, 'Menu')])
+                for (final e in const [(false, 'Chats'), (true, 'Settings')])
                   Expanded(
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () {
                         Haptics.selectionClick();
-                        setState(() => _menuTab = e.$1);
+                        setState(() => _settingsTab = e.$1);
                       },
                       child: Container(
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                            color: _menuTab == e.$1 ? selected : null,
+                            color: _settingsTab == e.$1 ? selected : null,
                             borderRadius: BorderRadius.circular(8)),
                         child: Text(e.$2,
                             style: GoogleFonts.inter(
                                 fontSize: 13.5,
                                 fontWeight: FontWeight.w600,
-                                color: _menuTab == e.$1 ? text : muted)),
+                                color: _settingsTab == e.$1 ? text : muted)),
                       ),
                     ),
                   ),
               ]),
             ),
           ),
-          if (_menuTab)
+          if (_settingsTab)
             Expanded(
               child: _MenuPanel(
                 text: text,
@@ -496,7 +496,7 @@ class _SessionRow extends StatelessWidget {
   }
 }
 
-/// The Menu tab: every screen of the app, in collapsible groups.
+/// The Settings tab: every screen of the app, in collapsible groups.
 class _MenuPanel extends StatefulWidget {
   final Color text;
   final Color muted;
