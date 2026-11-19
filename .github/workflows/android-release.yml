@@ -132,6 +132,27 @@ jobs:
           cp "$(find x_libandroid-shmem -type f -name libandroid-shmem.so | head -1)" $J/libandroid-shmem.so
           ls -la $J
 
+      - name: Resolve Flutter Gradle plugin dependencies from Maven Central
+        if: github.event_name != 'pull_request'
+        run: |
+          python - <<'PYTHON'
+          import shutil
+          from pathlib import Path
+
+          flutter = Path(shutil.which("flutter")).resolve()
+          settings = flutter.parent.parent / "packages/flutter_tools/gradle/settings.gradle.kts"
+          original = settings.read_text()
+          if "pluginManagement {" not in original:
+              settings.write_text(
+                  "pluginManagement {\n"
+                  "    repositories {\n"
+                  "        mavenCentral()\n"
+                  "        gradlePluginPortal()\n"
+                  "    }\n"
+                  "}\n\n" + original
+              )
+          PYTHON
+
       # Google Play build: no self-updater and none of the restricted permissions
       # (all-files access, install packages, battery-optimisation exemption).
       - name: Build Play AAB
