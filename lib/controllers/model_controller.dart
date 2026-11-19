@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import '../services/download_service.dart';
@@ -59,7 +60,8 @@ class ModelController extends GetxController {
   final customModels = <AiModel>[].obs;
   final fileSizes = <String, int>{}.obs;
   final modelScope = 'local'.obs;
-  final libraryRole = 'all'.obs;
+  final externalDownloadKind = Rxn<ModelFileKind>();
+  final libraryKindFilter = Rxn<ModelFileKind>();
   final localFilter = ''.obs;
   final importFileName = ''.obs;
   final importStatus = ''.obs;
@@ -557,14 +559,16 @@ class ModelController extends GetxController {
     }
   }
 
-  Future<void> downloadModelToDownloads(AiModel model) async {
+  bool get supportsDownloadsFolder => !kIsWeb && Platform.isAndroid;
+
+  Future<void> downloadModelToDownloads(AiModel model, {ModelFileKind? kind}) async {
     if (model.url.trim().isEmpty) {
       showToast('Download Unavailable', 'This model has no download URL.',
           tone: ToastTone.warning);
       return;
     }
 
-    if (!Platform.isAndroid) {
+    if (!supportsDownloadsFolder) {
       showToast(
         'Android Only',
         'Use the app download button or import a local model on this platform.',
@@ -583,6 +587,7 @@ class ModelController extends GetxController {
     }
 
     try {
+      externalDownloadKind.value = kind ?? model.fileKind;
       isImporting.value = true;
       importFileName.value = model.filename;
       importStatus.value = 'Starting download...';

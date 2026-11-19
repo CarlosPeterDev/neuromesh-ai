@@ -16,7 +16,8 @@ void main() {
     expect(modelFileRole('family-draft.gguf'), ModelFileRole.model);
     expect(modelFileRole('family-lora.safetensors'), ModelFileRole.adapter);
     expect(modelFileRole('family-vae.safetensors'), ModelFileRole.imageAddon);
-    expect(modelFileRole('vae/diffusion_pytorch_model.safetensors'), ModelFileRole.imageAddon);
+    expect(modelFileRole('vae/diffusion_pytorch_model.safetensors'),
+        ModelFileRole.imageAddon);
     expect(modelFileRole('adapter_model.safetensors'), ModelFileRole.adapter);
   });
 
@@ -39,6 +40,31 @@ void main() {
     expect(
         ModelHelperService.suggestsPair(main, model('Family-VL-7B-lora.gguf')),
         isFalse);
+  });
+
+  test('repository exposes unknown files without treating them as models',
+      () async {
+    final hf = HfService(
+        client: MockClient((_) async => http.Response(
+            jsonEncode([
+              {'type': 'file', 'path': 'model-Q4.gguf', 'size': 100},
+              {'type': 'file', 'path': 'mmproj-f16.gguf', 'size': 20},
+              {'type': 'file', 'path': 'model-00001-of-00002.gguf', 'size': 50},
+              {'type': 'file', 'path': 'tokenizer.json', 'size': 10},
+            ]),
+            200)));
+    addTearDown(hf.dispose);
+    final files = await hf.listRepositoryFiles('owner/family');
+    expect(files.map((file) => file.kind), [
+      ModelFileKind.model,
+      ModelFileKind.helper,
+      ModelFileKind.model,
+      ModelFileKind.unknown,
+    ]);
+    expect(HfService.canDownloadSingleFile(files[2]), isFalse);
+    expect(HfService.canDownloadSingleFile(files[3]), isFalse);
+    expect(await hf.listGgufFiles('owner/family'), hasLength(1));
+    expect(modelFileKind('my-image.sdbundle'), ModelFileKind.model);
   });
 
   test('helper enumeration is optional for existing HF callers', () async {

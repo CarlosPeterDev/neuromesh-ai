@@ -58,3 +58,23 @@ String? huggingFaceRepository(String url) {
     return null;
   return '${parts[0]}/${parts[1]}';
 }
+
+/// File labels describe the artifact. Load compatibility is checked separately.
+enum ModelFileKind {
+  model('Model'),
+  helper('Helper'),
+  unknown('Unknown');
+
+  const ModelFileKind(this.label);
+  final String label;
+}
+
+ModelFileKind modelFileKind(String path) {
+  if (modelFileRole(path).isHelper) return ModelFileKind.helper;
+  final lower = path.toLowerCase();
+  return RegExp(
+              r'\.(gguf|litertlm|task|safetensors|ckpt|onnx|sdbundle|coreml|mlpackage|mlmodelc)$')
+          .hasMatch(lower)
+      ? ModelFileKind.model
+      : ModelFileKind.unknown;
+}

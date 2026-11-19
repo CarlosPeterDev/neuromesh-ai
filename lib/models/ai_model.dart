@@ -1,3 +1,5 @@
+import '../utils/model_file_role.dart';
+
 class AiModel {
   static const runtimeLlama = 'llama';
   static const runtimeLiteRt = 'litert';
@@ -10,6 +12,10 @@ class AiModel {
         lower.contains('llava') ||
         lower.contains('vision');
   }
+
+  ModelFileKind get fileKind => runtime == runtimeSd && filename.toLowerCase().endsWith('.zip')
+      ? ModelFileKind.model
+      : modelFileKind(filename);
 
   final String name;
   final String filename;
