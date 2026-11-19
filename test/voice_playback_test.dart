@@ -145,4 +145,24 @@ void main() {
     expect(player.plays, 0);
     expect(player.completed.hasListener, isFalse);
   });
+
+  test('stopping a pending worker does not wait for its response', () async {
+    client.close();
+    final requested = Completer<void>();
+    final response = Completer<http.Response>();
+    client = MockClient((request) {
+      expect(request.followRedirects, isFalse);
+      requested.complete();
+      return response.future;
+    });
+    final voice = service();
+    final speaking = voice.speak('Hello there.');
+    await requested.future;
+    await voice.stopSpeaking();
+    await speaking.timeout(const Duration(seconds: 1));
+    expect(response.isCompleted, isFalse);
+    response.completeError(http.ClientException('Worker disconnected'));
+    await Future<void>.delayed(Duration.zero);
+    expect(player.plays, 0);
+  });
 }
