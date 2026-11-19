@@ -15,6 +15,7 @@ import '../utils/web_search_parse.dart';
 import '../widgets/ask_user.dart';
 import 'agent_tools.dart';
 import 'device_bridge.dart';
+import 'desktop_command_service.dart';
 import '../controllers/model_controller.dart';
 import 'local_image_service.dart';
 import 'scheduler_service.dart';
@@ -946,8 +947,12 @@ class AgentService extends GetxService {
 
   Iterable<AgentTool> get _allBuiltIns sync* {
     for (final t in [..._builtIns, ..._extra]) {
-      if (policyFor('built-in', t.name, needsConfirm: t.needsConfirm) ==
-          'block') continue;
+      final desktopShell =
+          t.name == 'run_shell' && Get.isRegistered<DesktopCommandService>();
+      if (!desktopShell &&
+          policyFor('built-in', t.name, needsConfirm: t.needsConfirm) == 'block') {
+        continue;
+      }
       if (t.available == null || t.available!()) yield t;
     }
   }
@@ -1340,8 +1345,12 @@ class AgentService extends GetxService {
       b.writeln(
           'Shared folders: ${_user!.folders.map((f) => f.name).join(', ')}');
     if (on.any(_isSandboxTool)) {
-      b.writeln(
-          'The sandbox is one shared Linux for all chats: install what you need (install_packages), run code with run_script, and save reusable tools with create_tool.');
+      if (Get.isRegistered<DesktopCommandService>()) {
+        b.writeln('Use run_shell for the selected desktop or SSH VM target. The user controls command approvals.');
+      } else {
+        b.writeln(
+            'The sandbox is one shared Linux for all chats: install what you need (install_packages), run code with run_script, and save reusable tools with create_tool.');
+      }
     }
     return b.toString().trimRight();
   }
@@ -1942,6 +1951,10 @@ class AgentService extends GetxService {
     for (final t in _allBuiltIns) {
       if (t.name == call.name) {
         try {
+          if (t.name == 'run_shell' && Get.isRegistered<DesktopCommandService>()) {
+            return await Get.find<DesktopCommandService>()
+                .execute(call.arguments, filesDir, confirm);
+          }
           final pol =
               policyFor('built-in', t.name, needsConfirm: t.needsConfirm);
           if (pol == 'block') return 'The user has blocked this tool.';

@@ -133,27 +133,8 @@ class InferenceService extends GetxService {
       var finalContextSize = safeRetry
           ? contextSize.clamp(512, 1024)
           : isLiteRt ? contextSize.clamp(512, 4096) : contextSize;
-      // Auto mode: shrink the context if this phone can't hold it. Never raises it.
-      if (!isLiteRt &&
-          _hive.getSetting<bool>('auto_context', defaultValue: true) == true &&
-          Get.isRegistered<DeviceInfoService>()) {
-        try {
-          final dev = Get.find<DeviceInfoService>();
-          await dev.refreshMemoryInfo();
-          final auto = autoContextSize(
-            requested: finalContextSize,
-            availableGb: dev.availableRamGB.value,
-            modelBytes: await _fileBytes(modelPath),
-          );
-          if (auto < finalContextSize) {
-            Get.find<AppLogService>().info(
-              'Auto context: $finalContextSize -> $auto (available RAM ${dev.availableRamGB.value.toStringAsFixed(1)} GB)',
-            );
-            finalContextSize = auto;
-          }
-        } catch (_) {}
-      }
-
+      final autoContext =
+          _hive.getSetting<bool>('auto_context', defaultValue: true) == true;
       final lastLoadedContext =
           _hive.getSetting<int>('last_loaded_context_size') ?? 0;
       final contextChanged = isLiteRt && lastLoadedContext != finalContextSize;
@@ -174,12 +155,38 @@ class InferenceService extends GetxService {
       // then runs its share on the CPU.
       var clusterWorkers = 0;
       if (!isLiteRt && Get.isRegistered<ClusterService>()) {
-        clusterWorkers = await Get.find<ClusterService>().applyForNextLoad(
+        final plan = await Get.find<ClusterService>().applyForNextLoad(
           modelPath,
+          context: finalContextSize,
+          autoContext: autoContext,
           modelName: modelName,
           recovering: recoveringCluster,
+          safeRetry: safeRetry,
         );
+        clusterWorkers = plan.workers;
+        finalContextSize = plan.context;
       }
+      // Single-device auto mode can only shrink the requested window.
+      if (!isLiteRt && clusterWorkers == 0 && autoContext &&
+          Get.isRegistered<DeviceInfoService>()) {
+        try {
+          final dev = Get.find<DeviceInfoService>();
+          await dev.refreshMemoryInfo();
+          final auto = autoContextSize(
+            requested: finalContextSize,
+            availableGb: dev.availableRamGB.value,
+            modelBytes: await _fileBytes(modelPath),
+          );
+          if (auto < finalContextSize) {
+            Get.find<AppLogService>().info(
+              'Auto context: $finalContextSize -> $auto (available RAM ${dev.availableRamGB.value.toStringAsFixed(1)} GB)',
+            );
+            finalContextSize = auto;
+          }
+        } catch (_) {}
+      }
+
+      diagnostics?.set('contextActual', finalContextSize);
 
       final requestedModelName = modelName ?? modelPath.split('/').last;
       diagnostics?.set('clusterWorkers', clusterWorkers);
