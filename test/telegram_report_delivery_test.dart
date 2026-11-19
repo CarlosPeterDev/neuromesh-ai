@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:neuromesh_ai/services/telegram_report_delivery.dart';
+import 'package:neuromesh_ai/services/diagnostics_service.dart';
 
 class _TelegramClient extends http.BaseClient {
   @override
@@ -37,5 +38,21 @@ void main() {
     expect(response.statusCode, 200);
     await TelegramReportDelivery.clear();
     expect(await TelegramReportDelivery.load(), isNull);
+  });
+  test('report screen submission uses the direct ZIP transport', () async {
+    final token = '12345678:${List.filled(35, 'x').join()}';
+    final delivery = TelegramReportDelivery.parse(token, '-1234')!;
+    await DiagnosticsService.sendReport('بلاغ تجريبي',
+        destination: delivery, client: _TelegramClient());
+  });
+
+  test('oversized reports are rejected before contacting the destination',
+      () async {
+    final token = '12345678:${List.filled(35, 'x').join()}';
+    await expectLater(
+        DiagnosticsService.sendReport('x' * (256 * 1024 + 1),
+            destination: TelegramReportDelivery.parse(token, '-1234'),
+            client: _TelegramClient()),
+        throwsA(isA<ReportSubmissionError>()));
   });
 }

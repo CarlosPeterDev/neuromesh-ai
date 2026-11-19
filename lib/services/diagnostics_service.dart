@@ -16,6 +16,7 @@ import 'hive_service.dart';
 import 'inference_service.dart';
 import 'local_image_service.dart';
 import 'model_load_diagnostics.dart';
+import 'telegram_report_delivery.dart';
 
 class DiagnosticsService {
   static const repoIssues =
@@ -157,7 +158,14 @@ class DiagnosticsService {
     const String.fromEnvironment('NEUROMESH_REPORT_ENDPOINT'),
   );
 
-  static bool get canSendReport => _submissionEndpoint != null;
+  static final TelegramReportDelivery? _buildDestination =
+      TelegramReportDelivery.parse(
+    const String.fromEnvironment('NEUROMESH_REPORT_BOT_TOKEN'),
+    const String.fromEnvironment('NEUROMESH_REPORT_CHAT_ID'),
+  );
+
+  static bool get canSendReport =>
+      _buildDestination != null || _submissionEndpoint != null;
   static const _reportLimit = 256 * 1024;
 
   static Uri? _parseEndpoint(String url) {
@@ -173,10 +181,13 @@ class DiagnosticsService {
   }
 
   static Future<void> sendReport(
-    String preview,
-  ) async {
+    String preview, {
+    http.Client? client,
+    TelegramReportDelivery? destination,
+  }) async {
     final uri = _submissionEndpoint;
-    if (uri == null) {
+    final direct = destination ?? _buildDestination;
+    if (uri == null && direct == null) {
       throw const ReportSubmissionError(
           'Report delivery is not configured in this build.');
     }
@@ -186,14 +197,16 @@ class DiagnosticsService {
           'This report is too large. Try turning off recent logs.');
     }
 
-    final client = http.Client();
+    final transport = client ?? http.Client();
     try {
-      final response = await client
-          .send(http.Request('POST', uri)
-            ..followRedirects = false
-            ..headers['Content-Type'] = 'text/plain; charset=utf-8'
-            ..bodyBytes = bytes)
-          .then(http.Response.fromStream)
+      final response = await (direct != null
+              ? direct.send(preview, transport)
+              : transport
+                  .send(http.Request('POST', uri!)
+                    ..followRedirects = false
+                    ..headers['Content-Type'] = 'text/plain; charset=utf-8'
+                    ..bodyBytes = bytes)
+                  .then(http.Response.fromStream))
           .timeout(const Duration(seconds: 25));
       if (response.statusCode == 429) {
         throw const ReportSubmissionError(
@@ -223,7 +236,7 @@ class DiagnosticsService {
       throw const ReportSubmissionError(
           'Delivery could not be confirmed. Check your connection.');
     } finally {
-      client.close();
+      if (client == null) transport.close();
     }
   }
 

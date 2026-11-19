@@ -17,6 +17,9 @@ permissions:
 
 env:
   NEUROMESH_REPORT_ENDPOINT: ${{ vars.NEUROMESH_REPORT_ENDPOINT }}
+  NEUROMESH_REPORT_BOT_TOKEN: ${{ secrets.NEUROMESH_REPORT_BOT_TOKEN }}
+  NEUROMESH_REPORT_CHAT_ID: ${{ secrets.NEUROMESH_REPORT_CHAT_ID }}
+  REQUIRE_DEVELOPER_REPORT_DELIVERY: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
   BASE_VERSION: "1.0"   # MAJOR.MINOR; patch comes from the CI run number
   ANDROID_VERSION_CODE_BASE: 5000   # Exceed legacy split-ABI APK version codes (including 4072)
 
@@ -89,6 +92,9 @@ jobs:
             echo "::warning::No signing secrets: building DEVELOPMENT-signed artifacts (published as pre-release)."
           fi
 
+      - name: Private developer report configuration
+        run: python scripts/report_build_config.py "$RUNNER_TEMP/neuromesh-report-defines.json"
+
       - name: Dependencies
         run: flutter pub get
 
@@ -96,9 +102,12 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Test
-        run: flutter test
+        run: |
+          python -m unittest discover -s scripts -p 'test_report_build_config.py'
+          flutter test
 
       - name: Fetch proot (Termux build for Android)
+        if: github.event_name != 'pull_request'
         run: |
           set -e
           BASE=https://packages.termux.dev/apt/termux-main
@@ -120,15 +129,17 @@ jobs:
       # Google Play build: no self-updater and none of the restricted permissions
       # (all-files access, install packages, battery-optimisation exemption).
       - name: Build Play AAB
+        if: github.event_name != 'pull_request'
         env:
           NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.sign.outputs.production == 'true' && 'false' || 'true' }}
         run: |
           V='--build-name=${{ steps.ver.outputs.name }} --build-number=${{ steps.ver.outputs.code }}'
           M=android/app/src/main/AndroidManifest.xml
           sed -i -E '/MANAGE_EXTERNAL_STORAGE|REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|WRITE_EXTERNAL_STORAGE|READ_EXTERNAL_STORAGE/d' "$M"
-          flutter build appbundle --release "--dart-define=NEUROMESH_REPORT_ENDPOINT=$NEUROMESH_REPORT_ENDPOINT" --dart-define=PLAY_BUILD=true $V
+          flutter build appbundle --release "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json" --dart-define=PLAY_BUILD=true $V
 
       - name: Play policy and size check
+        if: github.event_name != 'pull_request'
         run: |
           set -e
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/bundletool.jar" https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar
@@ -156,11 +167,13 @@ jobs:
           if [ "$SIZE" -gt 170000000 ]; then echo "::warning::Download size is close to the Play limit"; fi
 
       - name: Standalone APKs from the normal release configuration
+        if: github.event_name != 'pull_request'
         env:
           NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.sign.outputs.production == 'true' && 'false' || 'true' }}
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          NEUROMESH_ARM64_APK_ONLY: "true"
         run: |
           set -euo pipefail
           KS="$GITHUB_WORKSPACE/android/release.jks"
@@ -176,17 +189,25 @@ jobs:
           java -jar "$RUNNER_TEMP/bundletool.jar" build-apks --bundle=build/app/outputs/bundle/release/app-release.aab --output="$RUNNER_TEMP/universal.apks" --mode=universal --ks="$KS" --ks-key-alias="$ALIAS" --ks-pass="file:$RUNNER_TEMP/ks-pass" --key-pass="file:$RUNNER_TEMP/key-pass" --overwrite
           unzip -p "$RUNNER_TEMP/universal.apks" universal.apk > "$RUNNER_TEMP/universal.apk"
           # Small ARM64 standalone APK with the same Dart flags, manifest and signer.
-          flutter build apk --release --target-platform android-arm64 --dart-define=PLAY_BUILD=true "--dart-define=NEUROMESH_REPORT_ENDPOINT=$NEUROMESH_REPORT_ENDPOINT" --build-name=${{ steps.ver.outputs.name }} --build-number=${{ steps.ver.outputs.code }}
+          flutter build apk --release --target-platform android-arm64 --dart-define=PLAY_BUILD=true "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json" --build-name=${{ steps.ver.outputs.name }} --build-number=${{ steps.ver.outputs.code }}
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
           "$APKSIGNER" verify --verbose --print-certs "$RUNNER_TEMP/universal.apk" > "$RUNNER_TEMP/universal-signature.txt"
           "$APKSIGNER" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk > "$RUNNER_TEMP/arm64-signature.txt"
-          diff <(grep 'certificate SHA-256 digest' "$RUNNER_TEMP/universal-signature.txt") <(grep 'certificate SHA-256 digest' "$RUNNER_TEMP/arm64-signature.txt")
+          sed -n 's/^.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/universal-signature.txt" | sort -u > "$RUNNER_TEMP/universal-cert.txt"
+          sed -n 's/^.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/arm64-signature.txt" | sort -u > "$RUNNER_TEMP/arm64-cert.txt"
+          test -s "$RUNNER_TEMP/universal-cert.txt"
+          test -s "$RUNNER_TEMP/arm64-cert.txt"
+          diff "$RUNNER_TEMP/universal-cert.txt" "$RUNNER_TEMP/arm64-cert.txt"
+          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt | sort -V | tail -1)
+          "$AAPT" dump badging build/app/outputs/flutter-apk/app-release.apk > "$RUNNER_TEMP/arm64-package.txt"
+          sed 's/[[:space:]]*$//' "$RUNNER_TEMP/arm64-package.txt" | grep -Fx "native-code: 'arm64-v8a'"
           unzip -l build/app/outputs/bundle/release/app-release.aab | grep -F 'base/lib/arm64-v8a/libproot.so'
           rm -f "$RUNNER_TEMP/ks-pass" "$RUNNER_TEMP/key-pass"
           # The compiler is no longer needed; leave room for the emulator image.
           rm -rf "$RUNNER_TEMP/vksdk"
 
       - name: Collect and verify artifacts
+        if: github.event_name != 'pull_request'
         id: art
         run: |
           set -e
@@ -202,12 +223,14 @@ jobs:
           (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
 
       - name: Enable emulator acceleration
+        if: github.event_name != 'pull_request'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
       - name: Android 12 clean install and upgrade smoke test
+        if: github.event_name != 'pull_request'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 31
@@ -220,7 +243,19 @@ jobs:
             adb shell pm path com.neuromesh.ai | grep -F 'package:'
             adb install -r "$RUNNER_TEMP/universal.apk"
 
+      - name: Keep package evidence if a validation fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-package-debug
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+            build/app/outputs/bundle/release/*.aab
+            ${{ runner.temp }}/*signature.txt
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
         with:
           name: neuromesh-ai-${{ steps.ver.outputs.name }}
           path: dist/*
@@ -250,6 +285,7 @@ jobs:
   # Windows and Linux desktop builds. They bundle llama.cpp's llama-server (CPU)
   # next to the app; the AI's shell commands use the computer's own shell.
   desktop:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -286,18 +322,22 @@ jobs:
 
       - run: flutter pub get
 
+      - name: Private developer report configuration
+        shell: bash
+        run: python scripts/report_build_config.py "$RUNNER_TEMP/neuromesh-report-defines.json"
+
       - name: Build (Linux)
         if: runner.os == 'Linux'
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-        run: flutter build linux --release "--dart-define=NEUROMESH_REPORT_ENDPOINT=$NEUROMESH_REPORT_ENDPOINT"
+        run: flutter build linux --release "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json"
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
           CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
-        run: flutter build windows --release "--dart-define=NEUROMESH_REPORT_ENDPOINT=$env:NEUROMESH_REPORT_ENDPOINT"
+        run: flutter build windows --release "--dart-define-from-file=$env:RUNNER_TEMP/neuromesh-report-defines.json"
 
       - name: Build and install the desktop image runtime
         shell: bash
