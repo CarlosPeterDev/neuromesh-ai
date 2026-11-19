@@ -61,11 +61,6 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true
-        // A standalone ARM64 test APK should not carry unused library ABIs.
-        // AAB builds keep the full supported ABI set.
-        if (System.getenv("NEUROMESH_ARM64_APK_ONLY") == "true") {
-            ndk.abiFilters.add("arm64-v8a")
-        }
     }
 
 
@@ -82,6 +77,13 @@ android {
 
     buildTypes {
         release {
+            // Flutter supplies ABI defaults on build types, which override
+            // defaultConfig. Replace those defaults only for the ARM64 APK;
+            // AAB builds retain the full supported ABI set.
+            if (System.getenv("NEUROMESH_ARM64_APK_ONLY") == "true") {
+                ndk.abiFilters.clear()
+                ndk.abiFilters.add("arm64-v8a")
+            }
             signingConfig = if (hasReleaseKeystore) {
                 signingConfigs.getByName("release")
             } else {
