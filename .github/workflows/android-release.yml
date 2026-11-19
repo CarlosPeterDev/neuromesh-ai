@@ -292,7 +292,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-24.04]
     env:
       BASE_VERSION: "1.0"
     steps:
@@ -378,7 +378,7 @@ jobs:
           bash scripts/package_linux.sh "$B" "$V" web/icons/Icon-512.png
           if [[ "$GITHUB_EVENT_NAME" != "pull_request" && "$GITHUB_REF" == "refs/heads/main" ]]; then
             for f in "NeuroMesh-AI-v${V}-linux-x64.deb" "NeuroMesh-AI-v${V}-linux-x64.AppImage"; do
-              [[ -f "$f" ]] || continue
+              test -s "$f"
               gh release upload "v${V}" "$f" --clobber --repo "$GITHUB_REPOSITORY"
               gh release upload latest "$f" --clobber --repo "$GITHUB_REPOSITORY"
             done

@@ -30,7 +30,7 @@ Priority: optional
 Architecture: amd64
 Installed-Size: $SIZE
 Maintainer: NeuroMesh <noreply@neuromesh.local>
-Depends: libgtk-3-0, libsecret-1-0, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, libasound2 | libasound2t64
+Depends: libgtk-3-0, libsecret-1-0, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, libasound2 | libasound2t64, libmpv2 | libmpv1, libayatana-appindicator3-1
 Description: NeuroMesh AI
  Private on-device AI assistant with a bundled llama.cpp server.
 C
@@ -58,5 +58,7 @@ R
 chmod +x "$A/AppRun"
 curl -fsSL --retry 3 -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
 chmod +x appimagetool
-ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$A" "$OUT/NeuroMesh-AI-v${V}-linux-x64.AppImage" || echo "AppImage step failed (the .deb and tar.gz are still published)"
-ls -la "$OUT"/NeuroMesh-AI-v${V}-linux-x64.* || true
+ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$A" "$OUT/NeuroMesh-AI-v${V}-linux-x64.AppImage"
+test -s "$OUT/NeuroMesh-AI-v${V}-linux-x64.deb"
+test -s "$OUT/NeuroMesh-AI-v${V}-linux-x64.AppImage"
+ls -la "$OUT"/NeuroMesh-AI-v${V}-linux-x64.*
