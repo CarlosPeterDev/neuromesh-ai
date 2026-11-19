@@ -14,6 +14,7 @@ import '../services/rag_service.dart';
 import '../services/web_search_service.dart';
 import '../services/hive_service.dart';
 import '../services/download_queue.dart';
+import '../widgets/model_file_filter.dart';
 import 'voice_views.dart';
 import 'chat_tools.dart';
 import '../services/sandbox_service.dart';
@@ -327,6 +328,8 @@ class ToolboxView extends StatelessWidget {
           Obx(() {
             final q = Get.find<DownloadQueue>();
             final cur = q.current.value;
+            final kind = q.fileKindFilter.value;
+            final waiting = q.queue.where((model) => kind == null || model.fileKind == kind);
             return Column(children: [
               AppRow(
                 icon: Icons.queue_rounded,
@@ -339,21 +342,26 @@ class ToolboxView extends StatelessWidget {
                     : TextButton(
                         onPressed: q.cancelAll, child: const Text('Cancel all')),
               ),
-              if (cur != null)
+              if (cur != null || q.queue.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: ModelFileFilter(selected: kind, onChanged: (value) => q.fileKindFilter.value = value),
+                ),
+              if (cur != null && (kind == null || cur.fileKind == kind))
                 AppRow(
                   icon: Icons.downloading_rounded,
                   title: cur.name,
-                  subtitle: 'Downloading now',
+                  subtitle: '${cur.fileKind.label} · Downloading now',
                   trailing: IconButton(
                       tooltip: 'Cancel this download',
                       icon: const Icon(Icons.close_rounded),
                       onPressed: q.cancelCurrent),
                 ),
-              for (final m in q.queue)
+              for (final m in waiting)
                 AppRow(
                   icon: Icons.schedule_rounded,
                   title: m.name,
-                  subtitle: 'Waiting',
+                  subtitle: '${m.fileKind.label} · Waiting',
                   trailing: IconButton(
                       tooltip: 'Remove from queue',
                       icon: const Icon(Icons.close_rounded),

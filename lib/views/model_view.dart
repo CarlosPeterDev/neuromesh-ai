@@ -8,11 +8,13 @@ import '../controllers/settings_controller.dart';
 import '../core/ui.dart';
 import '../models/ai_model.dart';
 import '../services/download_service.dart';
+import '../services/download_queue.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
 import 'hf_browser.dart';
 import 'model_helpers_view.dart';
 import '../utils/model_file_role.dart';
+import '../widgets/model_file_filter.dart';
 import 'voice_views.dart';
 import '../services/voice_models.dart';
 import '../services/favorites_service.dart';
@@ -295,9 +297,28 @@ class ModelView extends GetView<ModelController> {
       if (controller.modelScope.value == 'online') {
         return const SizedBox.shrink();
       }
-      final downloads = controller.activeDownloads.values.toList();
-      if (downloads.isEmpty) return const SizedBox.shrink();
+      final allDownloads = controller.activeDownloads.values;
+      if (allDownloads.isEmpty) return const SizedBox.shrink();
+      final filter = Get.find<DownloadQueue>().fileKindFilter;
+      final picked = filter.value;
       final t = AppTokens.of(context);
+
+      ModelFileKind kindFor(String filename) {
+        final name = filename.startsWith('save:') ? filename.substring(5) : filename;
+        if (controller.externalDownloadId.value != null &&
+            controller.importFileName.value == name &&
+            controller.externalDownloadKind.value != null) {
+          return controller.externalDownloadKind.value!;
+        }
+        if (controller.availableModels.any((model) => model.mmprojFilename == name)) {
+          return ModelFileKind.helper;
+        }
+        final model = controller.availableModels.firstWhereOrNull((model) => model.filename == name);
+        return model?.fileKind ?? modelFileKind(name);
+      }
+
+      final downloads = allDownloads.where((item) =>
+          picked == null || kindFor(item.filename) == picked).toList();
 
       String labelFor(String filename) {
         if (filename.startsWith('save:')) {
@@ -327,6 +348,15 @@ class ModelView extends GetView<ModelController> {
         child: AppCard(
           padding: EdgeInsets.zero,
           child: Column(children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+              child: ModelFileFilter(selected: picked, onChanged: (kind) => filter.value = kind),
+            ),
+            if (downloads.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: Text('No active downloads match this filter.'),
+              ),
             for (var i = 0; i < downloads.length; i++) ...[
               if (i > 0)
                 Padding(
@@ -338,6 +368,7 @@ class ModelView extends GetView<ModelController> {
                 final pct = (dp.progress.value * 100).clamp(0.0, 100.0);
                 final eta = dp.eta;
                 final meta = [
+                  kindFor(dp.filename).label,
                   if (dp.status.value.isNotEmpty)
                     dp.status.value.replaceAll(RegExp(r'\.+$'), ''),
                   '${pct.toStringAsFixed(0)}%',
@@ -1438,7 +1469,7 @@ class ModelView extends GetView<ModelController> {
         const AppTag('Image', icon: Icons.image_outlined),
       if (controller.isNpuModel(model)) const AppTag('NPU'),
       if (controller.isUncensoredModel(model)) const AppTag('Uncensored'),
-      AppTag(modelFileRole(model.filename).label),
+      AppTag(model.fileKind.label),
       if (model.isImported) const AppTag('Imported'),
       if (model.isCustom) const AppTag('Custom'),
     ];
@@ -1657,7 +1688,8 @@ class ModelView extends GetView<ModelController> {
           ? controller.defaultLocalFilter
           : controller.localFilter.value;
       final fitBytes = controller.modelBytes(model);
-      final fit = controller.isImageModel(model) || fitBytes <= 0
+      final fit = model.fileKind != ModelFileKind.model ||
+              controller.isImageModel(model) || fitBytes <= 0
           ? ModelFit.unknown
           : fitFor(needGBForBytes(fitBytes));
       // "Recommended" only for models that really fit this phone (or the
@@ -1747,7 +1779,7 @@ class ModelView extends GetView<ModelController> {
                                           color: t.accent,
                                           fontWeight: FontWeight.w600),
                                     ),
-                                  TextSpan(text: subtitle),
+                                  TextSpan(text: '${model.fileKind.label} · $subtitle'),
                                 ]),
                                 style: t.small.copyWith(fontFeatures: _tabular),
                                 maxLines: 1,
@@ -1787,13 +1819,14 @@ class ModelView extends GetView<ModelController> {
     final installed = controller.displayedModels
         .where((m) => controller.isDownloaded(m.filename)).toList();
     if (installed.isEmpty) return [_buildEmptyLibrary(context)];
-    final models = installed.where((m) => controller.libraryRole.value == 'all' ||
-        (controller.libraryRole.value == 'helpers'
-            ? modelFileRole(m.filename).isHelper
-            : !modelFileRole(m.filename).isHelper)).toList();
+    final filter = controller.libraryKindFilter;
+    final picked = filter.value;
+    final models =
+        installed.where((model) => picked == null || model.fileKind == picked).toList();
     final t = AppTokens.of(context);
-    final helpers = models.where((m) => modelFileRole(m.filename).isHelper).toList();
-    final mainModels = models.where((m) => !modelFileRole(m.filename).isHelper).toList();
+    final helpers = models.where((m) => m.fileKind == ModelFileKind.helper).toList();
+    final mainModels = models.where((m) => m.fileKind == ModelFileKind.model).toList();
+    final unknown = models.where((m) => m.fileKind == ModelFileKind.unknown).toList();
     final image = mainModels.where(controller.isImageModel).toList();
     final vision = mainModels
         .where(
@@ -1830,14 +1863,10 @@ class ModelView extends GetView<ModelController> {
           _sortAction(),
         ]),
       ),
-      Wrap(spacing: 8, children: [
-        for (final entry in const [('all', 'All'), ('models', 'Main models'), ('helpers', 'Helpers')])
-          ChoiceChip(label: Text(entry.$2),
-              selected: controller.libraryRole.value == entry.$1,
-              onSelected: (_) => controller.libraryRole.value = entry.$1),
-      ]),
+      ModelFileFilter(selected: picked, onChanged: (kind) => filter.value = kind),
       if (models.isEmpty) const Text('No files match this filter.'),
       ...group('Helpers', helpers),
+      ...group('Unknown', unknown),
       ...group('Chat', chat),
       ...group('Vision', vision),
       ...group('Image', image),
@@ -1918,7 +1947,9 @@ class ModelView extends GetView<ModelController> {
               Wrap(spacing: 6, runSpacing: 6, children: tags),
             ],
             const SizedBox(height: 12),
-            Text(modelFileRole(model.filename).help),
+            Text(model.fileKind == ModelFileKind.unknown
+                ? 'The file type could not be identified.'
+                : modelFileRole(model.filename).help),
             TextButton.icon(
               icon: const Icon(Icons.extension_outlined),
               label: Text(modelFileRole(model.filename).isHelper
@@ -2360,9 +2391,8 @@ class _FolderImportListState extends State<_FolderImportList> {
         for (final f in widget.files)
           AppRow(
             title: f.name,
-            subtitle: _imported(f)
-                ? '${_size(f.size)} · Already in the app'
-                : _size(f.size),
+            subtitle: '${modelFileKind(f.name).label} · ${_size(f.size)}'
+                '${_imported(f) ? ' · Already in the app' : ''}',
             trailing: Checkbox(
               value: _imported(f) ? true : _selected.contains(f.uri),
               onChanged: _imported(f)

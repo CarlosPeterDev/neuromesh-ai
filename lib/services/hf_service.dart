@@ -114,6 +114,7 @@ class HfGgufFile {
 
   String get filename => path.split('/').last;
   ModelFileRole get role => modelFileRole(path);
+  ModelFileKind get kind => modelFileKind(path);
 
   /// Multi-part models ("-00001-of-00003") are not supported by the
   /// single-file downloader.
@@ -195,60 +196,51 @@ class HfService {
         .toList();
   }
 
-  /// Downloadable single-file .gguf models in [repoId], smallest first.
-  Future<List<HfGgufFile>> listGgufFiles(String repoId,
-      {bool images = false, bool includeHelpers = false}) async {
-    final data = await _getJson(
-      Uri.https(_host, '/api/models/$repoId/tree/main',
-          {if (!images) 'recursive': 'true'}),
-    );
+  /// Files exposed by the repository browser, including unclassified items.
+  Future<List<HfGgufFile>> listRepositoryFiles(String repoId,
+      {bool recursive = true}) async {
+    final data = await _getJson(Uri.https(_host, '/api/models/$repoId/tree/main',
+        {if (recursive) 'recursive': 'true'}));
     if (data is! List) throw HfException('Unexpected reply from Hugging Face.');
     final files = <HfGgufFile>[];
     for (final item in data.whereType<Map<String, dynamic>>()) {
       if (item['type'] != 'file') continue;
       final path = (item['path'] ?? '').toString();
-      final lower = path.toLowerCase();
-      if (images) {
-        // Single-file checkpoints at the repo root only (not diffusers
-        // folders), without add-ons the generator can't use on their own.
-        if (!lower.endsWith('.safetensors') || path.contains('/')) continue;
-        if (isImageAddon(lower)) continue;
-      } else if (!lower.endsWith('.gguf')) {
-        continue;
-      }
+      if (path.isEmpty) continue;
       final lfs = item['lfs'];
       final size = (lfs is Map ? lfs['size'] : null) ?? item['size'];
-      final file = HfGgufFile(path: path, size: (size as num?)?.toInt() ?? 0);
-      if (!images &&
-          (file.isSplit || (!includeHelpers && file.role.isHelper))) {
-        continue;
-      }
-      // Phones can't hold huge image checkpoints.
-      if (images && (file.size > 6 * 1024 * 1024 * 1024)) continue;
-      files.add(file);
+      files.add(HfGgufFile(path: path, size: (size as num?)?.toInt() ?? 0));
     }
+    return files;
+  }
+
+  /// Downloadable single-file models, smallest first.
+  Future<List<HfGgufFile>> listGgufFiles(String repoId,
+      {bool images = false, bool includeHelpers = false}) async {
+    final files = (await listRepositoryFiles(repoId, recursive: !images))
+        .where((file) => canDownloadSingleFile(file, images: images) &&
+            (includeHelpers || images || !file.role.isHelper))
+        .toList();
     files.sort((a, b) => a.size.compareTo(b.size));
     return files;
   }
 
-  /// Every weight file (.safetensors / .gguf) in an image repo, including
-  /// sub-folders: the parts of a multi-file model.
-  Future<List<HfGgufFile>> listImageParts(String repoId) async {
-    final data = await _getJson(
-        Uri.https(_host, '/api/models/$repoId/tree/main', {'recursive': 'true'}));
-    if (data is! List) throw HfException('Unexpected reply from Hugging Face.');
-    final out = <HfGgufFile>[];
-    for (final item in data.whereType<Map<String, dynamic>>()) {
-      if (item['type'] != 'file') continue;
-      final path = (item['path'] ?? '').toString();
-      final lower = path.toLowerCase();
-      if (!(lower.endsWith('.safetensors') || lower.endsWith('.gguf'))) continue;
-      final lfs = item['lfs'];
-      final size = (lfs is Map ? lfs['size'] : null) ?? item['size'];
-      out.add(HfGgufFile(path: path, size: (size as num?)?.toInt() ?? 0));
-    }
-    return out;
+  static bool canDownloadSingleFile(HfGgufFile file, {bool images = false}) {
+    final lower = file.path.toLowerCase();
+    if (file.isSplit) return false;
+    if (!images) return lower.endsWith('.gguf');
+    return lower.endsWith('.safetensors') &&
+        !file.path.contains('/') &&
+        !isImageAddon(lower) &&
+        file.size <= 6 * 1024 * 1024 * 1024;
   }
+
+  /// Every weight file in an image repo, including parts in subfolders.
+  Future<List<HfGgufFile>> listImageParts(String repoId) async =>
+      (await listRepositoryFiles(repoId)).where((file) {
+        final lower = file.path.toLowerCase();
+        return lower.endsWith('.safetensors') || lower.endsWith('.gguf');
+      }).toList();
 
   static String downloadUrl(String repoId, String path) {
     final encoded = path.split('/').map(Uri.encodeComponent).join('/');

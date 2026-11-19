@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 
 import '../controllers/model_controller.dart';
 import '../models/ai_model.dart';
+import '../utils/model_file_role.dart';
 import 'download_service.dart';
 import 'hive_service.dart';
 
@@ -12,6 +13,7 @@ import 'hive_service.dart';
 class DownloadQueue extends GetxService {
   final queue = <AiModel>[].obs;
   final current = Rxn<AiModel>();
+  final fileKindFilter = Rxn<ModelFileKind>();
   bool _pumping = false;
 
   static const _key = 'model_download_queue';
