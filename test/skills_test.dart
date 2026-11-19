@@ -16,6 +16,13 @@ void main() {
         throwsFormatException);
     expect(() => SkillDefinition.parse('# No metadata'), throwsFormatException);
   });
+  test('context pages preserve source code indentation and trailing whitespace',
+      () {
+    const source = 'def greet():\n    print("hello")\n\treturn 0\n';
+    final doc = ContextDocument('file:main.py', source);
+    expect(doc.page(0), endsWith(source));
+  });
+
   test('mentions preserve quoted paths and skills', () {
     expect(
         contextMentions('Use @skill:code-review with @file:"docs/my notes.md"'),

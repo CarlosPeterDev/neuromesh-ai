@@ -39,13 +39,36 @@ int contextTokens(String text) => (utf8.encode(text).length / 2).ceil() + 8;
 class ContextDocument {
   final String id;
   final List<String> pages;
-  ContextDocument(this.id, String text)
-      : pages = chunkText(text, size: 240, overlap: 32);
+  ContextDocument(this.id, String text) : pages = _contextPages(text);
   String page(int index) {
     if (index < 0 || index >= pages.length)
       throw RangeError('Page must be between 1 and ${pages.length}.');
     return '[$id page ${index + 1}/${pages.length}]\n${pages[index]}';
   }
+}
+
+// Preserve source formatting: indentation is meaningful in code and YAML.
+List<String> _contextPages(String text) {
+  final pages = <String>[];
+  var start = 0;
+  bool lowSurrogate(int index) =>
+      index < text.length &&
+      text.codeUnitAt(index) >= 0xdc00 &&
+      text.codeUnitAt(index) <= 0xdfff;
+  while (start < text.length) {
+    var end = (start + 240).clamp(0, text.length);
+    if (end < text.length) {
+      final newline = text.lastIndexOf('\n', end - 1);
+      if (newline >= start + 120) end = newline + 1;
+      if (lowSurrogate(end)) end--;
+    }
+    pages.add(text.substring(start, end));
+    if (end == text.length) break;
+    var next = (end - 32).clamp(start + 1, end);
+    if (lowSurrogate(next)) next--;
+    start = next;
+  }
+  return pages;
 }
 
 class SkillTurnContext {
