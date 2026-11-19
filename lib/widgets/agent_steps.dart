@@ -130,6 +130,7 @@ class _AgentStepsViewState extends State<AgentStepsView> {
   }
 
   Future<void> showSteps() async {
+    if (open) return;
     open = true;
     final source = widget.traceSource;
     final worker = source == null
@@ -186,7 +187,7 @@ class _AgentStepsViewState extends State<AgentStepsView> {
         child: Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: open ? null : showSteps,
+              onPressed: showSteps,
               icon: running
                   ? const SizedBox(
                       width: 14,

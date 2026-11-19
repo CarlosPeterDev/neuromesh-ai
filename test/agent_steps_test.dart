@@ -75,6 +75,12 @@ void main() {
     await tester.pumpWidget(view(false));
     await tester.pump();
     expect(find.text('Read file'), findsOneWidget);
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('1 step'));
+    await tester.pumpAndSettle();
+    expect(find.byType(Dialog), findsOneWidget);
+    expect(find.text('Read file'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
   testWidgets('live trace completes even before the chat widget rebuilds',
