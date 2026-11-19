@@ -150,6 +150,16 @@ List<String> speechChunks(String text) {
 }
 
 class VoiceService extends GetxService {
+  VoiceService({
+    AudioPlayer? player,
+    http.Client? workerClient,
+    Future<Directory> Function()? temporaryDirectory,
+  })  : _player = player ?? AudioPlayer(),
+        _workerClient = workerClient,
+        _temporaryDirectory = temporaryDirectory ?? getTemporaryDirectory;
+
+  final http.Client? _workerClient;
+  final Future<Directory> Function() _temporaryDirectory;
   sherpa.OfflineRecognizer? _stt;
   String? _sttId;
   sherpa.OfflineTts? _tts;
@@ -186,7 +196,7 @@ class VoiceService extends GetxService {
       Get.find<HiveService>().setSetting('voice_speaker_${model.id}', index);
 
 
-  final AudioPlayer _player = AudioPlayer();
+  final AudioPlayer _player;
   FlutterTts? _system;
   bool _stopSpeaking = false;
   bool _isClone = false;
@@ -593,8 +603,8 @@ class VoiceService extends GetxService {
   Future<Uint8List?> _remoteWav(String chunk) async {
     if (workerUrl.isEmpty) return null;
     try {
-      final res = await http
-          .post(Uri.parse('$workerUrl/tts'),
+      final post = _workerClient?.post ?? http.post;
+      final res = await post(Uri.parse('$workerUrl/tts'),
               headers: {
                 'Authorization': 'Bearer $workerToken',
                 'Content-Type': 'application/json'
@@ -636,13 +646,46 @@ class VoiceService extends GetxService {
   }
 
   Future<void> _playWav(Uint8List wav, int slot) async {
-    final dir = await getTemporaryDirectory();
+    if (_stopSpeaking) return;
+    final dir = await _temporaryDirectory();
+    if (_stopSpeaking) return;
     final f = File('${dir.path}/nm_tts_${slot % 2}.wav');
     await f.writeAsBytes(wav);
-    final done = _player.onPlayerComplete.first;
-    _stopSignal = Completer<void>();
-    await _player.play(DeviceFileSource(f.path));
-    await Future.any([done, _stopSignal!.future]);
+    if (_stopSpeaking) return;
+    final done = Completer<void>();
+    final stopped = Completer<void>();
+    _stopSignal = stopped;
+    Object? playbackError;
+    StackTrace? playbackStack;
+    void finish() {
+      if (!done.isCompleted) done.complete();
+    }
+
+    final subscription = _player.onPlayerComplete.listen(
+      (_) => finish(),
+      onError: (Object error, StackTrace stack) {
+        playbackError = error;
+        playbackStack = stack;
+        finish();
+      },
+      onDone: finish,
+    );
+    try {
+      await _player.play(DeviceFileSource(f.path));
+      // A stop may arrive while the native player is still preparing. Its
+      // late play completion must not restart audio after the interruption.
+      if (_stopSpeaking) {
+        await _player.stop();
+        return;
+      }
+      await Future.any([done.future, stopped.future]);
+      if (playbackError != null) {
+        Error.throwWithStackTrace(playbackError!, playbackStack!);
+      }
+    } finally {
+      await subscription.cancel();
+      if (identical(_stopSignal, stopped)) _stopSignal = null;
+    }
   }
 
   /// Speaks with the worker phone, the on-device voice model, or the
