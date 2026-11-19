@@ -127,4 +127,22 @@ void main() {
     await expectLater(service().speak('Hello there.'), throwsStateError);
     expect(player.completed.hasListener, isFalse);
   });
+
+  test('a stopped worker failure never falls back to system speech', () async {
+    client.close();
+    final requested = Completer<void>();
+    final response = Completer<http.Response>();
+    client = MockClient((_) {
+      requested.complete();
+      return response.future;
+    });
+    final voice = service();
+    final speaking = voice.speak('Hello there.');
+    await requested.future;
+    await voice.stopSpeaking();
+    response.complete(http.Response('Worker unavailable', 503));
+    await speaking;
+    expect(player.plays, 0);
+    expect(player.completed.hasListener, isFalse);
+  });
 }
