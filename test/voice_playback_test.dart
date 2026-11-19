@@ -124,7 +124,9 @@ void main() {
   test('native playback errors reach the caller and release the listener',
       () async {
     player.error = StateError('Audio output disconnected');
+    player.autoComplete = false;
     await expectLater(service().speak('Hello there.'), throwsStateError);
+    expect(player.playing, isFalse);
     expect(player.completed.hasListener, isFalse);
   });
 

@@ -698,6 +698,11 @@ class VoiceService extends GetxService {
       if (playbackError != null) {
         Error.throwWithStackTrace(playbackError!, playbackStack!);
       }
+    } catch (_) {
+      try {
+        await _player.stop();
+      } catch (_) {}
+      rethrow;
     } finally {
       await subscription.cancel();
       if (identical(_stopSignal, stopped)) _stopSignal = null;
