@@ -17,6 +17,7 @@ import '../services/memory_service.dart';
 import '../services/sandbox_service.dart';
 import '../services/voice_models.dart';
 import 'quick_start.dart';
+import 'chat_tools.dart';
 
 const kSetupDone = 'setup_done';
 
@@ -49,8 +50,11 @@ class _SetupViewState extends State<SetupView> {
   bool tools = true;
   bool autoMemory = true;
   bool memoryUpdate = true;
+  bool? _alpineAvailable;
   bool sandbox = false;
-  bool sandboxNoAsk = true;
+  bool sandboxTools = false;
+  bool sandboxNoAsk = false;
+  bool _sandboxPermissionChanged = false;
   // Performance
   bool autoContext = true;
   bool autoTitle = true;
@@ -64,6 +68,19 @@ class _SetupViewState extends State<SetupView> {
   @override
   void initState() {
     super.initState();
+    if (_pro) {
+      final alpine = Get.find<SandboxService>();
+      sandboxNoAsk = Get.find<AgentService>()
+              .policyFor('built-in', 'run_shell', needsConfirm: true) ==
+          'allow';
+      unawaited(alpine.runtimeAvailable().then((available) {
+        if (!mounted) return;
+        setState(() {
+          _alpineAvailable = available;
+          sandbox = available && !alpine.installed.value;
+        });
+      }));
+    }
     if (_setUpBefore) {
       // Show what is set now.
       final agent = Get.find<AgentService>();
@@ -79,10 +96,6 @@ class _SetupViewState extends State<SetupView> {
       ttsEn = !_has('piper-en-amy');
       ttsAr = !_has('piper-ar-kareem');
       vad = !_has('silero-vad');
-      if (_pro) {
-        sandbox = false;
-        sandboxNoAsk = agent.policyFor('built-in', 'run_shell', needsConfirm: true) == 'allow';
-      }
     } else {
       chatModel = !_hasModel;
       stt = !_has(_sttId);
@@ -112,7 +125,7 @@ class _SetupViewState extends State<SetupView> {
       await agent.setMode(tools ? AgentChatMode.auto : AgentChatMode.off);
       await agent.setAutoMemory(autoMemory);
       await MemoryService.ensure().setEnabled(memoryUpdate);
-      if (_pro) {
+      if (_alpineAvailable == true && _sandboxPermissionChanged) {
         final policy = sandboxNoAsk ? 'allow' : 'default';
         for (final tool in const [
           'run_shell', 'run_script', 'install_packages', 'convert_file',
@@ -162,8 +175,10 @@ class _SetupViewState extends State<SetupView> {
       if (vad && !_has('silero-vad')) 'silero-vad',
     ];
     final useChatModel = chatModel && !_hasModel;
-    final installSandbox = _pro && sandbox &&
-        !Get.find<SandboxService>().installed.value;
+    final alpine = _alpineAvailable == true ? Get.find<SandboxService>() : null;
+    final installSandbox = alpine != null && sandbox && !alpine.installed.value;
+    final installTools = alpine != null && sandboxTools &&
+        (alpine.installed.value || installSandbox);
     void notify(String message) {
       if (messenger?.mounted == true) {
         messenger!.showSnackBar(SnackBar(content: Text(message)));
@@ -171,7 +186,7 @@ class _SetupViewState extends State<SetupView> {
     }
 
     try {
-      if (!useChatModel && voiceIds.isEmpty && !installSandbox) {
+      if (!useChatModel && voiceIds.isEmpty && !installSandbox && !installTools) {
         notify('Settings applied.');
         return;
       }
@@ -194,12 +209,14 @@ class _SetupViewState extends State<SetupView> {
               details: error);
         }));
       }
-      if (installSandbox) unawaited(_installSandbox(Get.find<SandboxService>()));
+      if (alpine != null && (installSandbox || installTools)) {
+        unawaited(_installSandbox(alpine, withTools: installTools));
+      }
       notify('Settings applied. Selected downloads are starting.');
     } catch (error) {
       Get.find<AppLogService>().error('Setup downloads could not start',
           details: error);
-      notify('Settings applied. Open Models to start the downloads again.');
+      notify('Settings applied. Reopen Setup to retry the downloads.');
     }
   }
 
@@ -219,18 +236,64 @@ class _SetupViewState extends State<SetupView> {
     }
   }
 
-  Future<void> _installSandbox(SandboxService sb) async {
+  Future<void> _installSandbox(SandboxService sb, {required bool withTools}) async {
     try {
       await sb.install();
-      sb.busy.value = true;
-      sb.status.value = 'Installing tools…';
-      await sb.run('apk update >/dev/null 2>&1; apk add --no-cache ${sandboxProfiles['basic']}', timeoutSec: 1200);
-    } catch (e) {
-      Get.snackbar('Sandbox setup failed', '$e'.replaceFirst('Exception: ', ''));
-    } finally {
-      sb.busy.value = false;
-      sb.status.value = 'Ready';
+      if (withTools) {
+        final result = await sb.run(
+          'apk add --no-cache ${sandboxProfiles['basic']}',
+          timeoutSec: 1200,
+        );
+        if (!result.trimRight().endsWith('[exit code 0]')) {
+          Get.find<AppLogService>().warning('Alpine developer tools setup failed',
+              details: result);
+          Get.snackbar('Alpine is installed', 'The optional developer tools could not be installed. You can retry from Setup.');
+        }
+      }
+    } catch (error) {
+      Get.snackbar('Alpine setup failed', '$error'.replaceFirst('Exception: ', ''));
     }
+  }
+
+  Widget _alpineDownloads() {
+    if (_alpineAvailable != true) {
+      return AppRow(
+        icon: Icons.terminal_rounded,
+        title: 'Alpine Linux',
+        subtitle: _alpineAvailable == null && _pro
+            ? 'Checking the Android runtime…'
+            : 'Available in the ARM64 Android build',
+      );
+    }
+    final alpine = Get.find<SandboxService>();
+    return Obx(() => Column(children: [
+      if (alpine.installed.value)
+        AppRow(
+          icon: Icons.terminal_rounded,
+          title: 'Alpine Linux installed',
+          subtitle: 'Open the terminal',
+          chevron: true,
+          onTap: () => Get.to(() => const AlpineTerminalView()),
+        )
+      else if (alpine.busy.value)
+        AppRow(
+          icon: Icons.terminal_rounded,
+          title: 'Installing Alpine Linux',
+          subtitle: alpine.status.value,
+          trailing: SizedBox.square(
+            dimension: 20,
+            child: CircularProgressIndicator(value: alpine.downloadProgress.value),
+          ),
+        )
+      else
+        _sw(Icons.terminal_rounded, 'Install Alpine Linux',
+            'About 4 MB. Opens a local terminal that shares this chat’s workspace.',
+            sandbox, (value) => sandbox = value),
+      if (alpine.installed.value || (sandbox && !alpine.busy.value))
+        _sw(Icons.code_rounded, 'Alpine developer tools',
+            'Optional. Downloads Python, Node.js, Git and other command-line tools.',
+            sandboxTools, (value) => sandboxTools = value, rec: false),
+    ]));
   }
 
   Widget _sw(IconData icon, String title, String sub, bool v, void Function(bool) on, {bool rec = true}) =>
@@ -252,7 +315,7 @@ class _SetupViewState extends State<SetupView> {
           showBack: !widget.firstRun),
       body: ListView(padding: kPagePadding, children: [
         AppNotice(widget.firstRun || !_setUpBefore
-            ? 'These are the settings that suit your phone (${_ram.toStringAsFixed(1)} GB RAM). Everything is on by default; turn off what you do not want. You can change all of it later in Settings → Setup.'
+            ? 'These are the settings that suit your phone (${_ram.toStringAsFixed(1)} GB RAM). Review the selected downloads and settings before applying them. You can change all of it later in Settings → Setup.'
             : 'Your current settings. Switches for downloads are on only for things you have not installed yet.'),
         const SectionHeader('Downloads'),
         AppGroup(children: [
@@ -263,17 +326,20 @@ class _SetupViewState extends State<SetupView> {
           _sw(Icons.record_voice_over_rounded, 'English voice', 'Piper Amy  ·  67 MB${_has('piper-en-amy') ? '  ·  installed' : ''}', ttsEn, (v) => ttsEn = v),
           _sw(Icons.record_voice_over_rounded, 'Arabic voice', 'Piper Kareem  ·  67 MB${_has('piper-ar-kareem') ? '  ·  installed' : ''}', ttsAr, (v) => ttsAr = v),
           _sw(Icons.graphic_eq_rounded, 'Smart speech detector', 'Makes calls feel natural  ·  1 MB${_has('silero-vad') ? '  ·  installed' : ''}', vad, (v) => vad = v),
+          _alpineDownloads(),
         ]),
         const SectionHeader('Agent'),
         AppGroup(children: [
           _sw(Icons.handyman_outlined, 'Let the AI use tools', 'Files, web search, voice, images. It only uses them when needed.', tools, (v) => tools = v),
           _sw(Icons.psychology_alt_rounded, 'Remember things I tell it', 'Saves short facts about you on this device', autoMemory, (v) => autoMemory = v),
           _sw(Icons.update_rounded, 'Update memory automatically', 'Reads recent chats once a day', memoryUpdate, (v) => memoryUpdate = v),
-          if (_pro) ...[
-            _sw(Icons.terminal_rounded, 'Install the Linux sandbox', 'About 150 MB with python, node, git. One shared sandbox for every chat.', sandbox, (v) => sandbox = v),
-            _sw(Icons.bolt_rounded, 'Run sandbox commands without asking', 'Commands run in an isolated Linux, not on your phone files', sandboxNoAsk, (v) => sandboxNoAsk = v),
-          ] else
-            const AppRow(icon: Icons.terminal_rounded, title: 'Linux sandbox', subtitle: 'Available on supported Android devices'),
+          if (_alpineAvailable == true)
+            _sw(Icons.bolt_rounded, 'Run sandbox commands without asking',
+                'Controls whether the agent asks before running commands in Alpine.',
+                sandboxNoAsk, (value) {
+                  sandboxNoAsk = value;
+                  _sandboxPermissionChanged = true;
+                }, rec: false),
         ]),
         const SectionHeader('Performance'),
         AppGroup(children: [
@@ -284,7 +350,7 @@ class _SetupViewState extends State<SetupView> {
         const SizedBox(height: 16),
         if (_saveError case final message?)
           AppNotice(message, icon: Icons.error_outline_rounded),
-        PrimaryButton(label: _setUpBefore && !widget.firstRun ? 'Save' : 'Apply recommended settings', icon: Icons.check_rounded, busy: _busy, onPressed: _apply),
+        PrimaryButton(label: _setUpBefore && !widget.firstRun ? 'Save' : 'Apply recommended settings', icon: Icons.check_rounded, busy: _busy, onPressed: _pro && _alpineAvailable == null ? null : _apply),
         if (widget.firstRun)
           TextButton(
               onPressed: _busy ? null : _skip,
