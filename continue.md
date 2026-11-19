@@ -8,12 +8,10 @@ Read this file, check the current branch and working tree, and review the latest
 
 ## Release and verification
 
-- **v1.0.100** was published on 2026-11-19 from `31e7754`. It has two Android APKs, a Play AAB, a Windows x64 installer, and Linux x64 DEB and AppImage packages. Android is development-signed. [Release](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/tag/v1.0.100)
-- The release workflow passed Android analysis and tests, both APK signature and architecture checks, the Play policy and size checks, and emulator installation and reinstall. The Windows and Linux packaging and native image-runtime checks passed. The six installer digests match the recorded SHA-256 checksums on the versioned and moving release pages. [Workflow](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44490592052)
-- The release includes voice interruption fixes for native player setup and remote worker fallback, and returns the call to listening without waiting for the worker. [Playback PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/14) · [Worker fallback PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/16) · [Return to listening PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/17)
-- Real ARM64 Android inference, microphone and Bluetooth behavior, Windows and Linux runtime behavior on user devices, and Play internal-track installation still need verification.
-
-The previous v1.0.90 build needed a separate Linux recovery run. The release workflow now waits for all three platforms before publishing. [Previous release](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/tag/v1.0.90) · [Release workflow PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/15)
+- **v1.0.113** was published on 2026-11-19 from `ebdfc84`. It contains two Android APKs, the Play AAB, a Windows x64 installer, and Linux x64 DEB and AppImage packages. Android is development-signed. [Release](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/tag/v1.0.113)
+- The release workflow passed analysis, tests, APK signature and architecture checks, Play bundle checks, Android emulator install and reinstall, desktop packaging and native image-runtime checks. The standalone APKs and AAB include the required Alpine launcher libraries. All six asset digests match the release checksum manifest on both release pages. [Workflow](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44532641823)
+- All 164 Flutter tests passed locally, including search retries, HTML attachment follow-ups, small-context trimming, model-helper classification, cluster allocation, and Linux command confirmation. Physical ARM64 Alpine startup, voice playback, model-helper combinations, cluster performance, Windows command execution and SSH VM sessions still need device tests.
+- Earlier tested releases were v1.0.100, v1.0.107, and v1.0.111. [Release history](https://github.com/carlospeter582011-prog/neuromesh-ai/releases)
 
 ## Where to work
 
@@ -38,7 +36,7 @@ python -m unittest discover -s scripts -p 'test_report_build_config.py'
 
 Full release packaging also needs the dependencies in the GitHub workflow. Linux packaging uses Ubuntu 24.04. The release uses version name `1.0.<run_number>` and Android version code `5000 + run_number`. The Android release path builds the Play AAB and standalone APKs with `PLAY_BUILD=true`. Alpine downloads on demand on supported ARM64 devices. CI generates an ephemeral development key if production signing is unavailable, so plan a clean install when testing different development builds. Follow [release signing](SECURITY.md#release-signing) and [Play Store preparation](docs/PLAY_STORE.md).
 
-## Fixes following v1.0.100
+## Changes in v1.0.113
 
 The device follow-up covers grounded web search and attachment replies, fitting smaller local contexts, model and helper imports, one-line model tabs, token-based Cloudflare Worker setup, and linked voice and text chats with cloned voice selection. The Android build now requires PRoot's shared-memory library in the AAB and both APKs. Open **Toolbox → AI tools → Alpine terminal** to use the terminal directly. ARM64 Alpine launch, audio playback, and model-helper compatibility still need device checks. [Device report](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/20)
 
@@ -46,7 +44,7 @@ The device follow-up covers grounded web search and attachment replies, fitting 
 
 The Android cluster supports saved device weights plus speed, context and model-capacity profiles. The requested split applies on the next GGUF load and is bounded by available memory. Windows and Linux use the host shell by default. **Settings → Desktop command access** controls per-command, per-type, or all-command approval and can use a user-configured SSH VM. Multi-device inference and native Windows/SSH behavior still need device checks. [Cluster and desktop follow-up](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/24)
 
-Hugging Face files, the active download list, the download queue, and My models show **Model**, **Helper**, or **Unknown**. The repository view keeps file sizes and compatibility notes. Model memory estimates stay in the local library and load checks. File details and the download confirmation offer a companion preview before you start a download. [Model files follow-up](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/26)
+Hugging Face files, the active download list, the download queue, and My models show **Model**, **Helper**, or **Unknown**. The repository view keeps file sizes and compatibility notes. Model memory estimates stay in the local library and load checks. File details and the download confirmation offer a companion preview before you start a download. [Model files follow-up](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/26) · [Companion preview](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/29)
 
 ## Next tasks
 
