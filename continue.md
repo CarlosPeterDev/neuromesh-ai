@@ -1,54 +1,79 @@
-# continue.md — NeuroMesh AI development state
+# NeuroMesh AI — development state
 
-## Overview
-Small base app (Flutter + Kotlin + llama.cpp) to be extended step by step. Repo: carlospeter582011-prog/neuromesh-ai.
+Updated: 2026-11-19. Repository: carlospeter582011-prog/neuromesh-ai.
+This file records verified results separately from device-dependent behavior.
 
-## Build status (verified 2026-11-14)
-CI run on commit de9bb01 succeeded: analyze + tests passed, arm64 APK, universal APK and AAB built, release `v1.0.4` and moving `latest` published as DEV-signed pre-releases. Fixes needed on the way: Flutter pinned to 3.38.x (stable 3.50 needs Gradle 9.3.1), modern glslc installed for Vulkan shaders, submodule pointer restored. Install/inference on a real device: NOT tested.
+## Verified release
 
-## Done (code in place)
-- Source imported from an MIT-licensed open-source Flutter LLM client (release 1.0.7-cluster tree), single import commit.
-- Renamed: app ID `com.neuromesh.ai`, Dart package `neuromesh_ai`, plugin Kotlin package `com.neuromesh.llama_flutter_android` (JNI symbols renamed to match), QR scheme `neuromesh://`.
-- Removed old Firebase project config, old marketing images, old author credits from the UI. Update checker now points at this repo's releases.
-- Original logo + adaptive launcher icon generated (navy / cyan / violet / lime node network).
-- CI: `.github/workflows/android-release.yml` (analyze, test, arm64 APK, universal APK, AAB, SHA-256, tag `v1.0.N` + moving `latest`).
+Release `v1.0.90` and the moving `latest` contain individually downloadable normal
+ARM64/universal APKs, AAB, Windows EXE, Linux DEB and AppImage. No Pro installer or
+ZIP installer is published. Android/Windows were built by workflow run
+44469443561; Linux was recovered on Ubuntu 24.04 by run 44476354845 after dependency
+downloads exceeded the original timeout. The application code is shared; Linux
+recovery changed build/packaging configuration only.
 
-## Models screen (added after v1.0.4)
-- Browse tab replaced by a live Hugging Face GGUF search (`lib/services/hf_service.dart`, `lib/views/hf_browser.dart`): search box, per-repo file list with sizes/quants, download into the app or save to the phone's public Downloads folder. Hard-coded catalog links are no longer shown (catalog data still exists in code for already-downloaded models and image models).
-- Import sheet gained a "Get from Hugging Face" shortcut. File/folder import is unchanged.
-- UNVERIFIED on a device; only analyze/unit tests in CI.
-- Not handled: gated repos (hidden behind a notice), split multi-part GGUFs and vision projector files (filtered out).
+Verified checks:
+- Dart analysis and the Flutter unit/widget suite passed in the Android build.
+- Both Android APK signatures verified and their signing certificates matched.
+- The standalone APK contains ARM64 libraries only. Its downloaded SHA-256 matches
+  the release asset. Version code is 5090.
+- Clean installation and reinstall succeeded on an Android 12/API 31 emulator.
+- Windows and Linux builds and their native image-runtime smoke tests passed.
+- Linux llama-server started with `--version`; the executable dependency check
+  reported no unresolved libraries. Both DEB and AppImage were required to exist.
+- GitHub Latest and v1.0.90 expose matching asset names, sizes and digests.
 
-## Fixes after v1.0.5 (reported from a device)
-- "Failed to create context": native code now retries context creation at half the size (down to 512) and reports llama.cpp's real error; the app retries on CPU if a GPU load fails. UNVERIFIED on the reporting phone.
-- API server can now start without a loaded model (answers 'no model' until one is loaded).
-- Agent tab + MCP (remote URL servers) added; analyze/tests pass in CI; not tested on a device.
+These checks do not establish successful model inference, microphone/echo behavior,
+Bluetooth audio or installation on Carlos's physical Lenovo tablet.
 
-## Added after v1.0.7 (all CI-verified only; NOTHING tested on a device)
-- Toolbox (`lib/views/toolbox_view.dart`, `lib/services/toolbox_service.dart`): roles, prompt library, model profiles, chat export/import, backup/restore, storage manager, diagnostics, feedback draft, benchmark, compare, switches (auto context, auto-title, Wi-Fi-only, load last model).
-- Voice (`voice_models.dart`, `voice_service.dart`, `voice_views.dart`): sherpa-onnx Whisper STT, Piper TTS (needs piper_phonemize; Arabic untested), phone voice fallback, Silero VAD, streaming speech, barge-in, wake phrase.
-- Voice cloning (`voice_clone_view.dart`, `voice_clone_store.dart`): Pocket TTS int8 (English only), record/import reference WAV. Worker mode (`voice_worker.dart`): HTTP server on :8765 with bearer token; the caller phone falls back to local speech if the worker fails. Voice models cannot use the llama RPC cluster.
-- Chat: pin, per-chat prompt, regenerate, edit-resend, auto-title, full-text search, RTL direction detection.
-- Documents: offline BM25 keyword retrieval (`rag_service.dart`, `utils/bm25.dart`), not semantic.
-- Agent: memory, private files, fetch_url (confirm), always-allow, MCP presets (DeepWiki, Context7 URLs not verified).
-- Images: Models → Images tab searches Hugging Face `text-to-image` repos, root-level .safetensors only; loads through the base's stable-diffusion.cpp path (UNVERIFIED which checkpoints work).
-- Downloads: queue, Wi-Fi-only flag to the Android DownloadManager.
-- Device: battery/thermal (`DeviceBridge.kt`), share-to-chat, widget and quick tile (open a new chat), server QR, first-run tour, what's new.
-- Cluster load: failure to read the layer count now falls back to a single-phone load.
-- Not done: prompt caching, true background wake word, Arabic voice cloning, dead catalog code in model_view.dart still present.
+## Implemented capabilities and code locations
 
-## Not done / unverified
-- Native JNI rename is untested on a device (build compiles, runtime unverified).
-- Not implemented: new cluster wizard, model manager rework, agents, document RAG, voice, performance center, Arabic/RTL, theme redesign, new navigation. Existing features from the base remain as inherited.
-- No hardware testing performed.
+- Skills: `SkillsService`, `SkillsView` and `ContextMentionButton` support creating,
+  editing, importing SKILL.md or a single-skill ZIP, enable/disable switches, and
+  explicit @skill:name / @file mentions. Context is retrieved in bounded pages;
+  preserve source indentation. A small model can still miss instructions.
+- Agent steps: `widgets/agent_steps.dart` renders live summaries, a step list and
+  optional details. Tool traces should not be shown as raw JSON in normal chat.
+- Models: GGUF metadata/helper classification, compatibility guidance and helper
+  search are generic. A helper, a missing split, or an unsupported architecture
+  cannot be made into a standalone text model simply by bypassing validation.
+  See model_helpers, gguf_metadata and image_bundle tests.
+- Voice: calls reuse a chat and workspace, retain messages, allow files, show agent
+  steps and support selected/cloned voices and interruption. Native speech and
+  real microphone sensitivity remain device-dependent.
+- Android Linux workspace: Alpine rootfs is optional and downloaded inside the
+  normal app. Only the loader libraries are bundled. Desktop commands use the
+  computer's shell. Downloaded skills do not bypass existing tool permissions.
+- Diagnostics: model load stages, metadata, device state, native failures and logs
+  feed a previewable ZIP report. Developer delivery is compiled from private CI
+  secrets; downloaders do not enter bot credentials. See SECURITY.md for the
+  unavoidable extractability of credentials embedded in client binaries.
+- Security/transfer regression suites cover secure MCP token handling, tunnel
+  host keys, worker addressing and cluster backup scopes. Hardware/network
+  interoperability still requires real devices.
 
-## Versioning
-`1.0.<run_number>`, versionCode = run number, no version commits (no workflow loop).
+## Work following v1.0.90
 
-## Signing
-Dev-signed + pre-release unless ANDROID_KEYSTORE_* secrets exist (see SECURITY.md).
+Voice playback cancellation is being hardened at asynchronous preparation/start
+boundaries. Regression tests exercise stopping before preparation completes,
+stopping while the native player starts, listener cleanup, and normal playback.
+Do not describe this follow-up as present in v1.0.90; verify its CI/release first.
 
-## Next
-1. Test install on a real arm64 phone.
-2. Verify install + local inference on a real arm64 phone.
-3. Then add features one at a time, updating this file.
+## Release and verification rules
+
+- Keep Linux release builders on Ubuntu 24.04. Dependency installation excludes
+  recommended extras, uses bounded retries, and has a 20-minute hard deadline.
+- Require both Linux package formats; packaging failures must stop publication.
+- Main releases use 1.0.<run_number>; Android versionCode is 5000 + run_number.
+  Desktop metadata must use the same version name as its installer.
+- Production signing requires the owner's four ANDROID_KEYSTORE_* secrets.
+  Without them Android artifacts are development-signed. A newly generated
+  development signer does not provide a stable certificate for future upgrades.
+- Google Play submission requires separate authorization. No store submission has
+  been performed. Never claim physical-device or full inference tests passed
+  unless they actually ran.
+
+## Origin
+
+Imported from the MIT-licensed PrivateLM 1.0.7-cluster source. App ID is
+com.neuromesh.ai, Dart package neuromesh_ai, URI scheme neuromesh://.
