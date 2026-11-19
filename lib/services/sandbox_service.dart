@@ -64,6 +64,12 @@ class SandboxService extends GetxService {
         'libandroid-shmem.so'
       ].every((name) => File('$_libDir/$name').existsSync());
 
+  Future<bool> runtimeAvailable() async {
+    if (!supported) return false;
+    await _initializing;
+    return hasProot;
+  }
+
   /// Alpine is downloaded only after the user chooses Install.
   Future<void> install() {
     if (_installation != null) return _installation!;
