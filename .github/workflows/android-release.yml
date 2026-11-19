@@ -330,14 +330,14 @@ jobs:
         if: runner.os == 'Linux'
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-        run: flutter build linux --release "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json"
+        run: flutter build linux --release "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json" --build-name=${{ env.BASE_VERSION }}.${{ github.run_number }} --build-number=${{ github.run_number }}
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
           CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
-        run: flutter build windows --release "--dart-define-from-file=$env:RUNNER_TEMP/neuromesh-report-defines.json"
+        run: flutter build windows --release "--dart-define-from-file=$env:RUNNER_TEMP/neuromesh-report-defines.json" --build-name=${{ env.BASE_VERSION }}.${{ github.run_number }} --build-number=${{ github.run_number }}
 
       - name: Build and install the desktop image runtime
         shell: bash
