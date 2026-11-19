@@ -33,6 +33,23 @@ void main() {
       }
     });
 
+    test('context trimming keeps complete turns for strict chat templates', () {
+      const prompt = 'Create hello.txt';
+      final history = [
+        {'role': 'user', 'content': 'old request ' * 150},
+        {'role': 'assistant', 'content': 'old answer'},
+        {'role': 'user', 'content': prompt},
+      ];
+      expect(AgentService.fitToContext('', history, prompt, 1024), prompt);
+      expect(history, [{'role': 'user', 'content': prompt}]);
+      final imported = [
+        {'role': 'assistant', 'content': 'Imported greeting'},
+        {'role': 'user', 'content': prompt},
+      ];
+      AgentService.fitToContext('', imported, prompt, 1024);
+      expect(imported.first['role'], 'user');
+    });
+
     test(
         'rejects oversized mandatory instructions without cropping the user request',
         () {

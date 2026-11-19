@@ -1336,8 +1336,15 @@ class AgentService extends GetxService {
     int total() =>
         contextTokens(system) +
         hist.fold<int>(0, (a, m) => a + contextTokens(m['content'] ?? ''));
+    // Strict chat templates require history to start with a user turn.
+    while (hist.length > 1 && hist.first['role'] != 'user') {
+      hist.removeAt(0);
+    }
     while (total() > budget && hist.length > 1) {
       hist.removeAt(0);
+      while (hist.length > 1 && hist.first['role'] != 'user') {
+        hist.removeAt(0);
+      }
     }
     // User instructions are mandatory: never silently crop the current request.
     if (total() > budget ||
