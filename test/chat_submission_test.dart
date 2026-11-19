@@ -20,6 +20,8 @@ import 'package:neuromesh_ai/services/hive_service.dart';
 import 'package:neuromesh_ai/services/image_generation_notification_service.dart';
 import 'package:neuromesh_ai/services/inference_service.dart';
 import 'package:neuromesh_ai/services/local_image_service.dart';
+import 'package:neuromesh_ai/services/web_search_service.dart';
+import 'package:neuromesh_ai/utils/web_search_parse.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -127,6 +129,51 @@ void main() {
     expect(hive.getMessagesForChat(session.id), hasLength(2));
   });
 
+  test('an HTML attachment and its follow-up receive the actual file text',
+      () async {
+    final html = File('${dir.path}/platformer_quest.html');
+    await html.writeAsString(
+        '<title>Platformer Quest</title><canvas id="game"></canvas>');
+    chat.selectedFileName.value = 'platformer_quest.html';
+    chat.selectedFilePath.value = html.path;
+    chat.selectedFileType.value = 'file'; // Matches older saved attachments.
+    chat.textController.text = 'Summarize this file';
+    final first = chat.sendMessage();
+    agent.imported.complete('platformer_quest.html');
+    await first;
+    expect(cloud.lastInput, contains('<canvas id="game">'));
+    chat.textController.text = 'Please read the file and summarize it';
+    await chat.sendMessage();
+    expect(cloud.lastInput, contains('<title>Platformer Quest</title>'));
+    expect(cloud.lastInput, contains('Please read the file and summarize it'));
+  });
+
+  test('an unreadable text attachment stops before inference', () async {
+    chat.selectedFileName.value = 'missing.html';
+    chat.selectedFileType.value = 'file';
+    chat.textController.text = 'Summarize this file';
+    await chat.sendMessage();
+    expect(cloud.calls, 0);
+    expect(
+        chat.messages.last.content, contains('couldn’t read "missing.html"'));
+  });
+
+  test('an explicit search retry reuses the original topic and refreshes sources', () async {
+    final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
+    const first = 'What is the strongest AI model today for coding?';
+    chat.textController.text = first;
+    await chat.sendMessage();
+    expect(cloud.calls, 0);
+    chat.textController.text = 'Please search because this is old';
+    await chat.sendMessage();
+
+    expect(web.previous, first);
+    expect(web.refreshed, isTrue);
+    expect(cloud.lastInput, contains('Research question:'));
+    expect(cloud.lastInput, contains('Published benchmark results'));
+    expect(chat.messages.last.content, contains('https://example.com/benchmark'));
+  });
+
   test('voice messages and attachments remain in the originating chat',
       () async {
     chat.createNewChat();
@@ -217,6 +264,20 @@ class _TestCloud extends CloudService {
   }
 }
 
+
+class _TestWeb extends WebSearchService {
+  String? previous;
+  bool refreshed = false;
+
+  @override
+  Future<WebContext?> buildContext(String question, {String? previous, bool refresh = false}) async {
+    this.previous = previous;
+    refreshed = refresh;
+    return WebContext('Published benchmark results', const [
+      WebResult('Coding benchmark', 'https://example.com/benchmark', 'Model comparison')
+    ]);
+  }
+}
 
 class _TestPaths extends PathProviderPlatform {
   _TestPaths(this.path);

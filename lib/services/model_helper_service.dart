@@ -10,14 +10,34 @@ import 'agent_service.dart';
 import 'hf_service.dart';
 
 class ModelHelperService {
-  static String searchQuery(AiModel model) => model.filename
+  static String searchQuery(AiModel model) => _familyName(model.filename);
+
+  static String _familyName(String filename) => filename
       .replaceFirst(
           RegExp(r'\.(gguf|safetensors|litertlm)$', caseSensitive: false), '')
+      .replaceAll(
+          RegExp(
+              r'(?:^|[-_. ])(?:mmproj|lora|adapter_model|vae|controlnet|clip_[lg]|t5xxl)(?=$|[-_. ])',
+              caseSensitive: false),
+          ' ')
       .replaceFirst(
-          RegExp(r'[-_.](?:fast[-_]?mtp[-_]\d+k|i?q\d.*|bf16|f16|f32)$',
+          RegExp(r'[-_. ](?:fast[-_]?mtp[-_]\d+k|i?q\d.*|bf16|f16|f32)$',
               caseSensitive: false),
           '')
+      .replaceAll(RegExp(r'^[-_. ]+|[-_. ]+$'), '')
       .trim();
+
+  static bool suggestsPair(AiModel model, AiModel helper) {
+    if (model.runtime != AiModel.runtimeLlama ||
+        modelFileRole(model.filename).isHelper ||
+        modelFileRole(helper.filename) != ModelFileRole.projector) return false;
+    final modelRepo = huggingFaceRepository(model.url);
+    final helperRepo = huggingFaceRepository(helper.url);
+    if (modelRepo != null && helperRepo != null) return modelRepo == helperRepo;
+    final modelFamily = _familyName(model.filename).toLowerCase();
+    final helperFamily = _familyName(helper.filename).toLowerCase();
+    return helperFamily.isNotEmpty && modelFamily == helperFamily;
+  }
 
   static Future<List<HfGgufFile>> files(
       HfService hf, AiModel model, String repository) async {

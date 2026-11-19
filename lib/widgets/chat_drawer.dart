@@ -9,6 +9,7 @@ import '../services/hive_service.dart';
 import 'tonal_button.dart';
 import '../core/haptics.dart';
 import '../core/nav_hub.dart';
+import '../views/voice_views.dart';
 
 /// Two-bar "sidebar" glyph — the long bar over a short one reads as a list
 /// rather than the generic hamburger.
@@ -413,6 +414,10 @@ class _ChatDrawerState extends State<ChatDrawer> {
                       text: text,
                       selected: selected,
                       onTap: () => _open(s),
+                      onCall: () {
+                        _open(s);
+                        Get.to(() => const VoiceCallView());
+                      },
                       onLongPress: () => _showActions(context, s),
                     ),
                 ],
@@ -440,6 +445,7 @@ class _SessionRow extends StatelessWidget {
   final Color selected;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
+  final VoidCallback onCall;
 
   const _SessionRow({
     required this.session,
@@ -448,6 +454,7 @@ class _SessionRow extends StatelessWidget {
     required this.selected,
     required this.onTap,
     required this.onLongPress,
+    required this.onCall,
   });
 
   @override
@@ -463,17 +470,26 @@ class _SessionRow extends StatelessWidget {
           onLongPress: onLongPress,
           splashFactory: NoSplash.splashFactory,
           highlightColor: selected,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
-            child: Text(session.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: GoogleFonts.inter(
-                    fontSize: 15,
-                    letterSpacing: -0.15,
-                    fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-                    color: text)),
-          ),
+          child: Row(children: [
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+                child: Text(session.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.inter(
+                        fontSize: 15,
+                        letterSpacing: -0.15,
+                        fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                        color: text)),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Start voice call in ${session.title}',
+              onPressed: onCall,
+              icon: const Icon(Icons.call_outlined, size: 18),
+            ),
+          ]),
         ),
       ),
     );

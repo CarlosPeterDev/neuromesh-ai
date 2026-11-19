@@ -9,6 +9,7 @@ class ChatMessage {
   final String? imageBase64; // For multimodal
   final String? imagePath;
   final String? workspaceProject;
+  final String? workspaceAttachment;
   final String? fileName;
   final String? fileContent;
   final String? filePath;
@@ -40,6 +41,7 @@ class ChatMessage {
     this.imageBase64,
     this.imagePath,
     this.workspaceProject,
+    this.workspaceAttachment,
     this.fileName,
     this.fileContent,
     this.filePath,
@@ -55,13 +57,18 @@ class ChatMessage {
 
   static const _attachmentSeparator = '\n\nAttached file:';
 
+  int get _attachmentStart {
+    final index = content.indexOf(_attachmentSeparator);
+    return index >= 0 ? index : content.indexOf('\n\nAttached workspace file:');
+  }
+
   String get visibleUserText {
-    final start = fileName == null ? -1 : content.indexOf(_attachmentSeparator);
+    final start = fileName == null ? -1 : _attachmentStart;
     return start < 0 ? content : content.substring(0, start);
   }
 
   ChatMessage withUserText(String text) {
-    final start = fileName == null ? -1 : content.indexOf(_attachmentSeparator);
+    final start = fileName == null ? -1 : _attachmentStart;
     return ChatMessage.fromMap({
       ...toMap(),
       'content': start < 0 ? text : '$text${content.substring(start)}',
@@ -76,6 +83,8 @@ class ChatMessage {
         'imageBase64': imageBase64,
         'imagePath': imagePath,
         'workspaceProject': workspaceProject,
+        if (workspaceAttachment != null)
+          'workspaceAttachment': workspaceAttachment,
         'fileName': fileName,
         'fileContent': fileContent,
         'filePath': filePath,
@@ -97,6 +106,7 @@ class ChatMessage {
         imageBase64: map['imageBase64'],
         imagePath: map['imagePath'],
         workspaceProject: map['workspaceProject'] as String?,
+        workspaceAttachment: map['workspaceAttachment'] as String?,
         fileName: map['fileName'],
         fileContent: map['fileContent'],
         filePath: map['filePath'],

@@ -11,7 +11,6 @@ import '../services/app_log_service.dart';
 import '../services/hive_service.dart';
 import '../services/inference_service.dart';
 import '../services/cluster_service.dart';
-import '../services/tunnel_service.dart';
 import '../services/openai_server_service.dart';
 
 class ServerController extends GetxController {
@@ -128,8 +127,6 @@ class ServerController extends GetxController {
 
   Future<void> setUseApiKey(bool enabled) async {
     if (!enabled && allowNetwork.value) return;
-    // The temporary public link needs the key as long as it is up.
-    if (!enabled && Get.isRegistered<TunnelService>() && Get.find<TunnelService>().running.value) return;
     useApiKey.value = enabled;
     await saveSettings();
   }

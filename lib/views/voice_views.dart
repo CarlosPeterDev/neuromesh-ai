@@ -13,6 +13,8 @@ import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import '../controllers/settings_controller.dart';
 import '../controllers/chat_controller.dart';
+import '../controllers/home_controller.dart';
+import '../models/chat_message.dart';
 import '../utils/thought_parser.dart';
 import 'voice_clone_view.dart';
 import 'chat_tools.dart';
@@ -421,20 +423,27 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   void initState() {
     super.initState();
     _sessionId = _chat.currentSessionId.value;
-    _history.addAll(_chat.messages
-        .where((m) => m.role == 'user' || m.role == 'assistant')
-        .map(
-          (m) => {
-            'role': m.role,
-            'content': m.role == 'assistant'
-                ? stripToolTrace(splitThoughtTags(m.content).answer)
-                : m.content
-          },
-        ));
+    for (final ChatMessage message in _chat.messages) {
+      if (message.role != 'user' && message.role != 'assistant') continue;
+      final me = message.role == 'user';
+      final text = me
+          ? message.visibleUserText
+          : stripToolTrace(splitThoughtTags(message.content).answer);
+      _history
+          .add({'role': message.role, 'content': me ? message.content : text});
+      if (text.trim().isNotEmpty) {
+        _lines.add((me: me, text: text));
+      }
+    }
     _lang = _hive.getSetting<String>(_kLang) ?? 'en';
     if (widget.useSelectedClone) {
       _lang = 'en';
       _callVoice = voiceModelById('pocket-tts-clone');
+    } else {
+      final model = _hive.getSetting<String>(_kTtsId);
+      if (model == 'pocket-tts-clone' && _store.installed.contains(model)) {
+        _callVoice = voiceModelById('pocket-tts-clone');
+      }
     }
     _bargeIn = _hive.getSetting<bool>(_kBargeIn, defaultValue: true) ?? true;
     _wake = (_hive.getSetting<String>(_kWakePhrase) ?? '').trim().toLowerCase();
@@ -501,11 +510,10 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     final chosen = _callVoice;
     if (chosen != null &&
         _store.installed.contains(chosen.id) &&
-        (chosen.lang == lang || chosen.lang == 'multi')) return chosen;
-    final clones = Get.find<VoiceCloneStore>();
-    if (lang == 'en' && clones.active.value.isNotEmpty) {
-      final m = voiceModelById('pocket-tts-clone');
-      if (m != null && _store.installed.contains(m.id)) return m;
+        (chosen.lang == lang || chosen.lang == 'multi') &&
+        (!chosen.clone ||
+            Get.find<VoiceCloneStore>().active.value.isNotEmpty)) {
+      return chosen;
     }
     return _installed(VoiceKind.tts, lang: lang);
   }
@@ -912,11 +920,12 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       final useTools = agent.wantsTools(heard,
           hasFile:
               file != null || (skillContext?.documents.isNotEmpty ?? false));
+      final voiceSystem = '${basePrompt ?? settings.globalSystemPrompt.value}\n'
+          'You are on a voice call. Speak naturally in one to three short sentences. No markdown, lists or emoji. '
+          'If you used tools, just say the result.';
       String buildSystem([String latestContext = '']) =>
           agent.composeSystem(
-            '${basePrompt ?? settings.globalSystemPrompt.value}\n'
-            'You are on a voice call. Speak naturally in one to three short sentences. No markdown, lists or emoji. '
-            'If you used tools, just say the result.',
+            voiceSystem,
             withTools: useTools,
             request: heard,
             withFiles: file != null,
@@ -930,17 +939,27 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         List<Map<String, String>> hist,
         void Function(String) onTok,
       ) {
-        final system =
-            '${buildSystem(hist.lastOrNull?['content'] ?? '')}${prompt == message ? '' : '\n\nCurrent user request: $heard'}';
+        final turn = AgentService.fitTurn(
+          baseSystem: voiceSystem,
+          system: buildSystem(hist.lastOrNull?['content'] ?? ''),
+          prompt: prompt,
+          history: hist,
+          contextSize: contextSize,
+          request: heard,
+          continuationRequest:
+              prompt == message ? null : 'Current user request: $heard',
+          compactTools: !useTools
+              ? null
+              : (budget) => agent.toolPrompt(
+                  request: heard,
+                  withFiles: file != null,
+                  contextSize: contextSize,
+                  maxTokens: budget),
+        );
         return inference.generate(
-          prompt: AgentService.fitToContext(
-            system,
-            hist,
-            prompt,
-            inference.contextTokensTotal.value,
-          ),
-          systemPrompt: system,
-          conversationHistory: hist,
+          prompt: turn.prompt,
+          systemPrompt: turn.system,
+          conversationHistory: turn.history,
           source: 'voice',
           imagePath: shot,
           maxTokens: useTools ? 500 : 160,
@@ -1009,8 +1028,16 @@ class _VoiceCallViewState extends State<VoiceCallView> {
             workspaceProject: project);
         _history.add({'role': 'assistant', 'content': stripToolTrace(clean)});
       }
-      if (liveIdx == null && clean.isNotEmpty && mounted) {
-        setState(() => _lines.add((me: false, text: _spoken(clean))));
+      if (clean.trim().isNotEmpty && mounted) {
+        setState(() {
+          final line =
+              (me: false, text: stripToolTrace(splitThoughtTags(clean).answer));
+          if (liveIdx == null) {
+            _lines.add(line);
+          } else {
+            _lines[liveIdx!] = line;
+          }
+        });
       }
     } finally {
       if (!ctl.isClosed) unawaited(ctl.close());
@@ -1112,6 +1139,9 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   }
 
   Future<void> _chooseCallVoice() async {
+    final clones = Get.find<VoiceCloneStore>();
+    await clones.scan();
+    if (!mounted) return;
     final voices = kVoiceModels
         .where(
           (model) =>
@@ -1121,12 +1151,13 @@ class _VoiceCallViewState extends State<VoiceCallView> {
               (model.lang == _lang || model.lang == 'multi'),
         )
         .toList();
+    final cloneModel = voiceModelById('pocket-tts-clone');
+    final canClone =
+        cloneModel != null && _store.installed.contains(cloneModel.id);
     if (voices.isEmpty && _lang != 'en') {
       await Get.to(() => const VoiceModelsView());
       return;
     }
-    final clones = Get.find<VoiceCloneStore>();
-    final cloneModel = voiceModelById('pocket-tts-clone');
     final current = _ttsChoice(_lang);
     var model = voices.contains(current) ? current! : voices.firstOrNull;
     var speaker = model == null ? 0 : VoiceService.savedSpeaker(model);
@@ -1137,31 +1168,30 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         builder: (context, update) => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (_lang == 'en') ...[
-              if (cloneModel != null &&
-                  _store.installed.contains(cloneModel.id))
-                for (final name in clones.voices)
-                  ListTile(
-                    leading: const Icon(Icons.record_voice_over_outlined),
-                    title: Text(name),
-                    subtitle: const Text('Cloned voice'),
-                    selected:
-                        clones.active.value == name && current == cloneModel,
-                    onTap: () async {
-                      await clones.select(name);
-                      if (context.mounted)
-                        Navigator.of(context).pop((cloneModel, 0));
-                    },
-                  ),
-              TextButton.icon(
-                icon: const Icon(Icons.graphic_eq),
-                label: const Text('Open voice cloner'),
-                onPressed: () {
-                  Navigator.of(context).pop();
-                  Get.to(() => const VoiceCloneView(allowCall: false));
-                },
-              ),
+            if (clones.voices.isNotEmpty && canClone) ...[
+              for (final name in clones.voices)
+                ListTile(
+                  leading: const Icon(Icons.record_voice_over_outlined),
+                  title: Text(name),
+                  subtitle: const Text('Cloned voice'),
+                  selected:
+                      clones.active.value == name && current == cloneModel,
+                  onTap: () async {
+                    await clones.select(name);
+                    if (context.mounted) {
+                      Navigator.of(context).pop((cloneModel, 0));
+                    }
+                  },
+                ),
             ],
+            TextButton.icon(
+              icon: const Icon(Icons.graphic_eq),
+              label: const Text('Open voice cloner'),
+              onPressed: () {
+                Navigator.of(context).pop();
+                Get.to(() => const VoiceCloneView(allowCall: false));
+              },
+            ),
             if (voices.isNotEmpty)
               DropdownButtonFormField<VoiceModelInfo>(
                 initialValue: model,
@@ -1206,6 +1236,11 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     final (chosen, index) = selected;
     await VoiceService.saveSpeaker(chosen, index);
     await _hive.setSetting(_kTtsId, chosen.id);
+    if (!mounted) return;
+    final switchedLanguage = chosen.clone && _lang != 'en';
+    if (switchedLanguage) {
+      await _toggleLang();
+    }
     if (mounted) setState(() => _callVoice = chosen);
   }
 
@@ -1246,38 +1281,61 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       _ => Colors.grey,
     };
     return Scaffold(
-      appBar: AppBar(title: const Text('Voice call'), actions: [
-        IconButton(
-          tooltip: 'Agent workspace',
-          icon: const Icon(Icons.folder_open_outlined),
-          onPressed: () => Get.to(() => const AgentWorkspaceView()),
-        ),
-        IconButton(
-          tooltip: 'Choose speaking voice',
-          icon: const Icon(Icons.record_voice_over_outlined),
-          onPressed: _busy || _speaking ? null : _chooseCallVoice,
-        ),
-        IconButton(
-            tooltip: 'Wake phrase',
-            icon: Icon(_wake.isEmpty
-                ? Icons.hearing_disabled_outlined
-                : Icons.hearing),
-            onPressed: _editWake),
-        IconButton(
-            tooltip: _bargeIn
-                ? 'Interrupting: on (use headphones)'
-                : 'Interrupting: off',
-            icon: Icon(_bargeIn ? Icons.front_hand : Icons.front_hand_outlined),
-            onPressed: () async {
-              setState(() => _bargeIn = !_bargeIn);
-              await _hive.setSetting(_kBargeIn, _bargeIn);
-            }),
-        TextButton(
-            onPressed: _busy ? null : _toggleLang,
-            child: Text(_lang == 'en' ? 'English' : 'العربية')),
-      ]),
+      appBar: AppBar(
+          title: Text(_chat.currentSession?.title ?? 'Voice call',
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          actions: [
+            IconButton(
+              tooltip: 'End call and open text chat',
+              icon: const Icon(Icons.chat_bubble_outline),
+              onPressed: () {
+                Get.find<HomeController>().changeTab(0);
+                Get.back<void>();
+              },
+            ),
+            IconButton(
+              tooltip: 'Agent workspace',
+              icon: const Icon(Icons.folder_open_outlined),
+              onPressed: () => Get.to(() => const AgentWorkspaceView()),
+            ),
+            IconButton(
+              tooltip: 'Choose speaking voice',
+              icon: const Icon(Icons.record_voice_over_outlined),
+              onPressed: _busy || _speaking ? null : _chooseCallVoice,
+            ),
+            IconButton(
+                tooltip: 'Wake phrase',
+                icon: Icon(_wake.isEmpty
+                    ? Icons.hearing_disabled_outlined
+                    : Icons.hearing),
+                onPressed: _editWake),
+            IconButton(
+                tooltip: _bargeIn
+                    ? 'Interrupting: on (use headphones)'
+                    : 'Interrupting: off',
+                icon: Icon(
+                    _bargeIn ? Icons.front_hand : Icons.front_hand_outlined),
+                onPressed: () async {
+                  setState(() => _bargeIn = !_bargeIn);
+                  await _hive.setSetting(_kBargeIn, _bargeIn);
+                }),
+            TextButton(
+                onPressed: _busy ? null : _toggleLang,
+                child: Text(_lang == 'en' ? 'English' : 'العربية')),
+          ]),
       body: SafeArea(
         child: Column(children: [
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.call_outlined),
+            title: Text(
+                Get.find<InferenceService>().loadedModelName.value.isEmpty
+                    ? 'NeuroMesh AI'
+                    : Get.find<InferenceService>().loadedModelName.value),
+            subtitle: Text(_ttsChoice(_lang)?.clone == true
+                ? Get.find<VoiceCloneStore>().active.value
+                : _ttsChoice(_lang)?.title ?? 'Voice call'),
+          ),
           if (_cam != null && _cam!.value.isInitialized)
             SizedBox(
                 height: 150,
@@ -1305,7 +1363,15 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                         decoration: BoxDecoration(
                             color: color.withValues(alpha: l.me ? 0.15 : 0.07),
                             borderRadius: BorderRadius.circular(14)),
-                        child: Text(l.text),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(l.me ? 'You' : 'AI',
+                                style: Theme.of(context).textTheme.labelSmall),
+                            SelectableText(l.text),
+                          ],
+                        ),
                       ),
                     ),
                   if (_steps.isNotEmpty)

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:neuromesh_ai/utils/web_search_parse.dart';
+import 'package:neuromesh_ai/utils/page_text.dart';
 
 void main() {
   const html = '''
@@ -25,6 +26,15 @@ void main() {
     expect(r.single.url, 'https://en.wikipedia.org/wiki/Cairo');
     expect(r.single.snippet, 'Cairo is the capital.');
     expect(parseWikipedia('nope', 'en'), isEmpty);
+  });
+
+  test('an explicit search retry reuses the earlier question', () {
+    const retry = 'Please search because this is old';
+    const first = 'What is the strongest AI model today for coding?';
+    expect(explicitlyRequestsWebSearch(retry), isTrue);
+    expect(searchQuery(retry, previous: first), searchQuery(first));
+    expect(
+        explicitlyRequestsWebSearch('Search my files for the report'), isFalse);
   });
 
   test('auto detection', () {

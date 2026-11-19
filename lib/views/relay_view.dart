@@ -5,7 +5,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../core/ui.dart';
 import '../services/relay_service.dart';
-import '../services/tunnel_service.dart';
 
 /// Outdoor access: chat with this phone from any device, through your own
 /// free Cloudflare Worker.
@@ -59,47 +58,6 @@ class _RelayViewState extends State<RelayView> {
     }
   }
 
-  /// Free temporary link: no account, no token.
-  Widget _quickLinkCard(BuildContext context) {
-    final tun = TunnelService.ensure();
-    return Obx(() => AppGroup(children: [
-          Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Free temporary link (no account)',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-              const SizedBox(height: 6),
-              const Text(
-                  'Creates a public https link to this phone in one tap, with no account and no API. '
-                  'The link changes every time and stops when the app closes. Anyone who has the link can reach '
-                  'your API, so the API key is switched on automatically: copy it from Server & API.'),
-              const SizedBox(height: 10),
-              Text('Status: ${tun.status.value}'),
-              if (tun.url.value.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                SelectableText(tun.url.value,
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
-                Row(children: [
-                  TextButton.icon(
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(text: tun.url.value));
-                        Get.snackbar('Copied', tun.url.value);
-                      },
-                      icon: const Icon(Icons.copy_rounded),
-                      label: const Text('Copy link')),
-                ]),
-              ],
-              const SizedBox(height: 8),
-              FilledButton.icon(
-                onPressed: () => tun.running.value ? tun.stop() : tun.start(),
-                icon: Icon(tun.running.value ? Icons.stop_rounded : Icons.bolt_rounded),
-                label: Text(tun.running.value ? 'Stop link' : 'Create free link'),
-              ),
-            ]),
-          ),
-        ]));
-  }
-
   @override
   Widget build(BuildContext context) {
     final t = AppTokens.of(context);
@@ -112,35 +70,41 @@ class _RelayViewState extends State<RelayView> {
                 'The phone connects out to it, so no router settings are needed. Nothing is stored in the cloud: '
                 'the phone does the thinking. The phone must stay on, and the app keeps running in the background while this is on.'),
             const SizedBox(height: 8),
-            _quickLinkCard(context),
-            const SectionHeader('Or: permanent address with your own Cloudflare account'),
             const SectionHeader('1 · Your Cloudflare token'),
             AppGroup(children: [
               Padding(
                 padding: const EdgeInsets.all(12),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const Text(
-                      'Free account at cloudflare.com → My Profile → API Tokens → Create Token → use the "Edit Cloudflare Workers" template → copy the token.',
-                      style: TextStyle(fontSize: 13)),
-                  const SizedBox(height: 8),
-                  TextField(
-                      controller: _token,
-                      obscureText: true,
-                      decoration: appInputDecoration(context, hint: 'API token')),
-                  const SizedBox(height: 8),
-                  TextField(
-                      controller: _account,
-                      decoration: appInputDecoration(context, hint: 'Account ID (leave empty to find it automatically)')),
-                  const SizedBox(height: 8),
-                  TextField(
-                      controller: _name,
-                      decoration: appInputDecoration(context, hint: 'Worker name')),
-                  const SizedBox(height: 6),
-                  TextButton(
-                      onPressed: () => launchUrl(Uri.parse('https://dash.cloudflare.com/profile/api-tokens'),
-                          mode: LaunchMode.externalApplication),
-                      child: const Text('Open Cloudflare tokens page')),
-                ]),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                          'In the Cloudflare dashboard, open My Profile → API Tokens → Create Token. Choose Edit Cloudflare Workers, select your account, and create the token. Paste it below, choose your protection settings, then select Create the relay. If account discovery fails, copy your Account ID from Workers & Pages.',
+                          style: TextStyle(fontSize: 13)),
+                      const SizedBox(height: 8),
+                      TextField(
+                          controller: _token,
+                          obscureText: true,
+                          decoration:
+                              appInputDecoration(context, hint: 'API token')),
+                      const SizedBox(height: 8),
+                      TextField(
+                          controller: _account,
+                          decoration: appInputDecoration(context,
+                              hint:
+                                  'Account ID (leave empty to find it automatically)')),
+                      const SizedBox(height: 8),
+                      TextField(
+                          controller: _name,
+                          decoration:
+                              appInputDecoration(context, hint: 'Worker name')),
+                      const SizedBox(height: 6),
+                      TextButton(
+                          onPressed: () => launchUrl(
+                              Uri.parse(
+                                  'https://dash.cloudflare.com/profile/api-tokens'),
+                              mode: LaunchMode.externalApplication),
+                          child: const Text('Open Cloudflare tokens page')),
+                    ]),
               ),
             ]),
             const SectionHeader('2 · Protection'),

@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,7 +8,6 @@ import 'package:hive/hive.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
 import 'package:neuromesh_ai/services/mcp_oauth.dart';
 import 'package:neuromesh_ai/services/model_transfer_service.dart';
-import 'package:neuromesh_ai/services/tunnel_service.dart';
 import 'package:neuromesh_ai/services/workload_placement.dart';
 
 void main() {
@@ -27,16 +25,6 @@ void main() {
     ]) {
       expect(ModelTransferClient.parse(address), isNull, reason: address);
     }
-  });
-
-  test('tunnel rejects a changed host key and unsupported key type', () {
-    final valid = Uint8List.fromList(
-      ascii.encode('SHA256:pG6qrBxubYfWa1Zadu/V0NUgjEDiBds/7e2xzte/QNM'),
-    );
-    expect(TunnelService.verifyHostKey('ssh-ed25519', valid), isTrue);
-    expect(TunnelService.verifyHostKey('rsa-sha2-512', valid), isFalse);
-    expect(TunnelService.verifyHostKey('ssh-ed25519', Uint8List(32)), isFalse);
-    expect(TunnelService.verifyHostKey('ssh-dss', valid), isFalse);
   });
 
   test('workloads can be assigned to different authenticated LAN phones',

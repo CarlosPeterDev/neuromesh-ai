@@ -50,6 +50,29 @@ void main() {
       expect(imported.first['role'], 'user');
     });
 
+    test('optional tool text shrinks while the original request and rules stay',
+        () {
+      const request = 'Summarize this HTML file';
+      final prompt = '$request\n\n<html>Platformer Quest ${'canvas ' * 900}';
+      final history = [
+        {'role': 'user', 'content': prompt}
+      ];
+      final turn = AgentService.fitTurn(
+        baseSystem: 'Use the file contents.',
+        system: 'Use the file contents. ${'tool descriptions ' * 300}',
+        prompt: prompt,
+        history: history,
+        contextSize: 512,
+        request: request,
+        needsEvidence: true,
+      );
+      expect(turn.system, 'Use the file contents.');
+      expect(turn.prompt, startsWith('$request\n\n<html>Platformer Quest'));
+      expect(turn.prompt.length, lessThan(prompt.length));
+      expect(turn.history.last['content'], turn.prompt);
+      expect(history.last['content'], prompt);
+    });
+
     test(
         'rejects oversized mandatory instructions without cropping the user request',
         () {
@@ -98,6 +121,10 @@ void main() {
             'Create audio file that says hello Carlos using tts tool with voice af_heart'),
         isNull);
     expect(literalSpeechText('Can you create a file'), isNull);
+    expect(
+        literalSpeechText(
+            'Use the TTS tool to create a file says hello Carlos'),
+        'hello Carlos');
   });
 
   test('recognizes an explicitly named empty workspace file', () {

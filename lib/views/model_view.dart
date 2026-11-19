@@ -113,17 +113,11 @@ class ModelView extends GetView<ModelController> {
       ('voice', 'Voice'),
       ('online', 'Cloud'),
     ];
-    return LayoutBuilder(builder: (context, constraints) {
-      final useChips =
-          constraints.maxWidth < MediaQuery.textScalerOf(context).scale(315);
-      return Obx(() {
-        final selected = controller.modelScope.value;
-        void select(String scope) => controller.modelScope.value = scope;
-        return useChips
-            ? AppChips(items: scopes, selected: selected, onSelected: select)
-            : AppSegmented(items: scopes, selected: selected, onChanged: select);
-      });
-    });
+    return Obx(() => AppChips(
+          items: scopes,
+          selected: controller.modelScope.value,
+          onSelected: (scope) => controller.modelScope.value = scope,
+        ));
   }
 
   Widget _buildLocalActions(BuildContext context) {
@@ -146,17 +140,20 @@ class ModelView extends GetView<ModelController> {
   void _showImportSheet(BuildContext context) {
     showAppSheet<void>(
       context,
-      title: 'Import model',
+      title: 'Import model or helper',
       subtitle: 'Add .gguf, .litertlm or .safetensors files from your phone.',
       builder: (ctx) => AppGroup(dividerIndent: 60, children: [
         AppRow(
           icon: Icons.insert_drive_file_outlined,
           title: 'Import file',
-          subtitle: 'Choose a single model file',
+          subtitle: 'Choose a model or helper file',
           chevron: true,
-          onTap: () {
+          onTap: () async {
             Navigator.pop(ctx);
-            controller.importModelFromStorage();
+            final model = await controller.importModelFromStorage();
+            if (context.mounted && model != null) {
+              await _showImportedModel(context, model);
+            }
           },
         ),
         AppRow(
@@ -184,6 +181,21 @@ class ModelView extends GetView<ModelController> {
     );
   }
 
+  Future<void> _showImportedModel(BuildContext context, AiModel model) async {
+    final role = modelFileRole(model.filename);
+    final search = await confirmSheet(
+      context,
+      title: '${role.label} imported',
+      message: role.isHelper
+          ? '${model.filename} needs a matching main model before it can be used. ${role.help}'
+          : '${model.filename} is in your library. Look for optional helpers recommended for this model.',
+      confirmLabel: role.isHelper ? 'Find main model' : 'Find helpers',
+    );
+    if (search == true && context.mounted) {
+      await Get.to(() => ModelHelpersView(model: model));
+    }
+  }
+
   Future<void> _importFromFolder(BuildContext context) async {
     final files = await controller.pickModelFolder();
     if (files == null || !context.mounted) return;
@@ -200,7 +212,10 @@ class ModelView extends GetView<ModelController> {
       builder: (_) => _FolderImportList(files: files, controller: controller),
     );
     if (chosen != null && chosen.isNotEmpty) {
-      await controller.importFolderFiles(chosen);
+      final imported = await controller.importFolderFiles(chosen);
+      if (context.mounted && imported.length == 1) {
+        await _showImportedModel(context, imported.single);
+      }
     }
   }
 

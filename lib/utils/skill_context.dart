@@ -36,6 +36,19 @@ class SkillDefinition {
 /// Conservative estimate, not a model-specific tokenizer.
 int contextTokens(String text) => (utf8.encode(text).length / 2).ceil() + 8;
 
+/// Clips an optional prompt section without breaking a UTF-8 character.
+String fitContextText(String text, int tokens) {
+  if (tokens <= 8) return '';
+  final bytes = utf8.encode(text);
+  var end = (tokens - 8) * 2;
+  if (bytes.length <= end) return text;
+  end -= utf8.encode('…').length;
+  while (end > 0 && bytes[end] & 0xc0 == 0x80) {
+    end--;
+  }
+  return end > 0 ? '${utf8.decode(bytes.sublist(0, end)).trimRight()}…' : '';
+}
+
 class ContextDocument {
   final String id;
   final List<String> pages;

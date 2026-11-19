@@ -81,6 +81,13 @@ String searchQuery(String question, {String? previous}) {
   }
   q = q.replaceAll(RegExp(r'[?؟!]+$'), '').trim();
   if (q.isEmpty) q = question.trim();
+  final retry = RegExp(
+    r'^\s*(?:(?:ok(?:ay)?|yes|please)[,.!]?\s+)*(?:search|look up)(?:\s+(?:the web|online|again|please|for it))*(?:\s+(?:because|since|as)\b.*)?[.!?]*\s*$',
+    caseSensitive: false,
+  ).hasMatch(question);
+  if (retry && previous != null && previous.trim().isNotEmpty) {
+    return searchQuery(previous);
+  }
   final words = q.split(RegExp(r'\s+')).length;
   if (words <= 3 && previous != null && previous.trim().isNotEmpty) {
     final prev = searchQuery(previous);

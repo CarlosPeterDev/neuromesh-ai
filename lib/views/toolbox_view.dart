@@ -15,6 +15,8 @@ import '../services/web_search_service.dart';
 import '../services/hive_service.dart';
 import '../services/download_queue.dart';
 import 'voice_views.dart';
+import 'chat_tools.dart';
+import '../services/sandbox_service.dart';
 import 'voice_clone_view.dart';
 
 class ToolboxView extends StatelessWidget {
@@ -83,6 +85,15 @@ class ToolboxView extends StatelessWidget {
             ]),
           );
         }),
+        if (SandboxService.supported)
+          AppGroup(children: [
+            AppRow(
+              icon: Icons.terminal_rounded,
+              title: 'Alpine terminal',
+              chevron: true,
+              onTap: () => Get.to(() => const AlpineTerminalView()),
+            ),
+          ]),
         const SectionHeader('Voice'),
         AppGroup(dividerIndent: 60, children: [
           AppRow(

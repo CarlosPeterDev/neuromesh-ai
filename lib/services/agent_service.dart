@@ -221,6 +221,17 @@ class AgentService extends GetxService {
     return File(path);
   }
 
+  Future<String?> workspaceAttachmentPath(String name) async {
+    try {
+      final file = await _safeFile(name);
+      return await file.exists() ? file.path : null;
+    } on ArgumentError {
+      return null;
+    } on Exception {
+      return null;
+    }
+  }
+
   /// Copies a file the user attached into the workspace so tools can read it.
   /// Returns the name it can be read by.
   Future<String> importToWorkspace(String sourcePath, String name) async {
@@ -1093,6 +1104,8 @@ class AgentService extends GetxService {
   bool needsResearch(String text) {
     final t = text.trim();
     if (t.length < 12 || t.length > 400) return false;
+    if (explicitlyRequestsWebSearch(t)) return true;
+    if (_gFiles.hasMatch(t) && !_question.hasMatch(t)) return false;
     final fresh = needsWebSearch(t);
     if (_actionOnly.hasMatch(t) && !fresh) return false;
     if (fresh) return true;
@@ -1243,28 +1256,35 @@ class AgentService extends GetxService {
   /// Tool instructions appended to the chat's system prompt. Kept short on
   /// purpose: every character is read by the model before each answer.
   String toolPrompt(
-      {String request = '', bool withFiles = false, int contextSize = 8192}) {
+      {String request = '',
+      bool withFiles = false,
+      int contextSize = 8192,
+      int? maxTokens}) {
     final on = _toolsFor(request, withFiles: withFiles);
-    if (contextSize <= 4096) {
+    if (contextSize <= 4096 || maxTokens != null) {
       final compact = StringBuffer(
-          'Use tools only as <tool_call>{"name":"NAME","arguments":{...}}</tool_call>. Read the result, then answer. Never claim unconfirmed actions. Use tool_help(name) for argument details.\n');
+          'Do the task directly. Call tools as <tool_call>{"name":"NAME","arguments":{...}}</tool_call>. Use tool results and file contents as evidence. Report actions only after success.\n');
       final priority = [
+        if (withFiles) ...['read_context', 'read_file', 'search_in_file'],
+        if (_gVoice.hasMatch(request)) ...[
+          'text_to_speech',
+          'transcribe_audio'
+        ],
         'tool_help',
-        'read_context',
-        'search_context',
-        ...on.where((n) => !_coreTools.contains(n)),
         'write_file',
         'read_file',
-        'tool_help'
+        ...on,
       ];
       for (final name in priority.toSet()) {
         final tool = _allBuiltIns.where((t) => t.name == name).firstOrNull;
         if (tool == null) continue;
         final line = '$name ${tool.params}\n';
-        if (contextTokens('$compact$line') < contextSize ~/ 4)
+        if (contextTokens('$compact$line') <= (maxTokens ?? contextSize ~/ 4))
           compact.write(line);
       }
-      return compact.toString();
+      return maxTokens == null
+          ? compact.toString()
+          : fitContextText(compact.toString(), maxTokens);
     }
     final b = StringBuffer()
       ..writeln(
@@ -1326,13 +1346,73 @@ class AgentService extends GetxService {
     return b.toString().trimRight();
   }
 
+  static int contextBudget(int contextSize) =>
+      (contextSize * 0.72).floor() - 64;
+
+  /// Keeps the current user request intact while fitting generated context.
+  static ({
+    String system,
+    String prompt,
+    List<Map<String, String>> history,
+  }) fitTurn({
+    required String baseSystem,
+    required String system,
+    required String prompt,
+    required List<Map<String, String>> history,
+    required int contextSize,
+    required String request,
+    String? continuationRequest,
+    String Function(int budget)? compactTools,
+    bool needsEvidence = false,
+  }) {
+    final budget = contextBudget(contextSize);
+    final originalPrompt = prompt;
+    if (continuationRequest != null) {
+      system = '$system\n\n$continuationRequest';
+    }
+    if (contextSize > 0 &&
+        contextTokens(system) + contextTokens(prompt) > budget) {
+      final required = continuationRequest ?? request;
+      final spare =
+          budget - contextTokens(baseSystem) - contextTokens(required);
+      final tools = compactTools?.call((spare ~/ 3).clamp(0, 260)) ?? '';
+      system = tools.isEmpty ? baseSystem : '$baseSystem\n\n$tools';
+      final remaining =
+          budget - contextTokens(system) - contextTokens(required) - 12;
+      final optional = continuationRequest == null && prompt.startsWith(request)
+          ? prompt.substring(request.length).trimLeft()
+          : prompt;
+      final supportingText = fitContextText(optional, remaining);
+      if (needsEvidence &&
+          supportingText.length < 80 &&
+          optional.length >= 80) {
+        throw StateError(
+            'This model has too little room for the source text. Shorten the chat instructions or increase the context size.');
+      }
+      prompt =
+          supportingText.isEmpty ? required : '$required\n\n$supportingText';
+    }
+    final fittedHistory = List<Map<String, String>>.of(history);
+    if (fittedHistory.lastOrNull?['role'] == 'user' &&
+        fittedHistory.last['content'] == originalPrompt) {
+      fittedHistory[fittedHistory.length - 1] = {
+        'role': 'user',
+        'content': prompt
+      };
+    } else {
+      fittedHistory.add({'role': 'user', 'content': prompt});
+    }
+    fitToContext(system, fittedHistory, prompt, contextSize);
+    return (system: system, prompt: prompt, history: fittedHistory);
+  }
+
   /// Trims [hist] and [prompt] so the whole request fits the model's context
   /// with room left to answer; an overflow makes small models fail or go silent.
   /// Keeps the latest request intact; reports an oversized mandatory context.
   static String fitToContext(String system, List<Map<String, String>> hist,
       String prompt, int ctxTokens) {
     if (ctxTokens <= 0) return prompt;
-    final budget = (ctxTokens * 0.72).floor() - 64;
+    final budget = contextBudget(ctxTokens);
     int total() =>
         contextTokens(system) +
         hist.fold<int>(0, (a, m) => a + contextTokens(m['content'] ?? ''));
@@ -1362,7 +1442,9 @@ class AgentService extends GetxService {
       String request = '',
       bool withFiles = false,
       int contextSize = 8192}) {
-    final b = StringBuffer(base);
+    final b = StringBuffer(base)
+      ..write(
+          '\n\nAnswer the user’s task directly. Use only available evidence for claims about files and current facts.');
     final mem = memoryBlock(request: request, maxTokens: contextSize ~/ 10);
     if (mem.isNotEmpty) b.write('\n\n$mem');
     if (withTools)
@@ -1445,6 +1527,12 @@ class AgentService extends GetxService {
     if (researchQuestion != null && !cancelled() && !_cancel) {
       final msg = await _autoResearch(
           researchQuestion, trace, onTrace, onStatus, sources, cancelled);
+      if (msg == null && !cancelled() && !_cancel) {
+        return ToolLoopResult(
+            'Web search returned no usable sources. I couldn’t verify the answer.',
+            trace,
+            false);
+      }
       if (msg != null) {
         ranTool = true;
         hist.add({
@@ -1458,6 +1546,7 @@ class AgentService extends GetxService {
         current = msg;
       }
     }
+    final printedToolNames = {for (final tool in _allBuiltIns) tool.name};
     for (var step = 0; step < maxSteps; step++) {
       if (cancelled() || _cancel) break;
       final buf = StringBuffer();
@@ -1477,7 +1566,8 @@ class AgentService extends GetxService {
           final tail = text.lastIndexOf('<');
           final partial =
               tail >= 0 && '<tool_call>'.startsWith(text.substring(tail));
-          onVisible(partial ? text.substring(0, tail) : text);
+          onVisible(_stripPrintedTools(
+              partial ? text.substring(0, tail) : text, printedToolNames));
         }
       });
       last = last.trim();
@@ -1485,6 +1575,15 @@ class AgentService extends GetxService {
       if (last.startsWith('ERROR:')) return ToolLoopResult(last, trace, false);
       final call = parseToolCall(last);
       if (call == null) {
+        last = _stripPrintedTools(last, printedToolNames);
+        if (nudges == 0 && !ranTool && isGenericOffer(last)) {
+          nudges++;
+          hist.add({'role': 'assistant', 'content': last});
+          current =
+              'Answer the original request directly. If an action is required, call the relevant tool. Ask only for information needed to proceed.';
+          hist.add({'role': 'user', 'content': current});
+          continue;
+        }
         // The model answered without a tool. For action requests (make a file,
         // run a command) that usually means a small model is only describing
         // the work, so push it to actually do it.
@@ -1558,11 +1657,29 @@ class AgentService extends GetxService {
         true);
   }
 
+  static final _genericOffer = RegExp(
+      r'^(?:of course[!. ]*|sure[!. ]*)?i can (?:help|assist)(?: you)?(?: with (?:that|this|any questions or tasks[^.!?]*))?[.! ]*(?:if there[^.!?]*[.!?]|(?:feel free|please let me know)[^.!?]*[.!?])?$',
+      caseSensitive: false);
+
+  static bool isGenericOffer(String answer) =>
+      _genericOffer.hasMatch(answer.trim());
+
+  static final _printedTool =
+      RegExp(r'^\s*([a-z][a-z_0-9]+)\s*\{[^\n]*\}\s*$');
+
+  static String _stripPrintedTools(String reply, Set<String> names) {
+    if (!reply.contains('{')) return reply;
+    return reply.split('\n').where((line) {
+      final name = _printedTool.firstMatch(line)?.group(1);
+      return name == null || !names.contains(name);
+    }).join('\n').trim();
+  }
+
   static final _wantsFile = RegExp(
       r'(create|make|write|save|generate|put|store)\b[^\n]{0,80}(\bfile\b|\.[a-z0-9]{1,5}\b)|(اكتب|انشئ|أنشئ|اعمل|احفظ)[^\n]{0,60}(ملف|\.[a-z0-9]{2,5})',
       caseSensitive: false);
   static final _wantsAudioFile = RegExp(
-    r'\b(create|make|generate|save)\b[^\n]{0,80}\b(audio file|wav file|voice recording|speech file)\b|(?:اعمل|انشئ|احفظ)[^\n]{0,60}ملف صوت',
+    r'\b(?:tts|text.to.speech)\b[^\n]{0,80}\bfile\b|\b(create|make|generate|save)\b[^\n]{0,80}\b(audio file|wav file|voice recording|speech file)\b|(?:اعمل|انشئ|احفظ)[^\n]{0,60}ملف صوت',
     caseSensitive: false,
   );
   static final _wantsCmd = RegExp(
@@ -1607,7 +1724,7 @@ class AgentService extends GetxService {
     final fence = RegExp(r'```[\w+\-]*\n([\s\S]*?)```').firstMatch(reply);
     if (fence != null) content = fence.group(1)!;
     content = content.trim();
-    if (content.isEmpty) return null;
+    if (content.isEmpty || isGenericOffer(content)) return null;
     final args = <String, dynamic>{'name': fn, 'content': content};
     final label = stepLabel('write_file', args);
     final idx = trace.length;

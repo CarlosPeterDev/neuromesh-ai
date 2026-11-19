@@ -14,9 +14,15 @@ final _literalSpeechRequest = RegExp(
   caseSensitive: false,
 );
 
+final _toolFirstSpeechRequest = RegExp(
+  r'^\s*(?:please\s+)?use\s+(?:the\s+)?(?:tts|text.to.speech)(?:\s+tool)?\s+to\s+(?:create|make|generate)\s+(?:an?\s+)?(?:(?:audio|wav)\s+)?file\s+(?:that\s+)?(?:says?|saying)\s+(.+?)\s*$',
+  caseSensitive: false,
+);
+
 /// Directly routes requests that explicitly supply the text and ask for TTS.
 String? literalSpeechText(String request) {
-  final match = _literalSpeechRequest.firstMatch(request);
+  final match = _literalSpeechRequest.firstMatch(request) ??
+      _toolFirstSpeechRequest.firstMatch(request);
   var text = match?.group(1)?.trim();
   if (text == null || text.isEmpty) return null;
   if ((text.startsWith('"') && text.endsWith('"')) ||
