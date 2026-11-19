@@ -13,6 +13,8 @@ Read this file, check the current branch and working tree, and review the latest
 - Real ARM64 Android inference, Windows and Linux runtime behavior on user devices, and Play internal-track installation still need verification for this build. Confirm any newer results before reporting them.
 - Changes for the next release are tracked in [GitHub issue #13](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/13). The workflow assembles and hashes all six installers before publishing and marks both tags as prereleases when the Android packages are development-signed. The next full build must exercise the changed workflow.
 
+The v1.0.90 checks also confirmed matching APK signing certificates, ARM64-only libraries in the slim APK, and matching assets across the version and moving download pages. Linux `llama-server --version` ran and its runtime dependencies resolved. The voice fixes merged after v1.0.90 prevent interrupted audio from restarting during player setup or when a worker falls back to local speech. On-device microphone, echo, Bluetooth audio, and the physical Lenovo tablet still need testing. [Voice playback PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/14) · [Worker fallback PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/16)
+
 ## Where to work
 
 | Area | Entry points and current behavior |
@@ -34,7 +36,7 @@ flutter test
 python -m unittest discover -s scripts -p 'test_report_build_config.py'
 ```
 
-Full release packaging also needs the dependencies in the GitHub workflow. The Android release path builds the Play AAB and standalone APKs with `PLAY_BUILD=true`. Alpine downloads on demand on supported ARM64 devices. CI generates an ephemeral development key if production signing is unavailable, so plan a clean install when testing different development builds. Follow [release signing](SECURITY.md#release-signing) and [Play Store preparation](docs/PLAY_STORE.md).
+Full release packaging also needs the dependencies in the GitHub workflow. Linux packaging uses Ubuntu 24.04. The release uses version name `1.0.<run_number>` and Android version code `5000 + run_number`. The Android release path builds the Play AAB and standalone APKs with `PLAY_BUILD=true`. Alpine downloads on demand on supported ARM64 devices. CI generates an ephemeral development key if production signing is unavailable, so plan a clean install when testing different development builds. Follow [release signing](SECURITY.md#release-signing) and [Play Store preparation](docs/PLAY_STORE.md).
 
 ## Next tasks
 
