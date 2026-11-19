@@ -139,10 +139,12 @@ class SkillsService extends GetxService {
   }
 
   Future<SkillTurnContext> prepare(String request, Directory workspace,
-      {String? attachment}) async {
+      {String? attachment, Iterable<String> activeSkills = const []}) async {
     final docs = <String, ContextDocument>{};
     final enabled = skills.where((s) => !disabled.contains(s.name)).toList();
-    final selected = <String>{};
+    final selected = activeSkills
+        .where((name) => enabled.any((s) => s.name == name))
+        .toSet();
     for (final (kind, name) in contextMentions(request)) {
       if (kind == 'skill') {
         if (!enabled.any((s) => s.name == name))
@@ -244,10 +246,11 @@ class SkillsService extends GetxService {
     agent.addTool(AgentTool(
         'search_context',
         'Find relevant excerpts in selected skills and mentioned files.',
-        '{"query":"keywords"}',
-        (args) =>
-            current?.search('${args['query'] ?? ''}') ??
-            'No selected context.'));
+        '{"query":"keywords"}', (args) async {
+      final turn = current;
+      if (turn == null) return 'No selected context.';
+      return turn.search('${args['query'] ?? ''}');
+    }));
   }
 }
 

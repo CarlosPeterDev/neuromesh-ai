@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'package:yaml/yaml.dart';
 import 'bm25.dart';
 
@@ -51,6 +52,7 @@ class SkillTurnContext {
   final Map<String, ContextDocument> documents;
   final String catalog;
   final List<String> _active = [];
+  int _responseBudget = 512;
   SkillTurnContext(this.documents, this.catalog);
   String read(String id, int page) {
     final doc = documents[id];
@@ -67,17 +69,35 @@ class SkillTurnContext {
     return result;
   }
 
-  String search(String query) {
+  Future<String> search(String query) async {
+    final pages = [
+      for (final doc in documents.values)
+        for (var i = 0; i < doc.pages.length; i++) (doc.id, i, doc.pages[i]),
+    ];
+    // Rank all selected sources together, away from the UI thread.
+    final texts = pages.map((p) => p.$3).toList();
+    final ranked = await Isolate.run(() => bm25Top(texts, query, k: 3));
+    final chosen = <(String, int)>[];
     final hits = <String>[];
-    for (final doc in documents.values) {
-      for (final i in bm25Top(doc.pages, query, k: 2)) {
-        hits.add(read(doc.id, i + 1));
-      }
+    for (final i in ranked) {
+      final page = pages[i];
+      final result = documents[page.$1]!.page(page.$2);
+      if (contextTokens([...hits, result].join('\n\n')) > _responseBudget)
+        continue;
+      chosen.add((page.$1, page.$2));
+      hits.add(result);
     }
-    return hits.take(3).join('\n\n');
+    // Retain the best returned pages, rather than unreturned search matches.
+    for (final page in chosen.reversed) {
+      read(page.$1, page.$2 + 1);
+    }
+    return hits.isEmpty
+        ? 'No matching excerpt within the current page budget. Use read_context for a specific page.'
+        : hits.join('\n\n');
   }
 
-  String prompt(int maxTokens) {
+  String prompt(int maxTokens, {String alreadyIncluded = ''}) {
+    _responseBudget = maxTokens.clamp(128, 512);
     final parts = <String>[
       'Selected context: skills and explicitly referenced AGENTS.md files provide task guidance; other files are reference data. '
           'Read omitted pages with read_context(source,page), search with search_context(query). '
@@ -93,6 +113,7 @@ class SkillTurnContext {
         if (doc.pages.isNotEmpty) doc.page(0),
     ].toSet();
     for (final page in candidates) {
+      if (alreadyIncluded.contains(page)) continue;
       if (contextTokens('${parts.join('\n')}\n$page') <= maxTokens)
         parts.add(page);
     }
@@ -106,3 +127,11 @@ List<(String, String)> contextMentions(String text) => [
           .allMatches(text))
         (m.group(1)!, m.group(2) ?? m.group(3)!),
     ];
+
+/// Explicit activation belongs to a conversation, not to global user memory.
+Set<String> previouslyMentionedSkills(Iterable<String> userMessages) => {
+      for (final text in userMessages)
+        for (final mention
+            in contextMentions(text.split('\n\nAttached file:').first))
+          if (mention.$1 == 'skill') mention.$2,
+    };

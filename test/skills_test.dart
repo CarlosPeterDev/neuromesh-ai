@@ -29,7 +29,8 @@ void main() {
           '${'normal words ' * 150} UNIQUE_ERROR_PATH ${'tail ' * 500}')
     }, '');
     final second = SkillTurnContext({}, '');
-    expect(first.search('UNIQUE_ERROR_PATH'), contains('UNIQUE_ERROR_PATH'));
+    expect(
+        await first.search('UNIQUE_ERROR_PATH'), contains('UNIQUE_ERROR_PATH'));
     final page = first.read('skill:test', 2);
     expect(first.prompt(2048), contains(page));
     expect(contextTokens(first.prompt(2048)), lessThanOrEqualTo(2048));
@@ -43,6 +44,43 @@ void main() {
     });
     expect(SkillsService.current, isNull);
   });
+  test('search ranks across files and retains the best returned excerpt',
+      () async {
+    final context = SkillTurnContext({
+      'file:generic':
+          ContextDocument('file:generic', 'repair ${'unrelated words ' * 10}'),
+      'file:specific': ContextDocument(
+          'file:specific', 'repair tokenizer segmentation fault'),
+    }, '');
+    context.prompt(256);
+    final result = await context.search('repair tokenizer segmentation fault');
+    expect(result, startsWith('[file:specific'));
+    expect(contextTokens(result), lessThanOrEqualTo(256));
+    expect(
+        context.prompt(1024), contains('repair tokenizer segmentation fault'));
+  });
+
+  test('current tool excerpts do not consume the context budget twice', () {
+    final context = SkillTurnContext({
+      'skill:test':
+          ContextDocument('skill:test', 'Keep this unique rule intact.')
+    }, '');
+    final page = context.read('skill:test', 1);
+    expect(context.prompt(512), contains('Keep this unique rule intact.'));
+    expect(context.prompt(512, alreadyIncluded: 'Tool result: $page'),
+        isNot(contains('Keep this unique rule intact.')));
+    expect(context.prompt(512), contains('Keep this unique rule intact.'));
+  });
+
+  test('only explicit skill mentions activate conversation skills', () {
+    expect(
+        previouslyMentionedSkills([
+          'Use @skill:code-review',
+          'Attached\n\nAttached file: notes.md\n@skill:other'
+        ]),
+        {'code-review'});
+  });
+
   group('skill storage and imports', () {
     late Directory temp;
     late SkillsService store;
@@ -65,7 +103,15 @@ void main() {
           await store.prepare('@skill:code-review @file:notes.md', workspace);
       expect(context.documents.keys,
           containsAll(['skill:code-review', 'file:notes.md']));
+      final continued = await store
+          .prepare('Continue', workspace, activeSkills: ['code-review']);
+      expect(continued.documents.keys, contains('skill:code-review'));
+      final fresh = await store.prepare('Hello', workspace);
+      expect(fresh.documents, isEmpty);
       await store.toggle('code-review', false);
+      final disabled = await store
+          .prepare('Continue', workspace, activeSkills: ['code-review']);
+      expect(disabled.documents, isEmpty);
       await expectLater(store.prepare('@skill:code-review', workspace),
           throwsFormatException);
       await expectLater(

@@ -19,6 +19,7 @@ import 'chat_tools.dart';
 import '../core/ui.dart';
 import '../services/agent_service.dart';
 import '../services/skills_service.dart';
+import '../utils/skill_context.dart';
 import '../services/hive_service.dart';
 import '../services/model_transfer_service.dart';
 import 'model_transfer_view.dart';
@@ -899,8 +900,11 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       final basePrompt =
           session?.id == sessionId ? session?.systemPrompt : null;
       final skillContext = Get.isRegistered<SkillsService>()
-          ? await Get.find<SkillsService>()
-              .prepare(heard, await agent.inProject(project, agent.filesDir))
+          ? await Get.find<SkillsService>().prepare(
+              heard, await agent.inProject(project, agent.filesDir),
+              activeSkills: previouslyMentionedSkills(_chat.messages
+                  .where((m) => m.chatId == sessionId && m.role == 'user')
+                  .map((m) => m.content)))
           : null;
       final contextSize = inference.contextTokensTotal.value > 0
           ? inference.contextTokensTotal.value
@@ -908,7 +912,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       final useTools = agent.wantsTools(heard,
           hasFile:
               file != null || (skillContext?.documents.isNotEmpty ?? false));
-      String buildSystem() =>
+      String buildSystem([String latestContext = '']) =>
           agent.composeSystem(
             '${basePrompt ?? settings.globalSystemPrompt.value}\n'
             'You are on a voice call. Speak naturally in one to three short sentences. No markdown, lists or emoji. '
@@ -920,14 +924,14 @@ class _VoiceCallViewState extends State<VoiceCallView> {
           ) +
           (skillContext == null || skillContext.documents.isEmpty
               ? ''
-              : '\n\n${skillContext.prompt(contextSize ~/ 4)}');
+              : '\n\n${skillContext.prompt(contextSize ~/ 4, alreadyIncluded: latestContext)}');
       Future<String> gen(
         String prompt,
         List<Map<String, String>> hist,
         void Function(String) onTok,
       ) {
         final system =
-            '${buildSystem()}${prompt == message ? '' : '\n\nCurrent user request: $heard'}';
+            '${buildSystem(hist.lastOrNull?['content'] ?? '')}${prompt == message ? '' : '\n\nCurrent user request: $heard'}';
         return inference.generate(
           prompt: AgentService.fitToContext(
             system,

@@ -12,6 +12,7 @@ class SkillsView extends StatelessWidget {
         text: skill?.source ??
             '---\nname: my-skill\ndescription: Describe when this skill should be used.\n---\n\n# Instructions\n');
     String? error;
+    var saving = false;
     await showDialog<void>(
         context: context,
         builder: (ctx) => StatefulBuilder(
@@ -30,17 +31,25 @@ class SkillsView extends StatelessWidget {
                           style: const TextStyle(fontFamily: 'monospace'))),
                   actions: [
                     TextButton(
-                        onPressed: () => Navigator.pop(ctx),
+                        onPressed: saving ? null : () => Navigator.pop(ctx),
                         child: const Text('Cancel')),
                     FilledButton(
-                        onPressed: () async {
-                          try {
-                            await store.save(input.text, editing: skill?.name);
-                            if (ctx.mounted) Navigator.pop(ctx);
-                          } catch (e) {
-                            setState(() => error = '$e');
-                          }
-                        },
+                        onPressed: saving
+                            ? null
+                            : () async {
+                                setState(() => saving = true);
+                                try {
+                                  await store.save(input.text,
+                                      editing: skill?.name);
+                                  if (ctx.mounted) Navigator.pop(ctx);
+                                } catch (e) {
+                                  if (ctx.mounted)
+                                    setState(() {
+                                      error = '$e';
+                                      saving = false;
+                                    });
+                                }
+                              },
                         child: const Text('Save'))
                   ],
                 )));

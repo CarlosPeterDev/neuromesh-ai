@@ -26,6 +26,7 @@ import '../services/app_log_service.dart';
 import '../services/image_generation_notification_service.dart';
 import '../services/document_extractor_service.dart';
 import '../services/skills_service.dart';
+import '../utils/skill_context.dart';
 import '../services/rag_service.dart';
 import '../services/agent_service.dart';
 import '../services/download_service.dart';
@@ -964,7 +965,10 @@ class ChatController extends GetxController {
       final skillContext = Get.isRegistered<SkillsService>()
           ? await Get.find<SkillsService>().prepare(visibleText,
               await contextAgent.inProject(project, contextAgent.filesDir),
-              attachment: pagedAttachment ? workspaceName : null)
+              attachment: pagedAttachment ? workspaceName : null,
+              activeSkills: previouslyMentionedSkills(messages
+                  .where((m) => m.chatId == sessionId && m.role == 'user')
+                  .map((m) => m.content)))
           : null;
 
       // Add the best-matching passages from the user's documents (if enabled).
@@ -1154,14 +1158,15 @@ class ChatController extends GetxController {
           final contextSize = inference.contextTokensTotal.value > 0
               ? inference.contextTokensTotal.value
               : 2048;
-          String buildSystem() => [
+          String buildSystem([String latestContext = '']) => [
                 agent.composeSystem(_effectiveSystemPrompt,
                     withTools: useTools,
                     request: visibleText,
                     withFiles: needsFileTools,
                     contextSize: contextSize),
                 if (skillContext != null && skillContext.documents.isNotEmpty)
-                  skillContext.prompt(contextSize ~/ 4),
+                  skillContext.prompt(contextSize ~/ 4,
+                      alreadyIncluded: latestContext),
               ].join('\n\n');
           final system = buildSystem();
 
@@ -1172,7 +1177,7 @@ class ChatController extends GetxController {
             // Never send more than the context can hold: an overflow makes
             // small models fail or answer nothing.
             final currentSystem =
-                '${buildSystem()}${prompt == finalPrompt ? '' : '\n\nCurrent user request: $visibleText${workspaceName == null ? '' : '\nAttached workspace file: $workspaceName'}'}';
+                '${buildSystem(hist.lastOrNull?['content'] ?? '')}${prompt == finalPrompt ? '' : '\n\nCurrent user request: $visibleText${workspaceName == null ? '' : '\nAttached workspace file: $workspaceName'}'}';
             prompt = AgentService.fitToContext(
                 currentSystem, hist, prompt, contextSize);
             return inference.generate(
