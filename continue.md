@@ -8,12 +8,12 @@ Read this file, check the current branch and working tree, and review the latest
 
 ## Release and verification
 
-- The last published build checked on 2026-11-19 was **v1.0.90**, built from `ebfae00`. It has Android ARM64 and universal APKs, a Play AAB, a Windows x64 installer, and Linux x64 DEB and AppImage installers. Android packages are development-signed. [Release](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/tag/v1.0.90)
-- The v1.0.90 Android job passed analysis, tests, bundle and APK checks, and install and reinstall on an Android 12 x86_64 emulator. Windows packaging passed in that run. Linux packaging passed in a later Ubuntu 24.04 recovery run. Its assets were added to the release separately. The v1.0.90 checksum file covers the Android packages. [Original run](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44469443561) · [Linux recovery](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44476354845)
-- Real ARM64 Android inference, Windows and Linux runtime behavior on user devices, and Play internal-track installation still need verification for this build. Confirm any newer results before reporting them.
-- Changes for the next release are tracked in [GitHub issue #13](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/13). The workflow assembles and hashes all six installers before publishing and marks both tags as prereleases when the Android packages are development-signed. The next full build must exercise the changed workflow.
+- **v1.0.100** was published on 2026-11-19 from `31e7754`. It has two Android APKs, a Play AAB, a Windows x64 installer, and Linux x64 DEB and AppImage packages. Android is development-signed. [Release](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/tag/v1.0.100)
+- The release workflow passed Android analysis and tests, both APK signature and architecture checks, the Play policy and size checks, and emulator installation and reinstall. The Windows and Linux packaging and native image-runtime checks passed. The six installer digests match the recorded SHA-256 checksums on the versioned and moving release pages. [Workflow](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44490592052)
+- The release includes voice interruption fixes for native player setup and remote worker fallback, and returns the call to listening without waiting for the worker. [Playback PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/14) · [Worker fallback PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/16) · [Return to listening PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/17)
+- Real ARM64 Android inference, microphone and Bluetooth behavior, Windows and Linux runtime behavior on user devices, and Play internal-track installation still need verification.
 
-The v1.0.90 checks also confirmed matching APK signing certificates, ARM64-only libraries in the slim APK, and matching assets across the version and moving download pages. Linux `llama-server --version` ran and its runtime dependencies resolved. The voice fixes merged after v1.0.90 prevent interrupted audio from restarting during player setup or when a worker falls back to local speech. On-device microphone, echo, Bluetooth audio, and the physical Lenovo tablet still need testing. [Voice playback PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/14) · [Worker fallback PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/16)
+The previous v1.0.90 build needed a separate Linux recovery run. The release workflow now waits for all three platforms before publishing. [Previous release](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/tag/v1.0.90) · [Release workflow PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/15)
 
 ## Where to work
 
@@ -40,6 +40,5 @@ Full release packaging also needs the dependencies in the GitHub workflow. Linux
 
 ## Next tasks
 
-1. Review issue #13 and its linked pull request. Confirm the next full Actions run has the Android, Windows, Linux and publication jobs green. Check the release page lists six installers and that `sha256sum -c SHA256SUMS.txt` verifies each file.
-2. On a real ARM64 phone, record the release version, device and Android version. Install and open the app, load a small GGUF, generate a reply, and exercise chat attachments and project workspace recovery. Record pass or fail and link a redacted report for failures.
-3. Smoke-test the Windows installer and both Linux packages on target hosts. Record app launch, model loading and generation results. Verify signing and try the Play internal track before broader distribution.
+1. On a real ARM64 phone, record the release version, device and Android version. Install and open the app, load a small GGUF, generate a reply, and exercise chat attachments and project workspace recovery. Record pass or fail and link a redacted report for failures.
+2. Smoke-test the Windows installer and both Linux packages on target hosts. Record app launch, model loading and generation results. Verify signing and try the Play internal track before broader distribution.
