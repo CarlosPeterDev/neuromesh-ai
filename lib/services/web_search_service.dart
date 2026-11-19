@@ -73,7 +73,7 @@ class WebSearchService extends GetxService {
   List<String> researchQueries(String question, {String? previous}) {
     final base = searchQuery(question, previous: previous);
     final out = <String>[base];
-    if (freshnessFor(question) != null) {
+    if (freshnessFor(base) != null || freshnessFor(question) != null) {
       final now = DateTime.now();
       final stamp = '${_months[now.month - 1]} ${now.year}';
       if (!base.contains('${now.year}')) out.add('$base $stamp');
@@ -145,13 +145,16 @@ class WebSearchService extends GetxService {
 
   /// Runs the search and builds the text block added to the prompt.
   /// [previous] is the user's earlier question, used for short follow-ups.
-  Future<WebContext?> buildContext(String question, {String? previous}) async {
+  Future<WebContext?> buildContext(String question,
+      {String? previous, bool refresh = false}) async {
     final query = searchQuery(question, previous: previous);
     final hit = _cache[query];
-    if (hit != null && DateTime.now().difference(hit.$1).inMinutes < 10) {
+    if (!refresh &&
+        hit != null &&
+        DateTime.now().difference(hit.$1).inMinutes < 10) {
       return hit.$2;
     }
-    final fresh = freshnessFor(question);
+    final fresh = freshnessFor(question) ?? freshnessFor(query);
     final merged = <WebResult>[];
     for (final q in researchQueries(question, previous: previous)) {
       merged.addAll(await search(q, max: 8, freshness: fresh));

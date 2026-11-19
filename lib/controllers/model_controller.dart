@@ -1383,16 +1383,15 @@ class ModelController extends GetxController {
     await _localImage.unloadModel();
   }
 
-  Future<void> importModelFromStorage() async {
+  Future<AiModel?> importModelFromStorage() async {
     if (isImporting.value) {
       showToast('Import in Progress', 'Wait for the current import to finish.',
           tone: ToastTone.warning);
-      return;
+      return null;
     }
 
     if (Platform.isAndroid) {
-      await _importModelWithAndroidPicker();
-      return;
+      return _importModelWithAndroidPicker();
     }
 
     String? partialImportPath;
@@ -1414,7 +1413,7 @@ class ModelController extends GetxController {
           showToast('Unsupported Model',
               'Only .gguf, .litertlm, and .safetensors files can be imported.',
               tone: ToastTone.warning);
-          return;
+          return null;
         }
 
         final file = picked.path == null ? null : File(picked.path!);
@@ -1426,7 +1425,7 @@ class ModelController extends GetxController {
         if (totalBytes <= 0) {
           showToast('Import Failed', 'The selected file is empty.',
               tone: ToastTone.error);
-          return;
+          return null;
         }
 
         final sourceStream = picked.readStream ?? file?.openRead();
@@ -1436,7 +1435,7 @@ class ModelController extends GetxController {
             'Unable to read the selected file. Try selecting it from local storage.',
             tone: ToastTone.error,
           );
-          return;
+          return null;
         }
 
         final modelsDir = await _download.modelsDir;
@@ -1449,7 +1448,7 @@ class ModelController extends GetxController {
 
         if (await destFile.exists()) {
           final replace = await _confirmReplace(filename);
-          if (!replace) return;
+          if (!replace) return null;
           shouldReplace = true;
         }
 
@@ -1474,8 +1473,8 @@ class ModelController extends GetxController {
         await refreshDownloaded();
         modelScope.value = 'local';
         importStatus.value = 'Import complete';
-        showToast('Import Successful', 'Model $filename imported.',
-            tone: ToastTone.success);
+        return availableModels
+            .firstWhereOrNull((model) => model.filename == filename);
       }
     } catch (e) {
       if (partialImportPath != null) {
@@ -1494,9 +1493,10 @@ class ModelController extends GetxController {
       importTotalBytes.value = 0;
       importBytesPerSecond.value = 0;
     }
+    return null;
   }
 
-  Future<void> _importModelWithAndroidPicker() async {
+  Future<AiModel?> _importModelWithAndroidPicker() async {
     try {
       isImporting.value = true;
       importFileName.value = '';
@@ -1511,7 +1511,7 @@ class ModelController extends GetxController {
         {'modelsDir': await _download.modelsDir},
       );
 
-      if (result?['cancelled'] == true) return;
+      if (result?['cancelled'] == true) return null;
 
       final filename = result?['filename'] as String?;
       if (filename != null && filename.isNotEmpty) {
@@ -1519,8 +1519,8 @@ class ModelController extends GetxController {
             await _download.getModelSize(filename);
         await refreshDownloaded();
         modelScope.value = 'local';
-        showToast('Import Successful', 'Model $filename imported.',
-            tone: ToastTone.success);
+        return availableModels
+            .firstWhereOrNull((model) => model.filename == filename);
       }
     } on PlatformException catch (e) {
       Get.find<AppLogService>().error(
@@ -1540,6 +1540,7 @@ class ModelController extends GetxController {
       importTotalBytes.value = 0;
       importBytesPerSecond.value = 0;
     }
+    return null;
   }
 
   /// Folder import is Android only (storage access framework tree picker).
@@ -1571,15 +1572,15 @@ class ModelController extends GetxController {
 
   /// Copies the chosen files into app storage one after another, with the
   /// same progress card as a single import.
-  Future<void> importFolderFiles(List<FolderModelFile> files) async {
-    if (files.isEmpty) return;
+  Future<List<AiModel>> importFolderFiles(List<FolderModelFile> files) async {
+    if (files.isEmpty) return [];
     if (isImporting.value) {
       showToast('Import in Progress', 'Wait for the current import to finish.',
           tone: ToastTone.warning);
-      return;
+      return [];
     }
     final modelsDir = await _download.modelsDir;
-    var imported = 0;
+    final imported = <String>[];
     final failed = <String>[];
     isImporting.value = true;
     try {
@@ -1597,7 +1598,7 @@ class ModelController extends GetxController {
           );
           final name = result?['filename'] as String? ?? file.name;
           fileSizes[name] = (result?['bytes'] as num?)?.toInt() ?? file.size;
-          imported++;
+          imported.add(name);
         } on PlatformException catch (e) {
           failed.add(file.name);
           Get.find<AppLogService>().error('Folder import failed',
@@ -1607,14 +1608,20 @@ class ModelController extends GetxController {
       await refreshDownloaded();
       modelScope.value = 'local';
       if (failed.isEmpty) {
-        showToast('Import Successful',
-            imported == 1 ? '1 model imported.' : '$imported models imported.',
+        showToast(
+            'Import Successful',
+            imported.length == 1
+                ? '1 file imported.'
+                : '${imported.length} files imported.',
             tone: ToastTone.success);
       } else {
         showToast('Some imports failed',
-            '$imported imported · couldn\'t import ${failed.join(', ')}',
+            '${imported.length} imported · couldn\'t import ${failed.join(', ')}',
             tone: ToastTone.warning);
       }
+      return availableModels
+          .where((model) => imported.contains(model.filename))
+          .toList();
     } finally {
       isImporting.value = false;
       importFileName.value = '';

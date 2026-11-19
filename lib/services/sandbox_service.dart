@@ -57,8 +57,12 @@ class SandboxService extends GetxService {
 
   bool get hasProot =>
       _libDir.isNotEmpty &&
-      ['libproot.so', 'libproot_loader.so', 'libtalloc.so']
-          .every((name) => File('$_libDir/$name').existsSync());
+      [
+        'libproot.so',
+        'libproot_loader.so',
+        'libtalloc.so',
+        'libandroid-shmem.so'
+      ].every((name) => File('$_libDir/$name').existsSync());
 
   /// Alpine is downloaded only after the user chooses Install.
   Future<void> install() {
@@ -195,15 +199,17 @@ class SandboxService extends GetxService {
   /// Runs [command] inside Alpine. The AI's workspace is /workspace.
   /// One sandbox is shared by every chat; commands run one at a time so
   /// package installs never collide.
-  Future<String> run(String command, {int timeoutSec = 120}) {
+  Future<String> run(String command,
+      {int timeoutSec = 120, String workingDirectory = '/workspace'}) {
     final done = Completer<String>();
     _commands++;
     final prev = _lock;
     _lock = done.future.catchError((_) => '');
     prev.whenComplete(() async {
       try {
-        done.complete(
-            await _run(command, timeoutSec: timeoutSec.clamp(5, 1800)));
+        done.complete(await _run(command,
+            timeoutSec: timeoutSec.clamp(5, 1800),
+            workingDirectory: workingDirectory));
       } catch (e) {
         done.complete('Error: $e');
       } finally {
@@ -213,10 +219,13 @@ class SandboxService extends GetxService {
     return done.future;
   }
 
-  Future<String> _run(String command, {int timeoutSec = 120}) async {
+  Future<String> _run(String command,
+      {required int timeoutSec, required String workingDirectory}) async {
     await _initializing;
     if (!installed.value)
-      return 'Error: the Linux sandbox is not installed. Call sandbox_setup, or turn it on in Chat tools.';
+      return 'Error: the Linux sandbox is not installed. Install Alpine Linux from the terminal.';
+    if (!hasProot)
+      return 'The Alpine launcher is incomplete. Install a newer ARM64 build of NeuroMesh AI.';
     final root = await _root();
     final work = (await Get.find<AgentService>().filesDir()).path;
     final libs = '${root.path}/lib';
@@ -232,7 +241,7 @@ class SandboxService extends GetxService {
       '-0',
       '--link2symlink',
       '-w',
-      '/workspace',
+      workingDirectory,
       '-b',
       '/dev',
       '-b',
@@ -272,7 +281,7 @@ class SandboxService extends GetxService {
     }
 
     p.stdin.close();
-    final subs = [p.stdout.listen(add), p.stderr.listen(add)];
+    final streams = [p.stdout.forEach(add), p.stderr.forEach(add)];
     var timedOut = false;
     final code =
         await p.exitCode.timeout(Duration(seconds: timeoutSec), onTimeout: () {
@@ -280,9 +289,8 @@ class SandboxService extends GetxService {
       p.kill(ProcessSignal.sigkill);
       return -1;
     });
-    for (final s in subs) {
-      await s.cancel();
-    }
+    await Future.wait(streams)
+        .timeout(const Duration(seconds: 2), onTimeout: () => []);
     var text = out.toString().trim();
     if (text.length > 6000) {
       text =

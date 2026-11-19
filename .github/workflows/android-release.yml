@@ -119,7 +119,7 @@ jobs:
           mkdir -p proot_dl && cd proot_dl
           curl -fsSL --retry 3 "$BASE/dists/stable/main/binary-aarch64/Packages" -o Packages
           debfor() { awk -v p="$1" 'BEGIN{RS="";FS="\n"} $1=="Package: " p {for(i=1;i<=NF;i++) if($i ~ /^Filename: /){sub("Filename: ","",$i); print $i}}' Packages | head -1; }
-          for pkg in proot libtalloc; do
+          for pkg in proot libtalloc libandroid-shmem; do
             f=$(debfor $pkg); test -n "$f" || { echo "package $pkg not found"; exit 1; }
             curl -fsSL --retry 3 "$BASE/$f" -o $pkg.deb
             mkdir -p x_$pkg && (cd x_$pkg && ar x ../$pkg.deb && tar -xf data.tar.* )
@@ -129,6 +129,7 @@ jobs:
           cp "$(find x_proot -type f -name proot | head -1)" $J/libproot.so
           cp "$(find x_proot -type f -path '*libexec/proot/loader' | head -1)" $J/libproot_loader.so
           cp "$(find x_libtalloc -type f -name 'libtalloc.so*' | head -1)" $J/libtalloc.so
+          cp "$(find x_libandroid-shmem -type f -name libandroid-shmem.so | head -1)" $J/libandroid-shmem.so
           ls -la $J
 
       # Google Play build: no self-updater and none of the restricted permissions
@@ -207,7 +208,11 @@ jobs:
           AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt | sort -V | tail -1)
           "$AAPT" dump badging build/app/outputs/flutter-apk/app-release.apk > "$RUNNER_TEMP/arm64-package.txt"
           sed 's/[[:space:]]*$//' "$RUNNER_TEMP/arm64-package.txt" | grep -Fx "native-code: 'arm64-v8a'"
-          unzip -l build/app/outputs/bundle/release/app-release.aab | grep -F 'base/lib/arm64-v8a/libproot.so'
+          for library in libproot.so libproot_loader.so libtalloc.so libandroid-shmem.so; do
+            unzip -l build/app/outputs/bundle/release/app-release.aab "base/lib/arm64-v8a/$library"
+            unzip -l build/app/outputs/flutter-apk/app-release.apk "lib/arm64-v8a/$library"
+            unzip -l "$RUNNER_TEMP/universal.apk" "lib/arm64-v8a/$library"
+          done
           rm -f "$RUNNER_TEMP/ks-pass" "$RUNNER_TEMP/key-pass"
           # The compiler is no longer needed; leave room for the emulator image.
           rm -rf "$RUNNER_TEMP/vksdk"

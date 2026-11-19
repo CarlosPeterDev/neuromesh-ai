@@ -699,21 +699,21 @@ class AgentWorkspaceView extends StatelessWidget {
                 icon: Icons.terminal_rounded,
                 title: 'Alpine terminal',
                 chevron: true,
-                onTap: () => Get.to(() => const _AlpineTerminalView()),
+                onTap: () => Get.to(() => const AlpineTerminalView()),
               ),
             ]),
         ]),
       );
 }
 
-class _AlpineTerminalView extends StatefulWidget {
-  const _AlpineTerminalView();
+class AlpineTerminalView extends StatefulWidget {
+  const AlpineTerminalView({super.key});
 
   @override
-  State<_AlpineTerminalView> createState() => _AlpineTerminalViewState();
+  State<AlpineTerminalView> createState() => AlpineTerminalViewState();
 }
 
-class _AlpineTerminalViewState extends State<_AlpineTerminalView> {
+class AlpineTerminalViewState extends State<AlpineTerminalView> {
   final _sandbox = Get.find<SandboxService>();
   final _input = TextEditingController();
   final _output = ScrollController();
@@ -721,6 +721,7 @@ class _AlpineTerminalViewState extends State<_AlpineTerminalView> {
   late final _agent = Get.find<AgentService>();
   late final _project = _agent.projectForChat(Get.find<ChatController>().currentSessionId.value);
   bool _running = false;
+  String _cwd = '/workspace';
 
   @override
   void dispose() {
@@ -738,8 +739,23 @@ class _AlpineTerminalViewState extends State<_AlpineTerminalView> {
       _input.clear();
     });
     try {
-      final result = await _agent.inProject(_project, () => _sandbox.run(command));
-      if (mounted) setState(() => _entries.add(result));
+      const marker = '__neuromesh_working_directory__=';
+      final script = """trap 'printf "\n$marker%s\n" "\$(pwd -P)"' EXIT
+$command""";
+      final result = await _agent.inProject(
+          _project, () => _sandbox.run(script, workingDirectory: _cwd));
+      final lines = result.split('\n');
+      final finalDirectory =
+          lines.lastIndexWhere((line) => line.startsWith(marker));
+      if (mounted)
+        setState(() {
+          if (finalDirectory >= 0) {
+            final path =
+                lines.removeAt(finalDirectory).substring(marker.length);
+            if (path.startsWith('/')) _cwd = path;
+          }
+          _entries.add(lines.join('\n').trim());
+        });
     } finally {
       if (mounted) {
         setState(() => _running = false);
@@ -771,9 +787,10 @@ class _AlpineTerminalViewState extends State<_AlpineTerminalView> {
             );
           }
           return Column(children: [
-            const ListTile(
-              title: Text('/workspace'),
-              subtitle: Text('Commands start here and share files with the agent. Use cd and commands together on one line.'),
+            ListTile(
+              title: Text(_cwd),
+              subtitle: const Text(
+                  '/workspace contains the files shared with this chat’s agent.'),
             ),
             Expanded(
               child: ListView.builder(
@@ -1006,8 +1023,11 @@ class _SandboxCard extends StatelessWidget {
     return Obx(() => AppGroup(children: [
           AppRow(
             icon: Icons.terminal_rounded,
-            title: sb.installed.value ? 'Alpine terminal' : 'Install Alpine Linux',
-            onTap: sb.installed.value ? () => Get.to(() => const _AlpineTerminalView()) : null,
+            title:
+                sb.installed.value ? 'Alpine terminal' : 'Install Alpine Linux',
+            onTap: sb.installed.value
+                ? () => Get.to(() => const AlpineTerminalView())
+                : null,
             subtitle: sb.busy.value
                 ? sb.status.value
                 : sb.installed.value

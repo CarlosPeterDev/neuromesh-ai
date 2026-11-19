@@ -83,3 +83,15 @@ bool needsWebSearch(String question) {
   if (q.length < 8) return false;
   return _recency.hasMatch(q) || _arabic.hasMatch(q);
 }
+
+/// Questions whose answers depend on current information.
+bool asksForCurrentFacts(String question) => RegExp(
+      r'\b(?:today|tonight|right now|latest|currently|current|newest|recent|news|weather|forecast|trending|release date|this (?:week|month|year))\b|اليوم|الآن|الحالي|أحدث|آخر الأخبار|الطقس',
+      caseSensitive: false,
+    ).hasMatch(question);
+
+/// An explicit request can turn on search for one chat turn.
+bool explicitlyRequestsWebSearch(String question) => RegExp(
+      r'^\s*(?:(?:ok(?:ay)?|yes|please|can you|could you)[,.!]?\s+)*(?:search(?:\s+(?:the web|online))?|look\s+up|google)\b(?!\s+(?:my|this|the)\s+(?:files?|attachments?|documents?|workspace)\b)|^\s*ابحث',
+      caseSensitive: false,
+    ).hasMatch(question);

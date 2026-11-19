@@ -20,6 +20,27 @@ void main() {
     expect(modelFileRole('adapter_model.safetensors'), ModelFileRole.adapter);
   });
 
+  test(
+      'imported projector suggestions use the model family and original source',
+      () {
+    AiModel model(String file, [String url = '']) => AiModel(
+        name: file,
+        filename: file,
+        url: url,
+        size: '',
+        description: '',
+        template: 'chatml');
+    final main = model('Family-VL-7B-Q4_K_M.gguf');
+    final helper = model('mmproj-Family-VL-7B-f16.gguf');
+    expect(ModelHelperService.searchQuery(helper), 'Family-VL-7B');
+    expect(ModelHelperService.suggestsPair(main, helper), isTrue);
+    expect(ModelHelperService.suggestsPair(main, model('mmproj-f16.gguf')),
+        isFalse);
+    expect(
+        ModelHelperService.suggestsPair(main, model('Family-VL-7B-lora.gguf')),
+        isFalse);
+  });
+
   test('helper enumeration is optional for existing HF callers', () async {
     final hf = HfService(
         client: MockClient((_) async => http.Response(

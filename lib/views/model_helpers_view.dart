@@ -36,7 +36,9 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
   void initState() {
     super.initState();
     final repository = huggingFaceRepository(widget.model.url);
-    _load(repository: repository);
+    if (repository != null || _query.text.trim().isNotEmpty) {
+      _load(repository: repository);
+    }
   }
 
   @override
@@ -47,6 +49,10 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
   }
 
   Future<void> _load({String? repository}) async {
+    if (repository == null && _query.text.trim().isEmpty) {
+      setState(() => _error = 'Enter the model or repository name to search.');
+      return;
+    }
     final request = ++_request;
     setState(() {
       _busy = true;
@@ -99,17 +105,17 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
     }
   }
 
-  Future<void> _attachLocal(AiModel target) async {
+  Future<void> _attachLocal(AiModel target, AiModel helper) async {
     final accepted = await confirmSheet(context,
         title: 'Use this vision helper?',
         confirmLabel: 'Attach',
-        message: '${widget.model.filename} → ${target.filename}\n\n'
+        message: '${helper.filename} → ${target.filename}\n\n'
             'Choose the matching vision model recommended by the file’s author. '
             'The runtime checks compatibility when you reload.');
     if (accepted != true || !mounted) return;
     try {
       await Get.find<ModelController>()
-          .attachVisionHelper(target, widget.model.filename, widget.model.url);
+          .attachVisionHelper(target, helper.filename, helper.url);
       if (mounted)
         Get.snackbar('Helper linked', 'Reload ${target.filename} to use it.');
     } catch (error) {
@@ -117,24 +123,55 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
     }
   }
 
+  Future<void> _downloadMain(HfGgufFile file, {required bool pair}) async {
+    final repository = _repository!;
+    final controller = Get.find<ModelController>();
+    final model = AiModel(
+      name: file.filename,
+      filename: file.filename,
+      url: HfService.downloadUrl(repository, file.path),
+      size: DownloadService.formatBytes(file.size),
+      description: 'Hugging Face · $repository',
+      template: widget.model.runtime == AiModel.runtimeSd ? 'sd' : 'chatml',
+      runtime: widget.model.runtime,
+    );
+    if (pair) {
+      final accepted = await confirmSheet(context,
+          title: 'Download and pair?',
+          message:
+              'Check that the author lists ${widget.model.filename} as the vision helper for ${file.filename}.',
+          confirmLabel: 'Download and pair');
+      if (accepted != true || !mounted) return;
+    }
+    setState(() => _busy = true);
+    try {
+      await controller.downloadModel(model);
+      if (pair && controller.isDownloaded(model.filename)) {
+        await controller.attachVisionHelper(
+            model, widget.model.filename, widget.model.url);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = Get.find<ModelController>();
-    final localTargets =
-        modelFileRole(widget.model.filename) == ModelFileRole.projector &&
-                controller.isDownloaded(widget.model.filename)
-            ? controller.availableModels
-                .where((m) =>
-                    controller.isDownloaded(m.filename) &&
-                    m.runtime == AiModel.runtimeLlama &&
-                    !modelFileRole(m.filename).isHelper)
-                .toList()
-            : <AiModel>[];
+    final isHelper = modelFileRole(widget.model.filename).isHelper;
+    final localMatches = controller.availableModels.where((candidate) =>
+        controller.isDownloaded(candidate.filename) &&
+        (isHelper
+            ? ModelHelperService.suggestsPair(candidate, widget.model)
+            : ModelHelperService.suggestsPair(widget.model, candidate)));
+    final repositoryHasCurrentFile =
+        _files.any((file) => file.filename == widget.model.filename);
     final files = _files.where((file) =>
         _role == 'all' ||
         (_role == 'helpers' ? file.role.isHelper : !file.role.isHelper));
     return Scaffold(
-      appBar: appScreenBar(context, title: 'Model helpers', showBack: true),
+      appBar: appScreenBar(context,
+          title: isHelper ? 'Find main model' : 'Find helpers', showBack: true),
       body: ListView(padding: const EdgeInsets.all(16), children: [
         Text(widget.model.filename),
         if (widget.model.runtime == AiModel.runtimeSd)
@@ -148,15 +185,20 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
               ]),
             )),
           ),
-        if (localTargets.isNotEmpty) ...[
+        if (localMatches.isNotEmpty) ...[
           const SizedBox(height: 12),
-          const Text(
-              'Attach this downloaded vision helper to its matching model'),
-          for (final target in localTargets)
+          Text(isHelper
+              ? 'Possible installed main models'
+              : 'Possible installed helpers'),
+          for (final candidate in localMatches)
             ListTile(
-                title: Text(target.filename),
+                title: Text(candidate.filename),
                 trailing: const Icon(Icons.link),
-                onTap: _busy ? null : () => _attachLocal(target)),
+                onTap: _busy
+                    ? null
+                    : () => isHelper
+                        ? _attachLocal(candidate, widget.model)
+                        : _attachLocal(widget.model, candidate)),
         ],
         const SizedBox(height: 12),
         Text(modelFileRole(widget.model.filename).isHelper
@@ -172,6 +214,9 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
             onPressed: _busy ? null : () => _load(),
             icon: const Icon(Icons.search),
             label: const Text('Search repositories')),
+        if (_query.text.trim().isEmpty && _repository == null && !_busy)
+          const Text(
+              'Enter the model name from the helper’s download page. A generic helper filename cannot identify its model.'),
         if (_busy) const LinearProgressIndicator(),
         if (_error != null) ...[
           Text(_error!,
@@ -205,6 +250,9 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
                   selected: _role == entry.$1,
                   onSelected: (_) => setState(() => _role = entry.$1)),
           ]),
+          if (!repositoryHasCurrentFile && !_busy)
+            const Text(
+                'This repository does not list your exact file. Check its model card for compatibility.'),
           if (!_busy && files.isEmpty)
             const Padding(
                 padding: EdgeInsets.all(16),
@@ -228,31 +276,26 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
                               onPressed: _busy ? null : () => _attach(file),
                               child: const Text(
                                   'Attach and download vision helper')),
-                        if (!file.role.isHelper)
+                        if (!file.role.isHelper) ...[
                           TextButton(
+                            onPressed: _busy
+                                ? null
+                                : () => _downloadMain(file, pair: false),
+                            child: const Text('Download main model'),
+                          ),
+                          if (repositoryHasCurrentFile &&
+                              file.role == ModelFileRole.model &&
+                              modelFileRole(widget.model.filename) ==
+                                  ModelFileRole.projector &&
+                              controller.isDownloaded(widget.model.filename))
+                            TextButton(
                               onPressed: _busy
                                   ? null
-                                  : () {
-                                      Get.find<ModelController>().downloadModel(
-                                          AiModel(
-                                              name: file.filename,
-                                              filename: file.filename,
-                                              url:
-                                                  HfService
-                                                      .downloadUrl(_repository!,
-                                                          file.path),
-                                              size:
-                                                  DownloadService.formatBytes(
-                                                      file.size),
-                                              description:
-                                                  'Hugging Face · $_repository',
-                                              template: widget.model.runtime ==
-                                                      AiModel.runtimeSd
-                                                  ? 'sd'
-                                                  : 'chatml',
-                                              runtime: widget.model.runtime));
-                                    },
-                              child: const Text('Download main model')),
+                                  : () => _downloadMain(file, pair: true),
+                              child: const Text(
+                                  'Download and pair with this helper'),
+                            ),
+                        ],
                       ],
                     ))),
         ],
