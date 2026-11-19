@@ -67,6 +67,13 @@ void main() {
     expect(modelFileKind('my-image.sdbundle'), ModelFileKind.model);
   });
 
+  test('image text encoders and chat weights get context-specific file labels',
+      () {
+    const file = HfGgufFile(path: 'Qwen3-4B-Q4.gguf', size: 100);
+    expect(file.kindInRepository(images: false), ModelFileKind.model);
+    expect(file.kindInRepository(images: true), ModelFileKind.helper);
+  });
+
   test('helper enumeration is optional for existing HF callers', () async {
     final hf = HfService(
         client: MockClient((_) async => http.Response(

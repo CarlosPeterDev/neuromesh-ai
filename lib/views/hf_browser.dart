@@ -14,6 +14,7 @@ import '../utils/image_bundle.dart';
 import '../utils/model_file_role.dart';
 import '../widgets/model_file_filter.dart';
 import '../services/download_queue.dart';
+import 'model_helpers_view.dart';
 
 String _compact(int n) {
   if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
@@ -488,7 +489,7 @@ class _RepoFilesState extends State<_RepoFiles> {
 
   void _choose(HfGgufFile f) {
     final model = _asModel(f);
-    final kind = _repositoryKind(f, images: widget.images);
+    final kind = f.kindInRepository(images: widget.images);
     final canDownload = HfService.canDownloadSingleFile(f, images: widget.images) ||
         (kind == ModelFileKind.helper &&
             modelFileRole(f.filename).isHelper && !f.isSplit &&
@@ -513,6 +514,7 @@ class _RepoFilesState extends State<_RepoFiles> {
               : kind == ModelFileKind.helper && !f.role.isHelper
                   ? 'Use this part with the matching image model.'
                   : f.role.help),
+          ModelCompanionsButton(model: model, kind: kind, repositoryPath: f.path),
           const SizedBox(height: 16),
           if (!canDownload)
             OutlinedButton.icon(
@@ -588,7 +590,7 @@ class _RepoFilesState extends State<_RepoFiles> {
         }
         final offered = snap.data ?? const <HfGgufFile>[];
         final files = offered.where((file) {
-          final kind = _repositoryKind(file, images: widget.images);
+          final kind = file.kindInRepository(images: widget.images);
           return (_kind == null || kind == _kind) &&
               (kind != ModelFileKind.model || widget.images ||
                   widget.quant == 'any' || _quantMatches(file.quant, widget.quant));
@@ -606,7 +608,7 @@ class _RepoFilesState extends State<_RepoFiles> {
                 AppRow(
                   icon: Icons.insert_drive_file_outlined,
                   title: f.path,
-                  subtitle: '${_repositoryKind(f, images: widget.images).label} · ${DownloadService.formatBytes(f.size)}'
+                  subtitle: '${f.kindInRepository(images: widget.images).label} · ${DownloadService.formatBytes(f.size)}'
                       '${f.isSplit ? ' · Split weights' : ''}',
                   trailing: controller.downloadedFiles.contains(f.filename)
                       ? Text('On phone', style: t.small)
@@ -628,15 +630,6 @@ class _RepoFilesState extends State<_RepoFiles> {
       },
     );
   }
-}
-
-ModelFileKind _repositoryKind(HfGgufFile file, {required bool images}) {
-  if (!images || file.kind == ModelFileKind.helper) return file.kind;
-  return switch (roleOfFile(file.path)) {
-    BundleRole.diffusion || BundleRole.checkpoint => ModelFileKind.model,
-    BundleRole.other => file.kind,
-    _ => ModelFileKind.helper,
-  };
 }
 
 /// Whether a file's quant label ("Q4_K_M", "IQ4_XS") belongs to bucket
@@ -720,7 +713,7 @@ class _BundlePickerState extends State<_BundlePicker> {
                 onChanged: (v) => setState(() => v == true ? sel.add(f.path) : sel.remove(f.path)),
                 title: Text(f.path, style: const TextStyle(fontSize: 13)),
                 subtitle: Text(
-                    '${_repositoryKind(f, images: true).label} · ${roleName[roleOfFile(f.path)] ?? ''} · ${DownloadService.formatBytes(f.size)}',
+                    '${f.kindInRepository(images: true).label} · ${roleName[roleOfFile(f.path)] ?? ''} · ${DownloadService.formatBytes(f.size)}',
                     style: const TextStyle(fontSize: 11.5)),
               ),
           ]),

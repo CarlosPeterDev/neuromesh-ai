@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../utils/image_bundle.dart';
 import '../utils/llama_archs.dart';
 import '../utils/model_file_role.dart';
 
@@ -115,6 +116,15 @@ class HfGgufFile {
   String get filename => path.split('/').last;
   ModelFileRole get role => modelFileRole(path);
   ModelFileKind get kind => modelFileKind(path);
+
+  ModelFileKind kindInRepository({required bool images}) {
+    if (!images || kind == ModelFileKind.helper) return kind;
+    return switch (roleOfFile(path)) {
+      BundleRole.diffusion || BundleRole.checkpoint => ModelFileKind.model,
+      BundleRole.other => kind,
+      _ => ModelFileKind.helper,
+    };
+  }
 
   /// Multi-part models ("-00001-of-00003") are not supported by the
   /// single-file downloader.
