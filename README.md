@@ -2,11 +2,11 @@
 
 **Connect Devices. Multiply Intelligence.**
 
-NeuroMesh AI is an Android AI workspace for running language models privately on your own hardware. It combines on-device GGUF inference (llama.cpp), optional cloud providers, an OpenAI-compatible local server, and device clustering.
+NeuroMesh AI is a Flutter app for running language models on Android, Windows and Linux. It combines local GGUF inference, optional cloud providers, an OpenAI-compatible local server, and device clustering.
 
-> Status: early base. This repository is a small foundation that will be extended step by step. See [`continue.md`](continue.md) for exactly what works, what is unverified, and what is next.
+See [the development handoff](continue.md) for release status, verification results, and the next tasks.
 
-## What is in the base today
+## Features
 
 - Local GGUF inference on Android (llama.cpp, CPU with optional GPU backends)
 - Cloud providers (bring your own API key) alongside local models
@@ -18,11 +18,9 @@ NeuroMesh AI is an Android AI workspace for running language models privately on
 - Chat with your documents (offline keyword search), agent with memory and remote MCP tools
 - Toolbox: roles, prompts, profiles, export/import, backup, compare, benchmark
 
-Anything not listed here is not implemented yet.
-
 ## Install
 
-Download the APK from the [Releases](../../releases) page.
+Choose the APK for Android, the x64 setup executable for Windows, or the x64 DEB or AppImage for Linux. The AAB is for Google Play distribution. [Downloads](../../releases)
 
 The normal APK and AAB include the small ARM64 native Linux launcher. Alpine itself is an optional download from **Install Alpine Linux** in Chat tools or the terminal; it is not bundled with the app. The normal standalone APK uses the same Play build flags and restricted manifest as the AAB. Other Android ABIs can use chat features; the Alpine launcher currently requires ARM64. Store distribution of downloadable runtime packages still requires policy review.
 
@@ -39,7 +37,7 @@ Agent activity appears as a compact row. Open it for a live tool list and tap a 
 
 ## Build
 
-Builds run in GitHub Actions (`.github/workflows/android-release.yml`) on every push to `main` or manual dispatch. Locally you need Flutter (stable), JDK 17, the Android SDK and NDK, then:
+GitHub Actions runs analysis and tests on pull requests and packages Android, Windows and Linux on pushes to `main` or manual runs. Releases use one checksum manifest for all installers. For a local Android build, use Flutter 3.38.x, JDK 17, the Android SDK and NDK.
 
 ```bash
 git submodule update --init --recursive

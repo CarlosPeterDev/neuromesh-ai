@@ -7,13 +7,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# One release job at a time per branch; a newer push cancels an older run that has not published yet.
+# Serialize runs by ref so releases cannot move the latest tag concurrently.
 concurrency:
   group: android-release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
-  contents: write   # create/update GitHub Releases
+  contents: read
 
 env:
   NEUROMESH_REPORT_ENDPOINT: ${{ vars.NEUROMESH_REPORT_ENDPOINT }}
@@ -27,6 +27,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    outputs:
+      version: ${{ steps.ver.outputs.name }}
+      production_signed: ${{ steps.sign.outputs.production }}
+      aab_mb: ${{ steps.play_size.outputs.aab_mb }}
+      split_mb: ${{ steps.play_size.outputs.split_mb }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -139,6 +144,7 @@ jobs:
           flutter build appbundle --release "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json" --dart-define=PLAY_BUILD=true $V
 
       - name: Play policy and size check
+        id: play_size
         if: github.event_name != 'pull_request'
         run: |
           set -e
@@ -159,8 +165,8 @@ jobs:
           AABSZ=$(stat -c%s "$AAB")
           echo "AAB file: $((AABSZ/1048576)) MB"
           echo "Download size on an arm64 phone after Play splitting: $((SIZE/1048576)) MB (Play limit: 200 MB per module)"
-          echo "SPLIT_MB=$((SIZE/1048576))" >> "$GITHUB_ENV"
-          echo "AAB_MB=$((AABSZ/1048576))" >> "$GITHUB_ENV"
+          echo "split_mb=$((SIZE/1048576))" >> "$GITHUB_OUTPUT"
+          echo "aab_mb=$((AABSZ/1048576))" >> "$GITHUB_OUTPUT"
           if [ "$SIZE" -gt 198000000 ]; then
             echo "::error::Over the Play 200 MB limit"; exit 1
           fi
@@ -208,7 +214,6 @@ jobs:
 
       - name: Collect and verify artifacts
         if: github.event_name != 'pull_request'
-        id: art
         run: |
           set -e
           V='${{ steps.ver.outputs.name }}'
@@ -220,7 +225,6 @@ jobs:
           for f in dist/*; do test -s "$f" || { echo "empty artifact $f"; exit 1; }; done
           for f in dist/*.apk; do unzip -tq "$f"; done
           unzip -tq dist/*.aab
-          (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
 
       - name: Enable emulator acceleration
         if: github.event_name != 'pull_request'
@@ -261,27 +265,6 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-      - name: Publish GitHub Release
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -e
-          V='${{ steps.ver.outputs.name }}'
-          PRE=""; [ '${{ steps.sign.outputs.production }}' = 'true' ] || PRE="--prerelease"
-          KIND="production-signed"; [ -n "$PRE" ] && KIND="DEVELOPMENT-signed (not production-ready)"
-          NOTES="NeuroMesh AI v${V}
-          - Build date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-          - Commit: ${GITHUB_SHA}
-          - Signing: ${KIND}
-          - Play AAB: ${AAB_MB} MB file, ${SPLIT_MB} MB download on an arm64 phone after Play splitting (limit 200 MB)
-          - Checksums: SHA256SUMS.txt"
-          # Immutable version tag: never overwritten.
-          gh release create "v${V}" dist/* --target "${GITHUB_SHA}" --title "NeuroMesh AI v${V}" --notes "$NOTES" $PRE
-          # Moving 'latest' channel (marked as GitHub's Latest release, even when dev-signed): replaced only after this build succeeded.
-          gh release delete latest --cleanup-tag --yes 2>/dev/null || true
-          gh release create latest dist/* --target "${GITHUB_SHA}" --title "NeuroMesh AI latest (v${V})" --notes "$NOTES" --latest
-
   # Windows and Linux desktop builds. They bundle llama.cpp's llama-server (CPU)
   # next to the app; the AI's shell commands use the computer's own shell.
   desktop:
@@ -294,7 +277,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-24.04]
     env:
-      BASE_VERSION: "1.0"
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -330,14 +313,14 @@ jobs:
         if: runner.os == 'Linux'
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-        run: flutter build linux --release "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json" --build-name=${{ env.BASE_VERSION }}.${{ github.run_number }} --build-number=${{ github.run_number }}
+        run: flutter build linux --release "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json" --build-name=${{ env.RELEASE_VERSION }} --build-number=${{ github.run_number }}
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
           CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
-        run: flutter build windows --release "--dart-define-from-file=$env:RUNNER_TEMP/neuromesh-report-defines.json" --build-name=${{ env.BASE_VERSION }}.${{ github.run_number }} --build-number=${{ github.run_number }}
+        run: flutter build windows --release "--dart-define-from-file=$env:RUNNER_TEMP/neuromesh-report-defines.json" --build-name=${{ env.RELEASE_VERSION }} --build-number=${{ github.run_number }}
 
       - name: Build and install the desktop image runtime
         shell: bash
@@ -362,7 +345,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          V="${BASE_VERSION}.${GITHUB_RUN_NUMBER}"
+          V="$RELEASE_VERSION"
           B=build/linux/x64/release/bundle
           mkdir -p "$B/llama" dl
           TAG=$(gh release list --repo ggml-org/llama.cpp --limit 20 --json tagName -q '.[].tagName' | grep -E '^b[0-9]+$' | head -1); echo "llama.cpp $TAG"
@@ -376,13 +359,6 @@ jobs:
           ls "$B/llama" | head -20
           tar -C "$B" -czf "NeuroMesh-AI-v${V}-linux-x64.tar.gz" .
           bash scripts/package_linux.sh "$B" "$V" web/icons/Icon-512.png
-          if [[ "$GITHUB_EVENT_NAME" != "pull_request" && "$GITHUB_REF" == "refs/heads/main" ]]; then
-            for f in "NeuroMesh-AI-v${V}-linux-x64.deb" "NeuroMesh-AI-v${V}-linux-x64.AppImage"; do
-              test -s "$f"
-              gh release upload "v${V}" "$f" --clobber --repo "$GITHUB_REPOSITORY"
-              gh release upload latest "$f" --clobber --repo "$GITHUB_REPOSITORY"
-            done
-          fi
 
       - name: Bundle llama-server and package (Windows)
         if: runner.os == 'Windows'
@@ -391,7 +367,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          V="${BASE_VERSION}.${GITHUB_RUN_NUMBER}"
+          V="$RELEASE_VERSION"
           B=build/windows/x64/runner/Release
           mkdir -p "$B/llama" dl
           TAG=$(gh release list --repo ggml-org/llama.cpp --limit 20 --json tagName -q '.[].tagName' | grep -E '^b[0-9]+$' | head -1); echo "llama.cpp $TAG"
@@ -408,14 +384,134 @@ jobs:
           export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
           "$ISCC" "/DAppVersion=${V}" "/DSourceDir=$(cygpath -w "$PWD/$B")" "/DOutDir=$(cygpath -w "$PWD")" installer/neuromesh.iss
           ls -la NeuroMesh-AI-Setup-*.exe
-          if [[ "$GITHUB_EVENT_NAME" != "pull_request" && "$GITHUB_REF" == "refs/heads/main" ]]; then
-            installer="NeuroMesh-AI-Setup-v${V}-x64.exe"
-            gh release upload "v${V}" "$installer" --clobber --repo "$GITHUB_REPOSITORY"
-            gh release upload latest "$installer" --clobber --repo "$GITHUB_REPOSITORY"
-          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: neuromesh-ai-${{ runner.os }}-x64
           path: NeuroMesh-AI-*x64*
           if-no-files-found: error
+
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: [build, desktop]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.build.outputs.version }}
+      PRODUCTION_SIGNED: ${{ needs.build.outputs.production_signed }}
+      AAB_MB: ${{ needs.build.outputs.aab_mb }}
+      SPLIT_MB: ${{ needs.build.outputs.split_mb }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: neuromesh-ai-*
+          path: packages
+
+      - name: Verify all release installers and generate checksums
+        run: |
+          set -euo pipefail
+          signing_suffix=""
+          if [[ "$PRODUCTION_SIGNED" != "true" ]]; then
+            signing_suffix="-dev"
+          fi
+
+          android="packages/neuromesh-ai-$VERSION"
+          windows="packages/neuromesh-ai-Windows-x64"
+          linux="packages/neuromesh-ai-Linux-x64"
+          installers=(
+            "$android/NeuroMesh-AI-v$VERSION-arm64$signing_suffix.apk"
+            "$android/NeuroMesh-AI-v$VERSION-universal$signing_suffix.apk"
+            "$android/NeuroMesh-AI-v$VERSION$signing_suffix.aab"
+            "$windows/NeuroMesh-AI-Setup-v$VERSION-x64.exe"
+            "$linux/NeuroMesh-AI-v$VERSION-linux-x64.deb"
+            "$linux/NeuroMesh-AI-v$VERSION-linux-x64.AppImage"
+          )
+          mkdir -p dist
+          for installer in "${installers[@]}"; do
+            if [[ ! -s "$installer" ]]; then
+              echo "::error::Missing or empty release installer: $installer"
+              exit 1
+            fi
+            cp "$installer" dist/
+          done
+          cd dist
+          sha256sum -- *.apk *.aab *.exe *.deb *.AppImage > SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
+
+      - name: Publish GitHub releases
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          signing_label="production-signed"
+          version_flags=(--latest)
+          channel_flags=(--latest=false)
+          replace_channel=true
+          channel_exists=false
+          if existing=$(gh release view latest --json name,isDraft --jq '[.isDraft, .name] | @tsv'); then
+            channel_exists=true
+            IFS=$'\t' read -r draft title <<< "$existing"
+            if [[ "$title" =~ \(v([0-9]+\.[0-9]+\.[0-9]+)\)$ ]]; then
+              channel_version="${BASH_REMATCH[1]}"
+              newest=$(printf '%s\n' "$VERSION" "$channel_version" | sort -V | tail -1)
+              if [[ "$newest" != "$VERSION" ]]; then
+                replace_channel=false
+                version_flags=(--latest=false)
+              elif [[ "$channel_version" == "$VERSION" && "$draft" == "false" ]]; then
+                replace_channel=false
+              fi
+            fi
+          fi
+          if [[ "$PRODUCTION_SIGNED" != "true" ]]; then
+            signing_label="DEVELOPMENT-signed (not production-ready)"
+            version_flags=(--prerelease --latest=false)
+            channel_flags+=(--prerelease)
+          fi
+
+          cat > release-notes.txt <<EOF
+          NeuroMesh AI v$VERSION
+          - Build date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          - Commit: $GITHUB_SHA
+          - Android signing: $signing_label
+          - Play AAB: $AAB_MB MB file, $SPLIT_MB MB download on an arm64 phone after Play splitting (limit 200 MB)
+          - Verify any installer using SHA256SUMS.txt.
+          EOF
+
+          tag="v$VERSION"
+          asset_dir=dist
+          if existing=$(gh release view "$tag" --json isDraft,targetCommitish --jq '[.isDraft, .targetCommitish] | @tsv'); then
+            IFS=$'\t' read -r draft target <<< "$existing"
+            if [[ "$target" != "$GITHUB_SHA" ]]; then
+              echo "::error::Existing $tag release targets $target, expected $GITHUB_SHA"
+              exit 1
+            fi
+            if [[ "$draft" == "true" ]]; then
+              gh release upload "$tag" dist/* --clobber
+              gh release edit "$tag" --draft=false --notes-file release-notes.txt "${version_flags[@]}"
+            elif [[ "$replace_channel" == "true" ]]; then
+              # Use the published bytes on reruns, including the original APK signer.
+              asset_dir=published
+              patterns=()
+              for asset in dist/*; do
+                patterns+=(--pattern "${asset##*/}")
+              done
+              gh release download "$tag" --dir "$asset_dir" "${patterns[@]}"
+              (cd "$asset_dir" && sha256sum --check --strict SHA256SUMS.txt)
+              gh release view "$tag" --json body --jq '.body' > release-notes.txt
+            fi
+          else
+            gh release create "$tag" dist/* --target "$GITHUB_SHA" \
+              --title "NeuroMesh AI v$VERSION" --notes-file release-notes.txt "${version_flags[@]}"
+          fi
+
+          if [[ "$replace_channel" == "false" ]]; then
+            exit 0
+          fi
+          if [[ "$channel_exists" == "true" ]]; then
+            gh release delete latest --cleanup-tag --yes
+          fi
+          gh release create latest "$asset_dir"/* --target "$GITHUB_SHA" \
+            --title "NeuroMesh AI latest (v$VERSION)" --notes-file release-notes.txt "${channel_flags[@]}"

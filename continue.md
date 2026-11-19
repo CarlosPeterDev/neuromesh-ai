@@ -1,54 +1,43 @@
-# continue.md — NeuroMesh AI development state
+# NeuroMesh AI development handoff
 
-## Overview
-Small base app (Flutter + Kotlin + llama.cpp) to be extended step by step. Repo: carlospeter582011-prog/neuromesh-ai.
+## Start here
 
-## Build status (verified 2026-11-14)
-CI run on commit de9bb01 succeeded: analyze + tests passed, arm64 APK, universal APK and AAB built, release `v1.0.4` and moving `latest` published as DEV-signed pre-releases. Fixes needed on the way: Flutter pinned to 3.38.x (stable 3.50 needs Gradle 9.3.1), modern glslc installed for Vulkan shaders, submodule pointer restored. Install/inference on a real device: NOT tested.
+NeuroMesh AI is a Flutter workspace for private local AI with optional cloud providers. Users can download or import models, chat with files, work with a tool-using agent, and connect compatible devices. Android uses Kotlin/JNI and bundled llama.cpp. The Windows and Linux packages include a CPU llama-server. See [GitHub](https://github.com/carlospeter582011-prog/neuromesh-ai) and [installation and build instructions](README.md).
 
-## Done (code in place)
-- Source imported from an MIT-licensed open-source Flutter LLM client (release 1.0.7-cluster tree), single import commit.
-- Renamed: app ID `com.neuromesh.ai`, Dart package `neuromesh_ai`, plugin Kotlin package `com.neuromesh.llama_flutter_android` (JNI symbols renamed to match), QR scheme `neuromesh://`.
-- Removed old Firebase project config, old marketing images, old author credits from the UI. Update checker now points at this repo's releases.
-- Original logo + adaptive launcher icon generated (navy / cyan / violet / lime node network).
-- CI: `.github/workflows/android-release.yml` (analyze, test, arm64 APK, universal APK, AAB, SHA-256, tag `v1.0.N` + moving `latest`).
+Read this file, check the current branch and working tree, and review the latest GitHub runs and open pull requests before choosing work. Update this file when the next task, release status, or known limitations change.
 
-## Models screen (added after v1.0.4)
-- Browse tab replaced by a live Hugging Face GGUF search (`lib/services/hf_service.dart`, `lib/views/hf_browser.dart`): search box, per-repo file list with sizes/quants, download into the app or save to the phone's public Downloads folder. Hard-coded catalog links are no longer shown (catalog data still exists in code for already-downloaded models and image models).
-- Import sheet gained a "Get from Hugging Face" shortcut. File/folder import is unchanged.
-- UNVERIFIED on a device; only analyze/unit tests in CI.
-- Not handled: gated repos (hidden behind a notice), split multi-part GGUFs and vision projector files (filtered out).
+## Release and verification
 
-## Fixes after v1.0.5 (reported from a device)
-- "Failed to create context": native code now retries context creation at half the size (down to 512) and reports llama.cpp's real error; the app retries on CPU if a GPU load fails. UNVERIFIED on the reporting phone.
-- API server can now start without a loaded model (answers 'no model' until one is loaded).
-- Agent tab + MCP (remote URL servers) added; analyze/tests pass in CI; not tested on a device.
+- The last published build checked on 2026-11-19 was **v1.0.90**, built from `ebfae00`. It has Android ARM64 and universal APKs, a Play AAB, a Windows x64 installer, and Linux x64 DEB and AppImage installers. Android packages are development-signed. [Release](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/tag/v1.0.90)
+- The v1.0.90 Android job passed analysis, tests, bundle and APK checks, and install and reinstall on an Android 12 x86_64 emulator. Windows packaging passed in that run. Linux packaging passed in a later Ubuntu 24.04 recovery run. Its assets were added to the release separately. The v1.0.90 checksum file covers the Android packages. [Original run](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44469443561) · [Linux recovery](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44476354845)
+- Real ARM64 Android inference, Windows and Linux runtime behavior on user devices, and Play internal-track installation still need verification for this build. Confirm any newer results before reporting them.
+- Changes for the next release are tracked in [GitHub issue #13](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/13). The workflow assembles and hashes all six installers before publishing and marks both tags as prereleases when the Android packages are development-signed. The next full build must exercise the changed workflow.
 
-## Added after v1.0.7 (all CI-verified only; NOTHING tested on a device)
-- Toolbox (`lib/views/toolbox_view.dart`, `lib/services/toolbox_service.dart`): roles, prompt library, model profiles, chat export/import, backup/restore, storage manager, diagnostics, feedback draft, benchmark, compare, switches (auto context, auto-title, Wi-Fi-only, load last model).
-- Voice (`voice_models.dart`, `voice_service.dart`, `voice_views.dart`): sherpa-onnx Whisper STT, Piper TTS (needs piper_phonemize; Arabic untested), phone voice fallback, Silero VAD, streaming speech, barge-in, wake phrase.
-- Voice cloning (`voice_clone_view.dart`, `voice_clone_store.dart`): Pocket TTS int8 (English only), record/import reference WAV. Worker mode (`voice_worker.dart`): HTTP server on :8765 with bearer token; the caller phone falls back to local speech if the worker fails. Voice models cannot use the llama RPC cluster.
-- Chat: pin, per-chat prompt, regenerate, edit-resend, auto-title, full-text search, RTL direction detection.
-- Documents: offline BM25 keyword retrieval (`rag_service.dart`, `utils/bm25.dart`), not semantic.
-- Agent: memory, private files, fetch_url (confirm), always-allow, MCP presets (DeepWiki, Context7 URLs not verified).
-- Images: Models → Images tab searches Hugging Face `text-to-image` repos, root-level .safetensors only; loads through the base's stable-diffusion.cpp path (UNVERIFIED which checkpoints work).
-- Downloads: queue, Wi-Fi-only flag to the Android DownloadManager.
-- Device: battery/thermal (`DeviceBridge.kt`), share-to-chat, widget and quick tile (open a new chat), server QR, first-run tour, what's new.
-- Cluster load: failure to read the layer count now falls back to a single-phone load.
-- Not done: prompt caching, true background wake word, Arabic voice cloning, dead catalog code in model_view.dart still present.
+## Where to work
 
-## Not done / unverified
-- Native JNI rename is untested on a device (build compiles, runtime unverified).
-- Not implemented: new cluster wizard, model manager rework, agents, document RAG, voice, performance center, Arabic/RTL, theme redesign, new navigation. Existing features from the base remain as inherited.
-- No hardware testing performed.
+| Area | Entry points and current behavior |
+| --- | --- |
+| Chat and agent | `lib/controllers/chat_controller.dart`, `lib/views/chat_view.dart`, `lib/services/agent_service.dart`. Chat supports text, attachments, cloud and local inference. Agent tools cover files, approved actions, MCP, and memory. |
+| Projects, Skills and attachments | `lib/services/agent_service.dart`, `lib/services/skills_service.dart`, `lib/utils/skill_context.dart`, `lib/utils/page_text.dart`. Chats can use named workspaces. Explicit skill mentions are scoped to a chat. Local agent chat can retrieve additional context pages as needed. |
+| Models and local inference | `lib/controllers/model_controller.dart`, `lib/services/hf_service.dart`, `lib/services/model_helper_service.dart`, `lib/services/inference_*.dart`. Some helper files are linked to a main model. Runtime and architecture compatibility depend on the model and platform. |
+| Voice, images and devices | `lib/services/voice_service.dart`, `lib/services/voice_worker.dart`, `lib/services/local_image_service.dart`, `lib/services/cluster_service.dart`, `lib/services/cluster_backup.dart`, `lib/services/openai_server_service.dart`. Platform capabilities vary. |
+| Diagnostics | `lib/services/diagnostics_service.dart`, `lib/views/diagnostics_view.dart`, and `workers/diagnostics/`. The report UI previews the ZIP before sending. See [diagnostic delivery configuration](SECURITY.md#developer-diagnostic-delivery). |
+| Packaging | `.github/workflows/android-release.yml`, `android/app/build.gradle.kts`, `scripts/package_linux.sh`, and `installer/neuromesh.iss`. Build jobs use Flutter 3.38.x. Android uses JDK 17 and application ID `com.neuromesh.ai`. |
 
-## Versioning
-`1.0.<run_number>`, versionCode = run number, no version commits (no workflow loop).
+## Run the checks
 
-## Signing
-Dev-signed + pre-release unless ANDROID_KEYSTORE_* secrets exist (see SECURITY.md).
+```bash
+git submodule update --init --recursive
+flutter pub get
+flutter analyze --no-fatal-infos --no-fatal-warnings
+flutter test
+python -m unittest discover -s scripts -p 'test_report_build_config.py'
+```
 
-## Next
-1. Test install on a real arm64 phone.
-2. Verify install + local inference on a real arm64 phone.
-3. Then add features one at a time, updating this file.
+Full release packaging also needs the dependencies in the GitHub workflow. The Android release path builds the Play AAB and standalone APKs with `PLAY_BUILD=true`. Alpine downloads on demand on supported ARM64 devices. CI generates an ephemeral development key if production signing is unavailable, so plan a clean install when testing different development builds. Follow [release signing](SECURITY.md#release-signing) and [Play Store preparation](docs/PLAY_STORE.md).
+
+## Next tasks
+
+1. Review issue #13 and its linked pull request. Confirm the next full Actions run has the Android, Windows, Linux and publication jobs green. Check the release page lists six installers and that `sha256sum -c SHA256SUMS.txt` verifies each file.
+2. On a real ARM64 phone, record the release version, device and Android version. Install and open the app, load a small GGUF, generate a reply, and exercise chat attachments and project workspace recovery. Record pass or fail and link a redacted report for failures.
+3. Smoke-test the Windows installer and both Linux packages on target hosts. Record app launch, model loading and generation results. Verify signing and try the Play internal track before broader distribution.
