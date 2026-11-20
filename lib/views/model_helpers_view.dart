@@ -105,12 +105,17 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
 
     final repository = _verifiedHelper?.repository ??
         ModelHelperService.companionRepository(widget.model);
-    if (repository != null || _query.text.trim().isNotEmpty) {
+    if (repository != null) {
       await _load(repository: repository);
-    } else if (_isHelper &&
+      return;
+    }
+    if (_isHelper &&
         _installed.isEmpty &&
         controller.isDownloaded(widget.model.filename)) {
       await _findInInstalledRepositories(controller);
+    }
+    if (mounted && _request == 0 && _query.text.trim().isNotEmpty) {
+      await _load();
     }
   }
 

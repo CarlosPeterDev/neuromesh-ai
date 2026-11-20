@@ -42,7 +42,12 @@ class ModelArtifactReader {
   }
 
   ModelArtifact _gguf(Map<String, Object?> fields) {
-    final names = <String>{};
+    final names = <String>{
+      for (final key in ['general.name', 'general.basename'])
+        if (fields[key] case final String value
+            when value.trim().isNotEmpty && value.length <= 300)
+          value,
+    };
     final baseNames = <String>{};
     final repos = <String>{};
     final baseRepos = <String>{};
@@ -52,13 +57,17 @@ class ModelArtifactReader {
         continue;
       }
       final key = entry.key;
-      if (key == 'general.name' || key == 'general.basename') names.add(value);
       if (key.endsWith('.repo_url') || key.endsWith('.url')) {
         final repo = artifactRepository(value);
         if (repo != null) {
           if (key.startsWith('general.base_model.')) {
             baseRepos.add(repo);
-          } else {
+          } else if (const {
+            'general.repo_url',
+            'general.url',
+            'general.source.repo_url',
+            'general.source.url'
+          }.contains(key)) {
             repos.add(repo);
           }
         }

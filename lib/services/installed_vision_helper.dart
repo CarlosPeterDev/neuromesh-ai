@@ -88,7 +88,8 @@ class InstalledVisionHelpers {
     }
     final families = {
       visionModelFamily(model.filename),
-      ...?model.artifact?.names.map(visionModelFamily),
+      if (model.artifact?.names.firstOrNull case final String name)
+        visionModelFamily(name),
     }..remove('');
     if (families.isEmpty) return null;
     final named = <String>[];
