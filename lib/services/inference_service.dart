@@ -30,6 +30,8 @@ class InferenceService extends GetxService {
   final isVisionLoaded = false.obs;
   final loadingModelName = ''.obs;
   final loadedModelName = ''.obs;
+  int get modelRevision => _modelRevision;
+  int _modelRevision = 0;
   final tokenCount = 0.obs;
   final tokensPerSecond = 0.0.obs;
   final contextTokensUsed = 0.obs;
@@ -214,6 +216,7 @@ class InferenceService extends GetxService {
 
       modelLoadProgress.value = 1.0;
       _loadedProjector = mmprojPath;
+      _modelRevision++;
       loadedModelName.value = requestedModelName;
       loadedModelRuntime.value = result.runtime;
       if (result.runtime == 'llama' || result.runtime == 'litert') {
