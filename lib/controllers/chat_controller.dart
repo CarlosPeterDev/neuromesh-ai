@@ -1097,15 +1097,14 @@ class ChatController extends GetxController {
       var finalPrompt = genPrompt;
       WebContext? webCtx;
       final explicitSearch = explicitlyRequestsWebSearch(visibleText);
-      final narrateResearch = explicitSearch &&
-          RegExp(
-                  r'\b(?:then|and)\s+(?:create|crete|make|generate|save|record|produce|turn)\b.{0,55}\b(?:audio?|wav|speech|voice)\s+files?\b',
-                  caseSensitive: false, dotAll: true)
-              .hasMatch(visibleText) &&
-          RegExp(r'\b(?:paragraph|summari[sz]e|summary)\b',
-                  caseSensitive: false)
-              .hasMatch(visibleText);
-      final researchTrace = <String>[];
+      final narrationDraft = narrationDraftRequest(visibleText);
+      final narrationTrace = <String>[];
+      if (narrationDraft != null && !explicitSearch) {
+        finalPrompt = genPrompt.replaceFirst(
+            visibleText,
+            'Complete the writing request below. Return only the finished '
+            'text to be narrated.\n\n$narrationDraft');
+      }
       final web = Get.isRegistered<WebSearchService>()
           ? Get.find<WebSearchService>()
           : null;
@@ -1118,10 +1117,10 @@ class ChatController extends GetxController {
       final searchRequested = imagePrompt == null &&
           (explicitSearch ||
               (evidenceName == null &&
-                  !fileQuestion &&
+                  (!fileQuestion || narrationDraft != null) &&
                   imagePath == null &&
                   fileType != 'audio' &&
-                  web?.shouldSearch(visibleText) == true));
+                  web?.shouldSearch(narrationDraft ?? visibleText) == true));
       String? unavailableEvidence;
       if (textEvidence && !readable) {
         unavailableEvidence =
@@ -1150,8 +1149,8 @@ class ChatController extends GetxController {
               'Web search returned no usable sources. I couldn’t verify the answer.';
         } else {
           final question = searchQuery(visibleText, previous: previous);
-          if (narrateResearch) {
-            researchTrace.add(AgentService.stepLine(
+          if (narrationDraft != null) {
+            narrationTrace.add(AgentService.stepLine(
                 'web_search',
                 {'query': question},
                 'Searching the web',
@@ -1256,7 +1255,8 @@ class ChatController extends GetxController {
       } else if (inferenceMode == 'local') {
         final localImage = Get.find<LocalImageService>();
 
-        if (localImage.isModelLoaded.value && !searchRequested) {
+        if (localImage.isModelLoaded.value && !searchRequested &&
+            narrationDraft == null) {
           // Local image generation
           final settings = Get.find<SettingsController>();
           final imageNotifications =
@@ -1359,7 +1359,7 @@ class ChatController extends GetxController {
               !RegExp(r'\b(?:create|write|save|edit|modify|change|delete|send|run)\b',
                       caseSensitive: false)
                   .hasMatch(visibleText);
-          final useTools = webCtx == null &&
+          final useTools = narrationDraft == null && webCtx == null &&
               streamingAttachmentType.value == null &&
               !readOnlyFileQuestion &&
               agent.wantsTools(visibleText,
@@ -1529,17 +1529,19 @@ class ChatController extends GetxController {
 
       if (generationId != _generationSerial) return;
 
-      if (webCtx != null &&
-          !rawResponse.startsWith('ERROR') &&
-          !rawResponse.startsWith('[IMAGE_BASE64]')) {
-        final paragraph = splitThoughtTags(rawResponse).answer.trim();
-        final citations = RegExp(r'\[([1-9]\d*)\]').allMatches(paragraph);
+      final generatedText = splitThoughtTags(rawResponse).answer.trim();
+      final hasAnswer = unavailableEvidence == null &&
+          !generatedText.toUpperCase().startsWith('ERROR:') &&
+          !generatedText.startsWith('[IMAGE_BASE64]');
+      var canNarrate = hasAnswer;
+      if (webCtx != null && hasAnswer) {
+        final citations = RegExp(r'\[([1-9]\d*)\]').allMatches(generatedText);
         final sourceCount = webCtx.sources.length;
-        final sourced = citations.any((match) {
+        canNarrate = citations.any((match) {
           final index = int.tryParse(match.group(1)!);
           return index != null && index <= sourceCount;
         });
-        if (!sourced) {
+        if (!canNarrate) {
           rawResponse =
               'Here are the sources I found. The model didn’t produce a sourced answer.\n\n' +
                   webCtx.sources
@@ -1547,40 +1549,45 @@ class ChatController extends GetxController {
                       .map((source) => '• ${source.title}: ${source.snippet}')
                       .join('\n\n');
         }
-        if (narrateResearch) {
-          final spokenText = paragraph
-              .replaceAll(RegExp(r'\s*\[[1-9]\d*\]'), '')
-              .replaceAllMapped(RegExp(r'\[([^\]]+)\]\(https?://[^)]+\)'),
-                  (match) => match.group(1)!)
-              .trim();
-          if (sourced &&
-              spokenText.isNotEmpty &&
-              !AgentService.isGenericOffer(spokenText) &&
-              parseToolCall(spokenText) == null) {
-            final args = {
-              'text': spokenText,
-              'name': 'research-${DateTime.now().microsecondsSinceEpoch}.wav',
-            };
-            streamingResponse.value =
-                '${researchTrace.join('\n')}\n\n$paragraph\n\nCreating an audio file…';
-            final timer = Stopwatch()..start();
-            final audio = await contextAgent.inProject(
-                project,
-                () => contextAgent.executeTool(
-                    ParsedToolCall('text_to_speech', args, ''),
-                    confirmToolCall));
-            if (generationId != _generationSerial) return;
-            researchTrace.add(AgentService.stepLine(
-                'text_to_speech', args, 'Creating an audio file', audio,
-                ms: timer.elapsedMilliseconds));
-            rawResponse = '$paragraph\n\n${audio.replaceFirst('Show it with ', '')}';
-          } else {
-            rawResponse += '\n\nI need a sourced paragraph before I can create the audio.';
-          }
-          rawResponse = ToolLoopResult(rawResponse, researchTrace, false).markdown;
-        }
-        rawResponse += webCtx.sourcesMarkdown();
       }
+      if (narrationDraft != null && hasAnswer) {
+        final narrationText = (webCtx == null
+                ? generatedText
+                : generatedText.replaceAll(RegExp(r'\s*\[[1-9]\d*\]'), ''))
+            .replaceAllMapped(RegExp(r'\[([^\]]+)\]\(https?://[^)]+\)'),
+                (match) => match.group(1)!)
+            .trim();
+        if (canNarrate &&
+            narrationText.isNotEmpty &&
+            !AgentService.isGenericOffer(narrationText) &&
+            parseToolCall(narrationText) == null) {
+          final args = {
+            'text': narrationText,
+            'name': 'speech-${DateTime.now().microsecondsSinceEpoch}.wav',
+          };
+          streamingResponse.value =
+              '${narrationTrace.join('\n')}\n\n$generatedText\n\nCreating an audio file…';
+          final timer = Stopwatch()..start();
+          final audio = await contextAgent.inProject(
+              project,
+              () => contextAgent.executeTool(
+                  ParsedToolCall('text_to_speech', args, ''),
+                  confirmToolCall));
+          if (generationId != _generationSerial) return;
+          narrationTrace.add(AgentService.stepLine(
+              'text_to_speech', args, 'Creating an audio file', audio,
+              ms: timer.elapsedMilliseconds));
+          rawResponse = '$generatedText\n\n${audio.replaceFirst('Show it with ', '')}';
+        } else {
+          rawResponse += webCtx == null
+              ? '\n\nThe model didn’t produce text I could turn into audio.'
+              : '\n\nI need a sourced answer before I can create the audio.';
+        }
+      }
+      if (narrationTrace.isNotEmpty) {
+        rawResponse = ToolLoopResult(rawResponse, narrationTrace, false).markdown;
+      }
+      if (webCtx != null && hasAnswer) rawResponse += webCtx.sourcesMarkdown();
 
       // Stop streaming UI
       final tps = inferenceMode == 'local'
