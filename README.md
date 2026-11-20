@@ -12,8 +12,9 @@ See [the development handoff](continue.md) for release status, verification resu
 - Cloud providers (bring your own API key) alongside local models
 - Device clustering over the local network (worker discovery, QR / manual pairing)
 - Local OpenAI-compatible API server
-- Document text extraction, image generation plugin, background service
-- Hugging Face search and download for chat (GGUF) and image models, with queue and Wi-Fi-only option
+- Document text extraction, public web search, and clickable links in assistant replies and voice transcripts
+- Online image generation and editing through Pollinations
+- Hugging Face search and download for GGUF models and helpers, with a queue and Wi-Fi-only option
 - Voice calls with on-device listening and speaking, optional voice cloning (English) and a worker phone
 - Chat with your documents (offline keyword search), agent with memory and remote MCP tools
 - Toolbox: roles, prompts, profiles, export/import, backup, compare, benchmark
@@ -22,10 +23,18 @@ See [the development handoff](continue.md) for release status, verification resu
 
 Choose the APK for Android, the x64 setup executable for Windows, or the x64 DEB or AppImage for Linux. The AAB is for Google Play distribution. [Downloads](../../releases)
 
-The normal APK and AAB include the small ARM64 native Linux launcher. Alpine itself is an optional download from **Install Alpine Linux** in Chat tools or the terminal; it is not bundled with the app. The normal standalone APK uses the same Play build flags and restricted manifest as the AAB. Other Android ABIs can use chat features; the Alpine launcher currently requires ARM64. Store distribution of downloadable runtime packages still requires policy review.
+The normal APK and AAB include the small ARM64 native Linux launcher. Alpine itself is an optional download from **Install Alpine Linux** in Chat tools or the terminal; it is not bundled with the app. Standalone APKs can check for GitHub updates. The Play AAB disables the built-in updater. Other Android ABIs can use chat features; the Alpine launcher currently requires ARM64. Store distribution of downloadable runtime packages still requires policy review.
 
 In **Models**, filter **Main models** or **Helpers**. Open a model and choose **Find model helpers** to inspect its original repository. Downloaded vision helpers can be linked to a matching installed model. Reload the main model after the helper download completes. File-role detection uses names, and each helper shows its runtime and compatibility requirements.
-Builds without production signing secrets are **development builds** and are labeled as pre-releases. They are not production-ready.
+GitHub preview APKs may use a temporary signing key. Android requires a matching signing certificate for an in-place update. [Signing setup](SECURITY.md#persistent-github-apk-updates)
+
+## Images, audio and shared files
+
+Ask Chat to create an image with Pollinations. Internet access is required. Keyless image generation uses Sana. To edit an uploaded image, add a Pollinations key under **Models → Images**. The app looks for a free editor compatible with the input image.
+
+Ask for a narration by topic or ask Chat to turn its previous answer into a WAV file. Sources stay visible in Chat and are omitted from spoken audio.
+
+On Android, use **Chat → Tools & permissions → Share a folder…** to give the agent access to a selected folder. The agent can read, create, edit, append, rename and delete files under the selected folder. Mutations ask for approval by default. Review or change access under **Tools & permissions**. The agent can look up available capabilities with `search_tools`.
 
 ## Skills and context
 
