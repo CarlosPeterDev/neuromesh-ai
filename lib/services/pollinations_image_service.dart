@@ -53,6 +53,7 @@ class PollinationsImageService {
                 ? '1024'
                 : '768',
         'nologo': 'true',
+        'nofeed': 'true',
       },
     );
     final transport = client ?? http.Client();

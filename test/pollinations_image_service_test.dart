@@ -33,7 +33,8 @@ void main() {
         'model': 'sana',
         'width': '576',
         'height': '1024',
-        'nologo': 'true'
+        'nologo': 'true',
+        'nofeed': 'true',
       });
       expect(request.headers, isNot(contains('authorization')));
       expect(request.followRedirects, isFalse);
