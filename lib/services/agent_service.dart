@@ -400,6 +400,25 @@ class AgentService extends GetxService {
 
   bool get _hasFolders => _user != null && _user!.folders.isNotEmpty;
 
+  Future<String> _mutateSharedFile(
+      String action, Map<String, dynamic> args) async {
+    final service = _user!;
+    final folder = service.find(args['folder']?.toString());
+    if (folder == null) {
+      return 'Error: select a folder by its exact name with list_shared_folders.';
+    }
+    final path = (args['path'] ?? '').toString();
+    final result = await service.mutateFile(folder, path, action,
+        content: (args['content'] ?? '').toString(),
+        newName: (args['name'] ?? '').toString());
+    return switch (action) {
+      'append' => 'Appended to $path.',
+      'delete' => 'Deleted $path.',
+      'rename' => 'Renamed $path to $result.',
+      _ => 'Created folder $result.',
+    };
+  }
+
   String _page(String text, int start, {int size = 4000}) {
     final context = Get.isRegistered<InferenceService>()
         ? Get.find<InferenceService>().contextTokensTotal.value
@@ -793,7 +812,8 @@ class AgentService extends GetxService {
         final nw = (args['new'] ?? '').toString();
         if (old.isEmpty)
           return 'Error: "old" must be the exact text to replace.';
-        final text = await u.readText(f, path, maxChars: 2000000);
+        final text =
+            await u.readText(f, path, maxChars: 2000000, requireComplete: true);
         final n = text.split(old).length - 1;
         if (n == 0)
           return 'Error: that text was not found. Use read_user_file and copy the exact text.';
@@ -808,16 +828,18 @@ class AgentService extends GetxService {
       available: () => _hasFolders,
     ),
     AgentTool(
+      'search_tools',
+      'Find available tools by capability or name. Use this when you are unsure what can do a task, then call the matching tool.',
+      '{"query":"task or capability to look up"}',
+      (args) => _searchTools((args['query'] ?? '').toString()),
+    ),
+    AgentTool(
       'tool_help',
       'Show the full description and arguments of one tool, or of every tool when "name" is empty.',
       '{"name":"optional tool name"}',
       (args) async {
         final q = (args['name'] ?? '').toString().trim();
-        final all = [
-          ..._allBuiltIns,
-          ..._enabledMcpTools.map((t) =>
-              AgentTool(t.qualifiedName, t.description, t.signature, (_) => ''))
-        ];
+        final all = _discoverableTools().toList();
         final hit =
             q.isEmpty ? all : all.where((t) => t.name.contains(q)).toList();
         if (hit.isEmpty) return 'No tool matches "$q".';
@@ -825,6 +847,13 @@ class AgentService extends GetxService {
             .map((t) => '${t.name}: ${t.description}\narguments: ${t.params}')
             .join('\n\n');
       },
+    ),
+    AgentTool(
+      'list_shared_folders',
+      'List the device folders the user granted access to. Use a listed name in shared folder tools.',
+      '{}',
+      (_) => _user!.folders.map((folder) => folder.name).join('\n'),
+      available: () => _hasFolders,
     ),
     AgentTool(
       'list_folder',
@@ -873,6 +902,38 @@ class AgentService extends GetxService {
             (args['content'] ?? '').toString());
         return 'Wrote ${args['path']}.';
       },
+      needsConfirm: true,
+      available: () => _hasFolders,
+    ),
+    AgentTool(
+      'append_user_file',
+      'Append text to a file in a shared folder, creating the file if needed.',
+      '{"folder":"shared folder name","path":"file path","content":"text to append"}',
+      (args) => _mutateSharedFile('append', args),
+      needsConfirm: true,
+      available: () => _hasFolders,
+    ),
+    AgentTool(
+      'rename_user_file',
+      'Rename a file inside a shared folder. Give the new file name without a directory.',
+      '{"folder":"shared folder name","path":"file path","name":"new file name"}',
+      (args) => _mutateSharedFile('rename', args),
+      needsConfirm: true,
+      available: () => _hasFolders,
+    ),
+    AgentTool(
+      'delete_user_file',
+      'Delete one file from a shared folder. Use list_folder to confirm its path first.',
+      '{"folder":"shared folder name","path":"file path"}',
+      (args) => _mutateSharedFile('delete', args),
+      needsConfirm: true,
+      available: () => _hasFolders,
+    ),
+    AgentTool(
+      'create_user_folder',
+      'Create a subfolder inside a folder the user shared with you.',
+      '{"folder":"shared folder name","path":"new subfolder path"}',
+      (args) => _mutateSharedFile('mkdir', args),
       needsConfirm: true,
       available: () => _hasFolders,
     ),
@@ -950,6 +1011,95 @@ class AgentService extends GetxService {
       }
       if (t.available == null || t.available!()) yield t;
     }
+  }
+
+  Iterable<AgentTool> _discoverableTools() sync* {
+    yield* _allBuiltIns;
+    for (final tool in _enabledMcpTools) {
+      yield AgentTool(
+          tool.qualifiedName, tool.description, tool.signature, (_) => '',
+          needsConfirm: true);
+    }
+  }
+
+  String _searchTools(String query) {
+    String normalize(String text) => text
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), ' ')
+        .trim();
+
+    final normalized = normalize(query);
+    if (normalized.isEmpty)
+      return 'Error: give the task or tool name to search.';
+    final expanded = normalized.replaceAllMapped(
+        RegExp(r'\b(tts|stt|remove|calculate|arithmetic|sum)\b'),
+        (match) => switch (match[0]) {
+              'tts' => 'text to speech wav',
+              'stt' => 'transcribe audio',
+              'remove' => 'delete',
+              _ => 'calculator',
+            });
+    const common = {
+      'a',
+      'an',
+      'and',
+      'can',
+      'do',
+      'for',
+      'how',
+      'in',
+      'is',
+      'me',
+      'my',
+      'of',
+      'or',
+      'the',
+      'to',
+      'use',
+      'using',
+      'want',
+      'with',
+      'you',
+      'tool',
+      'tools'
+    };
+    final words = expanded
+        .split(' ')
+        .where((word) => word.length > 1 && !common.contains(word))
+        .take(20)
+        .toSet();
+    final matches = <(AgentTool, int)>[];
+    for (final tool in _discoverableTools()) {
+      if (tool.name == 'search_tools' || tool.name == 'tool_help') continue;
+      final name = normalize(tool.name);
+      final nameWords = name.split(' ').toSet();
+      final detail =
+          normalize('${tool.description} ${tool.params}').split(' ').toSet();
+      var score = name == normalized ? 100 : 0;
+      for (final word in words) {
+        if (nameWords.contains(word)) {
+          score += 5;
+        } else if (detail.contains(word)) {
+          score++;
+        }
+      }
+      if (score > 0) matches.add((tool, score));
+    }
+    matches.sort((a, b) {
+      final score = b.$2.compareTo(a.$2);
+      return score == 0 ? a.$1.name.compareTo(b.$1.name) : score;
+    });
+    if (matches.isEmpty) {
+      return 'No available tool matched. Try a more specific capability or exact name.';
+    }
+    return matches.take(3).map((match) {
+      final tool = match.$1;
+      final schema = tool.params.length <= 420
+          ? tool.params
+          : 'Use tool_help with name "${tool.name}" for the full arguments.';
+      return '${tool.name}: ${_firstSentence(tool.description, 140)}\n'
+          'arguments: $schema';
+    }).join('\n\n');
   }
 
   @override
@@ -1082,7 +1232,11 @@ class AgentService extends GetxService {
   // ── when and how tools are offered ───────────────────────────────────
 
   static final _intent = RegExp(
-      r'\b(model|helper|projector|mmproj|fastmtp|file|files|folder|directory|document|attached|attachment|read|open|list|create|write|save|edit|search|look up|find|calculate|compute|remember|forget|note|run|execute|command|shell|script|install|deploy|build|github|repo|supabase|database|vercel|url|http|website|web ?page|download|time is it|date today|zip|pdf|csv|json)\b|مجلد|ملف|اقرا|افتح|احفظ|اكتب|ابحث|احسب|تذكر|انسى|شغل|نفذ|ارفع|حمل|موقع',
+      r'\b(model|helper|projector|mmproj|fastmtp|file|files|folder|directory|document|attached|attachment|read|open|list|create|write|save|edit|append|rename|copy|remove|delete|generate|convert|search|look up|find|calculate|compute|remember|forget|note|run|execute|command|shell|script|install|deploy|build|github|repo|capability|capabilities|tool|tools|supabase|database|vercel|url|http|website|web ?page|download|time is it|date today|zip|pdf|csv|json)\b|مجلد|ملف|اقرا|افتح|احفظ|اكتب|ابحث|احسب|تذكر|انسى|شغل|نفذ|ارفع|حمل|موقع',
+      caseSensitive: false);
+
+  static final _askingToAct = RegExp(
+      r'^\s*(?:please\s+)?(?:can|could|would|will)\s+you\s+(?!explain\b|tell me (?:why|how)\b)\S+',
       caseSensitive: false);
 
   static final _actionOnly = RegExp(
@@ -1129,7 +1283,9 @@ class AgentService extends GetxService {
       case AgentChatMode.auto:
         if (hasFile || text.contains('@skill:') || text.contains('@file:'))
           return true;
-        if (_intent.hasMatch(text) || _gVoiceAction.hasMatch(text)) return true;
+        if (_intent.hasMatch(text) ||
+            _gVoiceAction.hasMatch(text) ||
+            _askingToAct.hasMatch(text)) return true;
         if (needsResearch(text)) return true;
         for (final s in servers.where((s) => s.enabled)) {
           if (text.toLowerCase().contains(s.name.toLowerCase())) return true;
@@ -1149,6 +1305,7 @@ class AgentService extends GetxService {
     'calculator',
     'current_time',
     'tool_help',
+    'search_tools',
     'read_context',
     'search_context',
     'list_skill_files',
@@ -1232,10 +1389,15 @@ class AgentService extends GetxService {
     if (_gHttp.hasMatch(r)) on.add('http_request');
     if (_gFolders.hasMatch(r))
       on.addAll(const {
+        'list_shared_folders',
         'list_folder',
         'read_user_file',
         'write_user_file',
-        'edit_user_file'
+        'edit_user_file',
+        'append_user_file',
+        'rename_user_file',
+        'delete_user_file',
+        'create_user_folder',
       });
     if (_gSandbox.hasMatch(r)) {
       for (final t in _allBuiltIns) {
@@ -1262,15 +1424,24 @@ class AgentService extends GetxService {
     final on = _toolsFor(request, withFiles: withFiles);
     if (contextSize <= 4096 || maxTokens != null) {
       final compact = StringBuffer(
-          'Do the task directly. Call tools as <tool_call>{"name":"NAME","arguments":{...}}</tool_call>. Use tool results and file contents as evidence. Report actions only after success.\n');
+          'Do the task directly. Call tools as <tool_call>{"name":"NAME","arguments":{...}}</tool_call>. Report actions only after success.\n');
+      const discovery =
+          'Unsure which tool fits? Call search_tools {"query":"task or capability"}, then use the result.\n';
+      final discoveryEnabled =
+          _allBuiltIns.any((tool) => tool.name == 'search_tools');
+      if (discoveryEnabled &&
+          contextTokens('$compact$discovery') <=
+              (maxTokens ?? contextSize ~/ 4)) {
+        compact.write(discovery);
+      }
       final priority = [
         if (withFiles) ...['read_context', 'read_file', 'search_in_file'],
         if (_gVoice.hasMatch(request)) ...[
           'text_to_speech',
           'transcribe_audio'
         ],
-        'tool_help',
         'write_file',
+        'tool_help',
         'read_file',
         ...on,
       ];
@@ -1291,7 +1462,7 @@ class AgentService extends GetxService {
       ..writeln(
           'To use a tool reply with ONLY: <tool_call>{"name":"TOOL","arguments":{...}}</tool_call>')
       ..writeln(
-          'Then read the result and continue. When the task is done, answer in plain text with NO tool call.')
+          'Then read the result and continue. Use search_tools with a task or capability when unsure which tool can help. When done, answer without a tool call.')
       ..writeln(
           'Rules: 1) Never claim you did something unless a tool result confirms it; to create a file call write_file, never just print it. '
           '2) For facts, news, versions or prices search first (web_search, then fetch_url), answer only from what you found and cite [1]. '
@@ -1333,7 +1504,7 @@ class AgentService extends GetxService {
     if (others.isNotEmpty) {
       final shown = others.take(40).join(', ');
       b.writeln(
-          'Also available (call tool_help with a name for details, or just call them): $shown${others.length > 40 ? ', …' : ''}');
+          'Also available (look up details with search_tools or tool_help): $shown${others.length > 40 ? ', …' : ''}');
     }
     if (_hasFolders)
       b.writeln(
@@ -1681,8 +1852,10 @@ class AgentService extends GetxService {
           ms: sw.elapsedMilliseconds);
       onTrace?.call(List.of(trace));
       hist.add({'role': 'assistant', 'content': last});
-      current = 'Tool result for ${call.name}:\n$result\n\n'
-          'Now either call another tool or give the final answer to the user\'s request.';
+      final next = call.name == 'search_tools'
+          ? 'Use a matching tool to do the original task. If none applies, answer using the available capabilities.'
+          : 'Now either call another tool or give the final answer to the user\'s request.';
+      current = 'Tool result for ${call.name}:\n$result\n\n$next';
       hist.add({'role': 'user', 'content': current});
     }
     if (cancelled() || _cancel) {
@@ -1905,6 +2078,19 @@ class AgentService extends GetxService {
   static String stepLabel(String name, Map<String, dynamic> a) {
     String q(String k) => (a[k] ?? '').toString();
     switch (name) {
+      case 'search_tools':
+        return 'Finding tools for ${q('query')}';
+      case 'append_file':
+      case 'append_user_file':
+        return 'Adding text to ${q('name').isNotEmpty ? q('name') : q('path')}';
+      case 'rename_file':
+      case 'rename_user_file':
+        return 'Renaming ${q('path').isNotEmpty ? q('path') : q('name')}';
+      case 'delete_file':
+      case 'delete_user_file':
+        return 'Deleting ${q('path').isNotEmpty ? q('path') : q('name')}';
+      case 'create_user_folder':
+        return 'Creating folder ${q('path')}';
       case 'web_search':
         return 'Searching the web: ${q('query')}';
       case 'fetch_url':
@@ -2029,7 +2215,7 @@ class AgentService extends GetxService {
       if (t.qualifiedName == call.name) tool = t;
     }
     if (tool == null) {
-      return 'Error: unknown tool "${call.name}". Use only the listed tools.';
+      return 'Error: unknown tool "${call.name}". Use search_tools to find a matching available tool.';
     }
     final cfg = servers.firstWhere((s) => s.id == tool!.serverId);
     final pol = policyFor(cfg.name, tool.name, needsConfirm: true);

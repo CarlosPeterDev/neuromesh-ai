@@ -152,7 +152,7 @@ class _ChatToolsViewState extends State<ChatToolsView> {
                 AppRow(
                   icon: Icons.folder_open_rounded,
                   title: f.name,
-                  subtitle: 'Shared with the AI',
+                  subtitle: 'Available to the AI under your tool permissions',
                   trailing: IconButton(
                       tooltip: 'Stop sharing',
                       icon: const Icon(Icons.close_rounded, size: 18),

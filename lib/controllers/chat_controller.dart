@@ -1112,10 +1112,29 @@ class ChatController extends GetxController {
       var imageRequest = fileName == null || fileType == 'image'
           ? ImageRequest.parse(visibleText, hasImage: hasAttachedImage)
           : null;
-      final priorReply = messages.reversed
+      final earlierMessages =
+          messages.reversed.where((message) => message.id != userMsg.id);
+      final priorReply = earlierMessages
           .where((message) => message.role == 'assistant')
           .firstOrNull
           ?.content;
+      final priorRequest = earlierMessages
+          .where((message) => message.role == 'user')
+          .firstOrNull
+          ?.visibleUserText;
+      final narratesPriorReply = narrationDraft == null &&
+          fileName == null &&
+          !hasAttachedImage &&
+          !explicitSearch &&
+          (asksToNarrateReply(visibleText) ||
+              (correctsNarrationTool(visibleText) &&
+                  priorRequest != null &&
+                  (asksToNarrateReply(priorRequest) ||
+                      narrationDraftRequest(priorRequest) != null ||
+                      literalSpeechText(priorRequest) != null)));
+      final priorSpeech = narratesPriorReply
+          ? spokenAnswer(stripToolTrace(priorReply ?? ''))
+          : null;
       if (imageRequest == null &&
           priorReply != null &&
           priorReply.startsWith('To create your image')) {
@@ -1125,7 +1144,8 @@ class ChatController extends GetxController {
           priorReply.startsWith('To edit your image')) {
         imageRequest = ImageRequest(ImageAction.edit, visibleText);
       }
-      final searchRequested = imageRequest == null &&
+      final searchRequested = !narratesPriorReply &&
+          imageRequest == null &&
           (explicitSearch ||
               (evidenceName == null &&
                   (!fileQuestion || narrationDraft != null) &&
@@ -1274,6 +1294,10 @@ class ChatController extends GetxController {
                     ));
           }
         }
+      } else if (narratesPriorReply) {
+        rawResponse = priorSpeech!.isEmpty
+            ? 'Paste the text you want me to turn into audio.'
+            : priorSpeech;
       } else if (directSpeech) {
         final result = await contextAgent.inProject(
             project,
@@ -1500,8 +1524,9 @@ class ChatController extends GetxController {
                       .join('\n\n');
         }
       }
-      if (narrationDraft != null && hasAnswer) {
-        final narrationText = spokenAnswer(generatedText);
+      if ((narrationDraft != null || (priorSpeech?.isNotEmpty ?? false)) &&
+          hasAnswer) {
+        final narrationText = priorSpeech ?? spokenAnswer(generatedText);
 
         if (canNarrate &&
             narrationText.isNotEmpty &&
@@ -1522,8 +1547,10 @@ class ChatController extends GetxController {
           narrationTrace.add(AgentService.stepLine(
               'text_to_speech', args, 'Creating an audio file', audio,
               ms: timer.elapsedMilliseconds));
-          rawResponse =
-              '$generatedText\n\n${audio.replaceFirst('Show it with ', '')}';
+          final linkedAudio = audio.replaceFirst('Show it with ', '');
+          rawResponse = priorSpeech == null
+              ? '$generatedText\n\n$linkedAudio'
+              : linkedAudio;
         } else {
           rawResponse += webCtx == null
               ? '\n\nThe model didn’t produce text I could turn into audio.'
