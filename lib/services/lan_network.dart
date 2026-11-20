@@ -14,8 +14,46 @@ bool isPrivateLanAddress(String host) {
       (bytes[0] == 192 && bytes[1] == 168);
 }
 
-http.Client lanHttpClient() =>
-    IOClient(HttpClient()..findProxy = (_) => 'DIRECT');
+http.Client lanHttpClient({String? sourceAddress}) {
+  final client = HttpClient()..findProxy = (_) => 'DIRECT';
+  if (sourceAddress != null) {
+    client.connectionFactory = (uri, _, __) => Socket.startConnect(
+        uri.host, uri.port,
+        sourceAddress: InternetAddress(sourceAddress));
+  }
+  return IOClient(client);
+}
+
+/// Retry using the local Wi-Fi or Ethernet IP closest to the peer address.
+/// This is a preference for choosing a source address, not a subnet test.
+List<String> lanSourceAddresses(String peer, Iterable<LanEndpoint> endpoints) {
+  final target = InternetAddress.tryParse(peer);
+  if (target == null || !isPrivateLanAddress(peer)) return [];
+  int prefixLength(String source) {
+    final bytes = InternetAddress(source).rawAddress;
+    var bits = 0;
+    for (var i = 0; i < bytes.length; i++) {
+      final difference = bytes[i] ^ target.rawAddress[i];
+      if (difference != 0) return bits + 8 - difference.bitLength;
+      bits += 8;
+    }
+    return bits;
+  }
+
+  final sources = [
+    for (final (index, entry) in sortLanEndpoints(endpoints).indexed)
+      if (entry.address != peer)
+        (
+          address: entry.address,
+          index: index,
+          prefix: prefixLength(entry.address)
+        ),
+  ]..sort((a, b) {
+      final prefix = b.prefix.compareTo(a.prefix);
+      return prefix == 0 ? a.index.compareTo(b.index) : prefix;
+    });
+  return sources.map((entry) => entry.address).toList();
+}
 
 typedef LanEndpoint = ({String address, String interfaceName});
 

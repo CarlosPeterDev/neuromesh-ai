@@ -13,6 +13,7 @@ import '../controllers/settings_controller.dart';
 import '../controllers/model_controller.dart';
 import '../controllers/home_controller.dart';
 import '../models/chat_message.dart';
+import '../services/pollinations_image_service.dart';
 import '../services/agent_service.dart' show stripToolTrace;
 import '../services/cluster_service.dart';
 import '../services/inference_service.dart';
@@ -897,52 +898,47 @@ class ChatView extends GetView<ChatController> {
                   // Same 40px base height as the buttons so a single line sits
                   // centred; taller multi-line input keeps buttons at the bottom.
                   Expanded(child: Obx(() {
-                    // Local mode with nothing loaded: the field is disabled
-                    // and tapping it goes to Models. Cloud mode is unaffected.
                     final noModel = _localModelMissing();
-                    final loadingModel =
-                        Get.find<InferenceService>().isLoadingModel.value ||
-                            Get.find<LocalImageService>().isLoadingModel.value;
-                    return GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: noModel && !loadingModel
-                            ? () => Get.find<HomeController>().changeTab(1)
-                            : null,
-                        child: Container(
-                          constraints: const BoxConstraints(minHeight: 40),
-                          alignment: Alignment.centerLeft,
-                          child: TextField(
-                            enabled: !noModel,
-                            controller: controller.textController,
-                            focusNode: controller.inputFocus,
-                            textCapitalization: TextCapitalization.sentences,
-                            onChanged: (v) => controller.inputText.value = v,
-                            maxLines: 5,
-                            minLines: 1,
-                            style: GoogleFonts.inter(
-                                fontSize: 15,
-                                color: isDark ? Colors.white : Colors.black),
-                            decoration: InputDecoration(
-                              hintText: !noModel
-                                  ? 'Ask anything'
-                                  : loadingModel
-                                      ? 'Loading model…'
-                                      : 'Load a model to start chatting',
-                              hintStyle: GoogleFonts.inter(
-                                  fontSize: 15,
-                                  color: Theme.of(context).hintColor),
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              disabledBorder: InputBorder.none,
-                              contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 8),
-                              isDense: true,
-                              filled: false,
-                            ),
-                            onSubmitted: (_) => controller.sendMessage(),
-                          ),
-                        ));
+                    return Container(
+                      constraints: const BoxConstraints(minHeight: 40),
+                      alignment: Alignment.centerLeft,
+                      child: TextField(
+                        controller: controller.textController,
+                        focusNode: controller.inputFocus,
+                        textCapitalization: TextCapitalization.sentences,
+                        onChanged: (v) => controller.inputText.value = v,
+                        maxLines: 5,
+                        minLines: 1,
+                        style: GoogleFonts.inter(
+                            fontSize: 15,
+                            color: isDark ? Colors.white : Colors.black),
+                        decoration: InputDecoration(
+                          hintText: !noModel
+                              ? 'Ask anything'
+                              : 'Generate an image online or load a model',
+                          hintStyle: GoogleFonts.inter(
+                              fontSize: 15,
+                              color: Theme.of(context).hintColor),
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          isDense: true,
+                          filled: false,
+                        ),
+                        onSubmitted: (text) {
+                          if (!noModel ||
+                              PollinationsImageService.explicitPrompt(text) !=
+                                  null) {
+                            controller.sendMessage();
+                          } else {
+                            Get.find<HomeController>().changeTab(1);
+                          }
+                        },
+                      ),
+                    );
                   })),
                   const SizedBox(width: 6),
                   // Batch add button
@@ -1048,11 +1044,16 @@ class ChatView extends GetView<ChatController> {
                       bgColor = const Color(0xFFFF3B30);
                       iconData = Icons.stop_rounded;
                       onTap = controller.toggleListening;
-                    } else if (noModel) {
-                      // Nothing to talk to: inert, faded mic
+                    } else if (noModel &&
+                        PollinationsImageService.explicitPrompt(
+                            controller.inputText.value) == null) {
                       bgColor = Colors.transparent;
-                      iconData = Icons.mic_none_rounded;
-                      onTap = null;
+                      iconData = hasContent
+                          ? Icons.memory_outlined
+                          : Icons.mic_none_rounded;
+                      onTap = hasContent
+                          ? () => Get.find<HomeController>().changeTab(1)
+                          : null;
                     } else if (hasContent) {
                       // Has text or attachment → blue send
                       bgColor = _appleBlue(context);

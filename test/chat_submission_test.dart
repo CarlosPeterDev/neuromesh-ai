@@ -61,6 +61,17 @@ void main() {
     chat.textController.text = 'Read this';
   }
 
+  test('explicit image generation works without an active chat model',
+      () async {
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    chat.textController.text = 'Create an image of a fox';
+    await chat.sendMessage();
+    expect(agent.imageCall?.arguments['prompt'], 'Create an image of a fox');
+    expect(agent.directImageRequest, isTrue);
+    expect(chat.messages.last.content, contains('Generated online'));
+    expect(cloud.calls, 0);
+  });
+
   test('a second send during attachment import cannot duplicate the request',
       () async {
     attachDocument();
@@ -239,6 +250,20 @@ void main() {
 class _WorkspaceAgent extends AgentService {
   final imported = Completer<String>();
   int imports = 0;
+  ParsedToolCall? imageCall;
+  bool directImageRequest = false;
+
+  @override
+  Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm,
+      {bool userRequestedOnlineImage = false}) async {
+    if (call.name == 'generate_image') {
+      imageCall = call;
+      directImageRequest = userRequestedOnlineImage;
+      return 'Generated online with Pollinations (Sana).';
+    }
+    return super.executeTool(call, confirm,
+        userRequestedOnlineImage: userRequestedOnlineImage);
+  }
 
   @override
   Future<String> importToWorkspace(String sourcePath, String name) {

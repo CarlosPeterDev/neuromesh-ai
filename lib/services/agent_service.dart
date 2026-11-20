@@ -25,6 +25,7 @@ import 'document_extractor_service.dart';
 import 'hive_service.dart';
 import 'inference_service.dart';
 import 'mcp_client.dart';
+import 'pollinations_image_service.dart';
 import 'user_files.dart';
 import 'web_search_service.dart';
 
@@ -611,57 +612,27 @@ class AgentService extends GetxService {
     ),
     AgentTool(
       'generate_image',
-      'Create an image from a text description with the on-device image model. Takes a while on a phone. Write the prompt in English, describing subject, style and lighting. Show the result with ![short description](nmfile:name).',
-      '{"prompt":"detailed English description","name":"output file name ending in .png"}',
+      'Create an image from a text description. Uses an active local or cluster image model, otherwise sends the description to Pollinations online. Use only for requested image generation and include the returned image and source in the answer.',
+      '{"prompt":"image description","name":"optional output file name"}',
       (args) async {
         final prompt = (args['prompt'] ?? '').toString().trim();
         if (prompt.isEmpty) return 'Error: empty prompt.';
-        final mc = Get.find<ModelController>();
         final img = Get.find<LocalImageService>();
-        final inf = Get.find<InferenceService>();
-        final imgName = img.lastModelName ?? '';
-        final remote =
-            WorkloadPlacement.forWorkload(PhoneWorkload.image) != null;
-        if (!remote && (imgName.isEmpty || !mc.isDownloaded(imgName))) {
-          return 'Error: no image model is installed. Ask the user to download one in Models → Image models.';
+        final online = usesOnlineImageGeneration;
+        final extension = online ? 'jpg' : 'png';
+        var name = args['name']?.toString().trim() ?? '';
+        name = name.replaceFirst(RegExp(r'\.(png|jpe?g)$', caseSensitive: false), '');
+        if (name.isEmpty) name = 'image_${DateTime.now().millisecondsSinceEpoch}';
+        final bytes = online
+            ? await PollinationsImageService().generate(prompt)
+            : await img.generateImage(prompt: prompt);
+        if (bytes == null || bytes.isEmpty) {
+          return 'Error: ${img.lastFailureReason ?? 'the image model produced nothing.'}';
         }
-        final textName = mc.lastLoadedModelName;
-        var name = (args['name'] ??
-                'image_${DateTime.now().millisecondsSinceEpoch}.png')
-            .toString();
-        if (!name.toLowerCase().endsWith('.png')) name = '$name.png';
-        try {
-          if (!remote) {
-            // Phone memory holds one model at a time: swap the chat model out,
-            // draw, then bring it back.
-            await inf.unloadModel();
-            if (!img.isModelLoaded.value) {
-              await mc.loadModel(imgName);
-              for (var i = 0; i < 600 && img.isLoadingModel.value; i++) {
-                await Future.delayed(const Duration(milliseconds: 500));
-              }
-            }
-            if (!img.isModelLoaded.value) {
-              return 'Error: the image model could not be loaded (not enough memory?).';
-            }
-          }
-          final bytes = await img.generateImage(prompt: prompt);
-          if (bytes == null || bytes.isEmpty) {
-            return 'Error: ${img.lastFailureReason ?? 'the image model produced nothing.'}';
-          }
-          final f = await _safeFile(name);
-          await f.writeAsBytes(bytes);
-          final n = f.path.split('/').last;
-          return 'Saved $n. Show it to the user with ![${prompt.length > 40 ? prompt.substring(0, 40) : prompt}](nmfile:$n)';
-        } finally {
-          if (!remote) await img.unloadModel();
-          if (!remote && textName.isNotEmpty && !inf.isModelLoaded.value) {
-            await mc.loadModel(textName);
-            for (var i = 0; i < 600 && inf.isLoadingModel.value; i++) {
-              await Future.delayed(const Duration(milliseconds: 500));
-            }
-          }
-        }
+        final file = await _safeFile('$name.$extension');
+        await file.writeAsBytes(bytes);
+        final filename = file.uri.pathSegments.last;
+        return '${online ? PollinationsImageService.attribution : 'Image generated.'}\n\n![Generated image](nmfile:$filename)';
       },
     ),
     AgentTool(
@@ -1946,8 +1917,13 @@ class AgentService extends GetxService {
     return i < 0 ? reply : reply.substring(0, i).trim();
   }
 
+  static bool get usesOnlineImageGeneration =>
+      !Get.find<LocalImageService>().isModelLoaded.value &&
+      WorkloadPlacement.forWorkload(PhoneWorkload.image) == null;
+
   /// Runs one tool call (asking the user first when required).
-  Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm) async {
+  Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm,
+      {bool userRequestedOnlineImage = false}) async {
     for (final t in _allBuiltIns) {
       if (t.name == call.name) {
         try {
@@ -1958,7 +1934,10 @@ class AgentService extends GetxService {
           final pol =
               policyFor('built-in', t.name, needsConfirm: t.needsConfirm);
           if (pol == 'block') return 'The user has blocked this tool.';
-          if (pol == 'ask' &&
+          if ((pol == 'ask' ||
+                  (t.name == 'generate_image' &&
+                      usesOnlineImageGeneration &&
+                      !userRequestedOnlineImage)) &&
               !await confirm(t.name, 'built-in', call.arguments)) {
             return 'The user denied this tool call.';
           }

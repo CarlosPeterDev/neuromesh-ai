@@ -287,7 +287,8 @@ class _SpeechTestAgent extends AgentService {
   ParsedToolCall? call;
 
   @override
-  Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm) async {
+  Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm,
+      {bool userRequestedOnlineImage = false}) async {
     this.call = call;
     return 'Saved speech.wav. Show it with [📎 speech.wav](nmfile:speech.wav).';
   }

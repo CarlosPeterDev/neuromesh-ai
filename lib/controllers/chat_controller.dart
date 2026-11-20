@@ -18,6 +18,7 @@ import '../core/ui.dart';
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
 import '../ffi/sd_ffi_bindings.dart';
+import '../services/pollinations_image_service.dart';
 import '../services/hive_service.dart';
 import '../services/inference_service.dart';
 import '../services/cloud_service.dart';
@@ -1099,12 +1100,19 @@ class ChatController extends GetxController {
       final web = Get.isRegistered<WebSearchService>()
           ? Get.find<WebSearchService>()
           : null;
-      final searchRequested = explicitSearch ||
-          (evidenceName == null &&
-              !fileQuestion &&
+      final imagePrompt = fileName == null &&
               imagePath == null &&
-              fileType != 'audio' &&
-              web?.shouldSearch(visibleText) == true);
+              imageBase64 == null &&
+              (skillContext?.documents.isEmpty ?? true)
+          ? PollinationsImageService.explicitPrompt(visibleText)
+          : null;
+      final searchRequested = imagePrompt == null &&
+          (explicitSearch ||
+              (evidenceName == null &&
+                  !fileQuestion &&
+                  imagePath == null &&
+                  fileType != 'audio' &&
+                  web?.shouldSearch(visibleText) == true));
       String? unavailableEvidence;
       if (textEvidence && !readable) {
         unavailableEvidence =
@@ -1189,6 +1197,19 @@ class ChatController extends GetxController {
           (skillContext?.documents.isEmpty ?? true);
       if (unavailableEvidence != null) {
         rawResponse = unavailableEvidence;
+      } else if (imagePrompt != null &&
+          !Get.find<LocalImageService>().isModelLoaded.value) {
+        final online = AgentService.usesOnlineImageGeneration;
+        streamingResponse.value = online
+            ? 'Creating image online with Pollinations…'
+            : 'Creating image on a cluster worker…';
+        rawResponse = await contextAgent.inProject(
+            project,
+            () => contextAgent.executeTool(
+                  ParsedToolCall('generate_image', {'prompt': imagePrompt}, ''),
+                  confirmToolCall,
+                  userRequestedOnlineImage: true,
+                ));
       } else if (directSpeech) {
         final result = await contextAgent.inProject(
             project,

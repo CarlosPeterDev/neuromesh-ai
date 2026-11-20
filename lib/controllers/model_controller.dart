@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import '../services/download_service.dart';
+import '../services/installed_vision_helper.dart';
 import '../utils/llama_archs.dart';
 import '../utils/model_file_role.dart';
 import '../utils/model_fit.dart';
@@ -56,6 +57,8 @@ class ModelController extends GetxController {
   /// Vision projector (mmproj) files on disk. They're hidden from the model
   /// list but tell us whether a vision model can read images yet.
   final visionFiles = <String>{}.obs;
+  final _installedVisionHelpers = InstalledVisionHelpers();
+  final _visionSources = <String, AiModel>{};
   final isImporting = false.obs;
   final isPreparingModel = false.obs;
   final customModels = <AiModel>[].obs;
@@ -233,11 +236,23 @@ class ModelController extends GetxController {
       }
     }
 
-    availableModels.assignAll(availableModels.map(_withHelper).toList());
+    final helperPaths = {
+      for (final helper in visionFiles) helper: await _download.modelPath(helper),
+    };
+    for (final model in availableModels.toList()) {
+      if (!files.contains(model.filename)) continue;
+      final resolved = await _resolveVisionHelper(model, paths: helperPaths);
+      final index = availableModels.indexWhere((m) => m.filename == model.filename);
+      if (index >= 0 && identical(availableModels[index], model)) {
+        availableModels[index] = resolved;
+      }
+    }
 
     // Remove any imported models that are no longer downloaded
     availableModels.removeWhere(
         (model) => model.isImported && !files.contains(model.filename));
+
+    _visionSources.removeWhere((filename, _) => !files.contains(filename));
 
     if (localFilter.value.isEmpty) {
       localFilter.value = defaultLocalFilter;
@@ -256,6 +271,21 @@ class ModelController extends GetxController {
         isVision: true);
   }
 
+  Future<AiModel> _resolveVisionHelper(AiModel model,
+      {Map<String, String>? paths}) async {
+    if (kIsWeb) return model;
+    final source = _withHelper(_visionSources[model.filename] ?? model);
+    final helpers = paths ?? {
+      for (final file in (await _download.getDownloadedModels())
+          .where(_isVisionProjectorFile))
+        file: await _download.modelPath(file),
+    };
+    final match = await _installedVisionHelpers.find(source, helpers);
+    if (match == null || match == source.mmprojFilename) return source;
+    _visionSources.putIfAbsent(model.filename, () => source);
+    return source.copyWith(mmprojFilename: match, mmprojUrl: '', isVision: true);
+  }
+
   Future<void> attachVisionHelper(
       AiModel model, String filename, String url) async {
     if (modelFileRole(filename) != ModelFileRole.projector ||
@@ -268,7 +298,9 @@ class ModelController extends GetxController {
     links[model.filename] = {'filename': filename, 'url': url};
     await _hive.setSetting('model_helper_links', links);
     final index = availableModels.indexWhere((m) => m.filename == model.filename);
-    if (index >= 0) availableModels[index] = _withHelper(model);
+    if (index >= 0) {
+      availableModels[index] = _withHelper(_visionSources[model.filename] ?? model);
+    }
   }
 
   bool isDownloaded(String filename) {
@@ -284,8 +316,8 @@ class ModelController extends GetxController {
     return lower.endsWith('.gguf') && lower.contains('mmproj');
   }
 
-  /// Catalogue vision model whose file this is, matched case-insensitively
-  /// on our filename or the original download name.
+  /// Find the catalogue entry by filename, or by the exact Artemis family
+  /// when a user has imported a different quantization.
   AiModel? _catalogVisionMatch(String file) {
     final lower = file.toLowerCase();
     for (final m in AppConstants.availableModels) {
@@ -295,6 +327,11 @@ class ModelController extends GetxController {
           urlName.toLowerCase() == lower) {
         return AiModel.fromMap(m);
       }
+    }
+    final artemis = AiModel.fromMap(AppConstants.artemisStarter);
+    if (lower.endsWith('.gguf') &&
+        visionModelFamily(file) == visionModelFamily(artemis.filename)) {
+      return artemis;
     }
     return null;
   }
@@ -316,6 +353,12 @@ class ModelController extends GetxController {
 
   /// Downloads just the vision file for a model that's already on disk.
   Future<void> downloadVisionFile(AiModel model) async {
+    model = await _resolveVisionHelper(model);
+    if (model.hasVisionProjector && model.mmprojUrl.isEmpty &&
+        await _download.isModelDownloaded(model.mmprojFilename)) {
+      await refreshDownloaded();
+      return;
+    }
     if (!model.hasVisionProjector || model.mmprojUrl.isEmpty) return;
     if (await _download.isModelDownloaded(model.mmprojFilename) ||
         isDownloadingModel(model.mmprojFilename)) return;
@@ -503,7 +546,7 @@ class ModelController extends GetxController {
           model.mmprojUrl.isNotEmpty &&
           !await _download.isModelDownloaded(model.mmprojFilename) &&
           !_download.activeDownloads.containsKey(model.mmprojFilename)) {
-        unawaited(_downloadVisionFile(model));
+        unawaited(downloadVisionFile(model));
       }
       if (huggingFaceRepository(model.url) != null &&
           !AppConstants.availableModels.any((m) => m['filename'] == model.filename)) {
@@ -752,8 +795,11 @@ class ModelController extends GetxController {
   }
 
   Future<void> _loadModel(String filename, ModelLoadDiagnostics report, {required bool safeRetry, required bool includeHelpers}) async {
-    final model =
+    final listedModel =
         availableModels.firstWhereOrNull((m) => m.filename == filename);
+    final model = listedModel == null || !includeHelpers
+        ? listedModel
+        : await _resolveVisionHelper(listedModel);
     final name = model?.name ?? filename;
     final parameters = ModelLoadDiagnostics.parameterLabel('$name $filename');
     final lower = filename.toLowerCase();
@@ -923,11 +969,12 @@ class ModelController extends GetxController {
         if (await _download.isModelDownloaded(model.mmprojFilename)) {
           mmprojPath = await _download.modelPath(model.mmprojFilename);
         } else {
-          visionNote = ' Vision file is still downloading, so images will '
-              'work after you reload the model.';
+          visionNote = model.mmprojUrl.isEmpty
+              ? ' The linked vision file is unavailable. Import it and reload.'
+              : ' Vision file is still downloading. Reload when it finishes.';
           if (model.mmprojUrl.isNotEmpty &&
               !_download.activeDownloads.containsKey(model.mmprojFilename)) {
-            unawaited(_downloadVisionFile(model));
+            unawaited(downloadVisionFile(model));
           }
         }
       }

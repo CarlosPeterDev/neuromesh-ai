@@ -29,11 +29,43 @@ void main() {
         ['192.168.1.15', '192.168.43.1']);
   });
 
+  test('transfer prefers the closest physical source address on retry', () {
+    expect(
+        lanSourceAddresses('192.168.1.7', [
+          (address: '10.0.0.5', interfaceName: 'wlan0'),
+          (address: '192.168.1.5', interfaceName: 'eth0'),
+          (address: '192.168.1.7', interfaceName: 'eth1'),
+          (address: '192.168.1.6', interfaceName: 'tun0'),
+        ]),
+        ['192.168.1.5', '10.0.0.5']);
+  });
+
+  test('transfer HTTP connections can bind a specific local source', () async {
+    await HttpOverrides.runWithHttpOverrides(() async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final client =
+          lanHttpClient(sourceAddress: InternetAddress.loopbackIPv4.address);
+      try {
+        server.listen((request) async {
+          request.response.write(request.connectionInfo?.remoteAddress.address);
+          await request.response.close();
+        });
+        final response = await client.get(Uri(
+            scheme: 'http', host: server.address.address, port: server.port));
+        expect(response.body, InternetAddress.loopbackIPv4.address);
+      } finally {
+        client.close();
+        await server.close(force: true);
+      }
+    }, _LanTestHttpOverrides());
+  });
+
   test('transfer route error gives recovery steps without the pairing URL', () {
     final error = http.ClientException('No route to host',
         Uri.parse('http://192.168.1.7:8765/list?token=abcdefghjk23'));
     final message = transferErrorMessage(error);
-    expect(message, contains('same Wi-Fi or hotspot'));
+    expect(message, contains('no local route'));
+    expect(message, contains('hotspot'));
     expect(message, isNot(contains('abcdefghjk23')));
   });
 
@@ -138,3 +170,5 @@ void main() {
     expect(await McpOAuth.accessToken(url), isNull);
   });
 }
+
+class _LanTestHttpOverrides extends HttpOverrides {}
