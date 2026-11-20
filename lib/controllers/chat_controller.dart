@@ -1097,6 +1097,15 @@ class ChatController extends GetxController {
       var finalPrompt = genPrompt;
       WebContext? webCtx;
       final explicitSearch = explicitlyRequestsWebSearch(visibleText);
+      final narrateResearch = explicitSearch &&
+          RegExp(
+                  r'\b(?:then|and)\s+(?:create|crete|make|generate|save|record|produce|turn)\b.{0,55}\b(?:audio?|wav|speech|voice)\s+files?\b',
+                  caseSensitive: false, dotAll: true)
+              .hasMatch(visibleText) &&
+          RegExp(r'\b(?:paragraph|summari[sz]e|summary)\b',
+                  caseSensitive: false)
+              .hasMatch(visibleText);
+      final researchTrace = <String>[];
       final web = Get.isRegistered<WebSearchService>()
           ? Get.find<WebSearchService>()
           : null;
@@ -1127,6 +1136,7 @@ class ChatController extends GetxController {
             .map((m) => m.visibleUserText)
             .where((text) => !explicitlyRequestsWebSearch(text))
             .firstOrNull;
+        final searchTimer = Stopwatch()..start();
         try {
           webCtx = await web?.buildContext(visibleText,
               previous: previous, refresh: explicitSearch);
@@ -1140,8 +1150,22 @@ class ChatController extends GetxController {
               'Web search returned no usable sources. I couldn’t verify the answer.';
         } else {
           final question = searchQuery(visibleText, previous: previous);
-          finalPrompt =
-              '$visibleText\nResearch question: $question\n\n${webCtx.block}';
+          if (narrateResearch) {
+            researchTrace.add(AgentService.stepLine(
+                'web_search',
+                {'query': question},
+                'Searching the web',
+                webCtx.sources.map((source) => source.title).join('\n'),
+                ms: searchTimer.elapsedMilliseconds));
+            finalPrompt =
+                'Write one plain-language paragraph answering: $question. '
+                'Use the evidence below and put numeric citations such as [1] '
+                'after supported claims. Reply with just the paragraph.\n\n'
+                '${webCtx.block}';
+          } else {
+            finalPrompt =
+                '$visibleText\nResearch question: $question\n\n${webCtx.block}';
+          }
         }
       }
 
@@ -1232,7 +1256,7 @@ class ChatController extends GetxController {
       } else if (inferenceMode == 'local') {
         final localImage = Get.find<LocalImageService>();
 
-        if (localImage.isModelLoaded.value) {
+        if (localImage.isModelLoaded.value && !searchRequested) {
           // Local image generation
           final settings = Get.find<SettingsController>();
           final imageNotifications =
@@ -1341,9 +1365,9 @@ class ChatController extends GetxController {
               agent.wantsTools(visibleText,
                   hasFile: needsFileTools ||
                       (skillContext?.documents.isNotEmpty ?? false));
-          String buildSystem([String latestContext = '']) => [
+          String buildSystem({String latestContext = '', required bool tools}) => [
                 agent.composeSystem(_effectiveSystemPrompt,
-                    withTools: useTools,
+                    withTools: tools,
                     request: visibleText,
                     withFiles: needsFileTools,
                     contextSize: contextSize),
@@ -1351,15 +1375,17 @@ class ChatController extends GetxController {
                   skillContext.prompt(contextSize ~/ 4,
                       alreadyIncluded: latestContext),
               ].join('\n\n');
-          final system = buildSystem();
+          final system = buildSystem(tools: useTools);
 
           // LiteRT models can consume image/audio attachments. GGUF currently
           // returns a clear unsupported message from the inference layer.
           Future<String> generateOnce(String prompt,
               List<Map<String, String>> hist, void Function(String) onTok) {
+            final tools = useTools && prompt != AgentService.finalAnswerPrompt;
             final turn = AgentService.fitTurn(
               baseSystem: _effectiveSystemPrompt,
-              system: buildSystem(hist.lastOrNull?['content'] ?? ''),
+              system: buildSystem(
+                  latestContext: hist.lastOrNull?['content'] ?? '', tools: tools),
               prompt: prompt,
               history: hist,
               contextSize: contextSize,
@@ -1367,7 +1393,7 @@ class ChatController extends GetxController {
               continuationRequest: prompt == finalPrompt
                   ? null
                   : 'Current user request: $visibleText${workspaceName == null ? '' : '\nAttached workspace file: $workspaceName'}',
-              compactTools: !useTools
+              compactTools: !tools
                   ? null
                   : (budget) => agent.toolPrompt(
                       request: visibleText,
@@ -1506,13 +1532,52 @@ class ChatController extends GetxController {
       if (webCtx != null &&
           !rawResponse.startsWith('ERROR') &&
           !rawResponse.startsWith('[IMAGE_BASE64]')) {
-        if (!RegExp(r'\[[1-6]\]').hasMatch(rawResponse)) {
+        final paragraph = splitThoughtTags(rawResponse).answer.trim();
+        final citations = RegExp(r'\[([1-9]\d*)\]').allMatches(paragraph);
+        final sourceCount = webCtx.sources.length;
+        final sourced = citations.any((match) {
+          final index = int.tryParse(match.group(1)!);
+          return index != null && index <= sourceCount;
+        });
+        if (!sourced) {
           rawResponse =
               'Here are the sources I found. The model didn’t produce a sourced answer.\n\n' +
                   webCtx.sources
                       .take(4)
                       .map((source) => '• ${source.title}: ${source.snippet}')
                       .join('\n\n');
+        }
+        if (narrateResearch) {
+          final spokenText = paragraph
+              .replaceAll(RegExp(r'\s*\[[1-9]\d*\]'), '')
+              .replaceAllMapped(RegExp(r'\[([^\]]+)\]\(https?://[^)]+\)'),
+                  (match) => match.group(1)!)
+              .trim();
+          if (sourced &&
+              spokenText.isNotEmpty &&
+              !AgentService.isGenericOffer(spokenText) &&
+              parseToolCall(spokenText) == null) {
+            final args = {
+              'text': spokenText,
+              'name': 'research-${DateTime.now().microsecondsSinceEpoch}.wav',
+            };
+            streamingResponse.value =
+                '${researchTrace.join('\n')}\n\n$paragraph\n\nCreating an audio file…';
+            final timer = Stopwatch()..start();
+            final audio = await contextAgent.inProject(
+                project,
+                () => contextAgent.executeTool(
+                    ParsedToolCall('text_to_speech', args, ''),
+                    confirmToolCall));
+            if (generationId != _generationSerial) return;
+            researchTrace.add(AgentService.stepLine(
+                'text_to_speech', args, 'Creating an audio file', audio,
+                ms: timer.elapsedMilliseconds));
+            rawResponse = '$paragraph\n\n${audio.replaceFirst('Show it with ', '')}';
+          } else {
+            rawResponse += '\n\nI need a sourced paragraph before I can create the audio.';
+          }
+          rawResponse = ToolLoopResult(rawResponse, researchTrace, false).markdown;
         }
         rawResponse += webCtx.sourcesMarkdown();
       }

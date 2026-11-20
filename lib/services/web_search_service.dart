@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
@@ -31,11 +32,22 @@ class WebSearchService extends GetxService {
       caseSensitive: false);
 
   /// DuckDuckGo date filter for questions about "the latest …": past month.
-  String? freshnessFor(String question) => _fresh.hasMatch(question) ? 'm' : null;
+  String? freshnessFor(String question) =>
+      _fresh.hasMatch(question) ? 'm' : null;
 
   static const _months = [
-    'January', 'February', 'March', 'April', 'May', 'June', 'July',
-    'August', 'September', 'October', 'November', 'December'
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December'
   ];
 
   /// One or two search queries for a question: the cleaned question, plus the
@@ -51,7 +63,8 @@ class WebSearchService extends GetxService {
     return out;
   }
 
-  Future<List<WebResult>> search(String query, {int max = 4, String? freshness}) async {
+  Future<List<WebResult>> search(String query,
+      {int max = 4, String? freshness}) async {
     final q = query.trim().replaceAll(RegExp(r'\s+'), ' ');
     final trimmed = q.length > 200 ? q.substring(0, 200) : q;
     if (trimmed.isEmpty || max <= 0) return [];
@@ -67,29 +80,75 @@ class WebSearchService extends GetxService {
       'gl': 'US',
       'ceid': 'US:$lang',
     });
-    final wiki = Uri.https('$lang.wikipedia.org', '/w/api.php', {
-      'action': 'query',
-      'generator': 'search',
-      'gsrsearch': trimmed,
-      'gsrlimit': '3',
-      'prop': 'extracts',
-      'exintro': '1',
-      'explaintext': '1',
-      'exchars': '700',
-      'format': 'json',
+    final bing = Uri.https('www.bing.com', '/search', {
+      'q': trimmed,
+      'format': 'rss',
+      'setlang': lang,
+    });
+    final wiki = Uri.https('$lang.wikipedia.org', '/w/index.php', {
+      'search': trimmed,
+      'ns0': '1',
     });
     final groups = await Future.wait([
+      if (freshness != null)
+        _provider(news, (body) => parseNewsRss(body, max: max)),
       _provider(ddg, (body) => parseDdgHtml(body, max: max)),
-      _provider(news, (body) => parseNewsRss(body, max: max)),
-      if (freshness == null)
-        _provider(wiki, (body) => parseWikipedia(body, lang)),
+      _provider(bing, (body) => parseBingRss(body, max: max)),
+      if (freshness == null) ...[
+        _provider(wiki, (body) => parseWikipediaSearch(body, lang, max: max)),
+        _provider(news, (body) => parseNewsRss(body, max: max)),
+      ],
     ]);
+    final terms = _terms(trimmed);
     final seen = <String>{};
-    return groups
-        .expand((group) => group)
-        .where((result) => seen.add(result.url))
-        .take(max)
-        .toList();
+    final relevant = <({WebResult result, int score, int rank})>[];
+    for (final (rank, result) in groups.expand((group) => group).indexed) {
+      if (!seen.add(result.url)) continue;
+      final title = _terms(result.title);
+      final description = _terms(result.snippet);
+      final score = terms.intersection(title).length * 2 +
+          terms.intersection(description).length;
+      if (score > 0 || terms.isEmpty) {
+        relevant.add((result: result, score: score, rank: rank));
+      }
+    }
+    relevant.sort((a, b) {
+      final difference = b.score.compareTo(a.score);
+      return difference == 0 ? a.rank.compareTo(b.rank) : difference;
+    });
+    return relevant.map((entry) => entry.result).take(max).toList();
+  }
+
+  static Set<String> _terms(String text) {
+    const filler = {
+      'what',
+      'which',
+      'when',
+      'where',
+      'with',
+      'from',
+      'about',
+      'this',
+      'that',
+      'there',
+      'today',
+      'latest',
+      'current',
+      'your',
+    };
+    return RegExp(r'[a-z0-9؀-ۿ]{2,}')
+        .allMatches(text.toLowerCase())
+        .map((match) => match.group(0)!)
+        .where((word) =>
+            word.length >= 3 &&
+            !filler.contains(word) &&
+            word != 'the' &&
+            word != 'and' &&
+            word != 'for')
+        .map((word) => word.length > 4 && word.endsWith('s')
+            ? word.substring(0, word.length - 1)
+            : word)
+        .toSet();
   }
 
   Future<List<WebResult>> _provider(
@@ -98,7 +157,9 @@ class WebSearchService extends GetxService {
     try {
       final response = await client.get(uri,
           headers: {'User-Agent': _ua}).timeout(const Duration(seconds: 5));
-      return response.statusCode == 200 ? parse(response.body) : [];
+      return response.statusCode == 200
+          ? parse(utf8.decode(response.bodyBytes, allowMalformed: true))
+          : [];
     } catch (_) {
       return [];
     } finally {
@@ -124,7 +185,8 @@ class WebSearchService extends GetxService {
       if (res.statusCode != 200) return '';
       final ct = res.headers['content-type'] ?? '';
       if (!ct.contains('text/html') && !ct.contains('text/plain')) return '';
-      final body = res.body.length > 600000 ? res.body.substring(0, 600000) : res.body;
+      final body =
+          res.body.length > 600000 ? res.body.substring(0, 600000) : res.body;
       return bestPassages(readableText(body), query, maxChars: maxChars);
     } catch (_) {
       return '';

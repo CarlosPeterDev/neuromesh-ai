@@ -19,13 +19,33 @@ void main() {
     expect(r[1].url, 'https://other.org/p');
   });
 
-  test('wikipedia parsing', () {
-    const body =
-        '{"query":{"pages":{"1":{"title":"Cairo","index":1,"extract":"Cairo is the capital."}}}}';
-    final r = parseWikipedia(body, 'en');
-    expect(r.single.url, 'https://en.wikipedia.org/wiki/Cairo');
-    expect(r.single.snippet, 'Cairo is the capital.');
-    expect(parseWikipedia('nope', 'en'), isEmpty);
+  test('public Wikipedia search results provide article URLs and snippets', () {
+    final results = parseWikipediaSearch(
+        '<li class="mw-search-result mw-search-result-ns-0">'
+            '<div class="mw-search-result-heading"><a href="/wiki/Cairo">Cairo</a></div>'
+            '<div class="searchresult">Cairo is the <b>capital</b>.</div></li>',
+        'en');
+    expect(results.single.url, 'https://en.wikipedia.org/wiki/Cairo');
+    expect(results.single.snippet, 'Cairo is the capital.');
+  });
+
+  test('Bing RSS provides links and readable snippets', () {
+    final results = parseBingRss(
+        '<rss><channel><item><title>Sport &amp; health</title>'
+        '<link>https://example.org/article</link>'
+        '<description>Sport &lt;b&gt;improves&lt;/b&gt; fitness</description>'
+        '</item></channel></rss>');
+    expect(results.single.title, 'Sport & health');
+    expect(results.single.snippet, 'Sport improves fitness');
+    expect(results.single.url, 'https://example.org/article');
+  });
+
+  test('search excludes the instructions to write and narrate the result', () {
+    const request =
+        'OK now search for the importance of sport in modern society '
+        'then write a paragraph then create an audio file that reads it';
+    expect(explicitlyRequestsWebSearch(request), isTrue);
+    expect(searchQuery(request), 'the importance of sport in modern society');
   });
 
   test('an explicit search retry reuses the earlier question', () {

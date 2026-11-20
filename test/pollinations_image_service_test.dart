@@ -46,6 +46,15 @@ void main() {
         data);
   });
 
+  test('the anonymous free limit displays the provider retry time', () async {
+    final client = MockClient((_) async =>
+        http.Response('Free limit', 402, headers: {'retry-after': '45'}));
+    await expectLater(
+        PollinationsImageService().generate('Cat', client: client),
+        throwsA(isA<FormatException>().having(
+            (error) => error.message, 'message', contains('in 45 seconds'))));
+  });
+
   test('surfaces access and format errors', () async {
     for (final (status, message) in [
       (402, 'declined anonymous'),

@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:xml/xml.dart';
 
 class WebResult {
@@ -27,7 +25,9 @@ String unwrapDdgUrl(String href) {
   var h = href.replaceAll('&amp;', '&');
   if (h.startsWith('//')) h = 'https:$h';
   final u = Uri.tryParse(h);
-  if (u != null && u.host.endsWith('duckduckgo.com') && u.path.startsWith('/l')) {
+  if (u != null &&
+      u.host.endsWith('duckduckgo.com') &&
+      u.path.startsWith('/l')) {
     final real = u.queryParameters['uddg'];
     if (real != null && real.isNotEmpty) return real;
   }
@@ -39,8 +39,8 @@ List<WebResult> parseDdgHtml(String html, {int max = 5}) {
   final out = <WebResult>[];
   final link = RegExp(
       r'<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>');
-  final snip = RegExp(
-      r'<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)</a>');
+  final snip =
+      RegExp(r'<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)</a>');
   final links = link.allMatches(html).toList();
   final snips = snip.allMatches(html).toList();
   for (var i = 0; i < links.length && out.length < max; i++) {
@@ -83,21 +83,51 @@ List<WebResult> parseNewsRss(String body, {int max = 5}) {
   }
 }
 
-/// Parses the Wikipedia generator=search extract response.
-List<WebResult> parseWikipedia(String body, String lang, {int max = 3}) {
+/// Parses Wikipedia's public search page.
+List<WebResult> parseWikipediaSearch(String body, String lang, {int max = 4}) {
+  final out = <WebResult>[];
+  final entries =
+      RegExp(r'<li\b[^>]*class="mw-search-result\b[^"]*"[^>]*>([\s\S]*?)</li>');
+  final heading = RegExp(
+      r'<div\s+class="mw-search-result-heading"[^>]*>\s*<a[^>]+href="(/wiki/[^"]+)"[^>]*>([\s\S]*?)</a>');
+  final snippet = RegExp(r'<div\s+class="searchresult"[^>]*>([\s\S]*?)</div>');
+  for (final entry in entries.allMatches(body)) {
+    final item = entry.group(1)!;
+    final link = heading.firstMatch(item);
+    if (link == null) continue;
+    final url =
+        Uri.https('$lang.wikipedia.org').resolve(_clean(link.group(1)!));
+    final title = _clean(link.group(2)!);
+    if (title.isEmpty ||
+        !url.path.startsWith('/wiki/') ||
+        url.path.substring('/wiki/'.length).contains(':')) {
+      continue;
+    }
+    out.add(WebResult(title, url.toString(),
+        _clean(snippet.firstMatch(item)?.group(1) ?? '')));
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/// Parses public Bing RSS results and keeps their direct publisher URLs.
+List<WebResult> parseBingRss(String body, {int max = 5}) {
   try {
-    final data = jsonDecode(body) as Map<String, dynamic>;
-    final pages = (data['query']?['pages'] as Map?)?.values.toList() ?? [];
-    pages.sort((a, b) =>
-        ((a['index'] ?? 99) as num).compareTo((b['index'] ?? 99) as num));
-    return pages.take(max).map((p) {
-      final title = '${p['title']}';
-      return WebResult(
-          '$title - Wikipedia',
-          'https://$lang.wikipedia.org/wiki/${Uri.encodeComponent(title.replaceAll(' ', '_'))}',
-          _clean('${p['extract'] ?? ''}'));
-    }).toList();
-  } catch (_) {
+    final results = <WebResult>[];
+    for (final item in XmlDocument.parse(body).findAllElements('item')) {
+      final title = _clean(item.getElement('title')?.innerText ?? '');
+      final url = Uri.tryParse(item.getElement('link')?.innerText.trim() ?? '');
+      if (title.isEmpty ||
+          url == null ||
+          (url.scheme != 'http' && url.scheme != 'https') ||
+          url.host.isEmpty ||
+          url.userInfo.isNotEmpty) continue;
+      final snippet = _clean(item.getElement('description')?.innerText ?? '');
+      results.add(WebResult(title, url.toString(), snippet));
+      if (results.length >= max) break;
+    }
+    return results;
+  } on XmlException {
     return [];
   }
 }
@@ -129,6 +159,6 @@ bool asksForCurrentFacts(String question) => RegExp(
 
 /// An explicit request can turn on search for one chat turn.
 bool explicitlyRequestsWebSearch(String question) => RegExp(
-      r'^\s*(?:(?:ok(?:ay)?|yes|please|can you|could you)[,.!]?\s+)*(?:search(?:\s+(?:the web|online))?|look\s+up|google)\b(?!\s+(?:my|this|the)\s+(?:files?|attachments?|documents?|workspace)\b)|^\s*ابحث',
+      r'^\s*(?:(?:ok(?:ay)?|yes|please|now|can you|could you|would you)[,.!]?\s+)*(?:search(?:\s+(?:the web|online))?|look\s+up|google)\b(?!\s+(?:my|this|the)\s+(?:files?|attachments?|documents?|workspace)\b)|^\s*ابحث',
       caseSensitive: false,
     ).hasMatch(question);

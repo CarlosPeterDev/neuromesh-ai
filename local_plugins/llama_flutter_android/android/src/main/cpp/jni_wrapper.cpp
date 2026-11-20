@@ -27,6 +27,7 @@
 #include "llama.cpp/ggml/include/gguf.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "utf8_token_stream.h"
 #define LOG_TAG "LlamaJNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -1306,6 +1307,7 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
     jmethodID invokeMethod = env->GetMethodID(callbackClass, "invoke", "(Ljava/lang/Object;)Ljava/lang/Object;");
 
     // Generation loop
+    Utf8TokenStream token_text;
     LOGI("Starting generation loop: max_tokens=%lld", max_tokens);
     const auto budget = std::min<jlong>(max_tokens, with_image
         ? image_generation_budget : (int)llama_n_ctx(g_ctx) - g_n_past.load());
@@ -1318,21 +1320,19 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
             break;
         }
 
-        // Decode token to string
+        // A model can split one Unicode character across multiple tokens.
         char buffer[256];
-        int32_t length = llama_token_to_piece(g_vocab, new_token_id, buffer, sizeof(buffer), 0, true);
-        std::string piece;
-        
-        if (length > 0 && length <= (int32_t)sizeof(buffer)) {
-            piece = sanitizeUTF8(buffer, length);
-        } else {
-            piece = "";
+        const int32_t length =
+            llama_token_to_piece(g_vocab, new_token_id, buffer, sizeof(buffer), 0, true);
+        if (length > 0 && length <= static_cast<int32_t>(sizeof(buffer))) {
+            const auto piece = token_text.append(buffer, length);
+            if (!piece.empty()) {
+                jstring token_str = env->NewString(piece.data(), static_cast<jsize>(piece.size()));
+                if (!token_str) break;
+                env->CallObjectMethod(token_callback, invokeMethod, token_str);
+                env->DeleteLocalRef(token_str);
+            }
         }
-        
-        // Call Kotlin callback
-        jstring token_str = env->NewStringUTF(piece.c_str());
-        env->CallObjectMethod(token_callback, invokeMethod, token_str);
-        env->DeleteLocalRef(token_str);
         if (env->ExceptionCheck() || i + 1 == budget) break;
 
         // Prepare next batch

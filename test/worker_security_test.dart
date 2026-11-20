@@ -122,6 +122,16 @@ void main() {
         isNull);
     expect(probes, ['192.168.236.10:50052', '192.168.236.11:50052']);
     expect(cluster.workers.single.host, '192.168.236.11');
+
+    probes.clear();
+    expect(
+        await cluster.addFromQr(
+            'neuromesh://worker?host=192.168.236.10&port=50052'
+            '&id=test-worker&alt=192.168.236.11,8.8.8.8'),
+        isNull);
+    expect(probes, ['192.168.236.10:50052', '192.168.236.11:50052']);
+    expect(cluster.workers.single.host, '192.168.236.11');
+
   });
 
   test('workloads can be assigned to different authenticated LAN phones',

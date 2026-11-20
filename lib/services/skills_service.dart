@@ -219,7 +219,7 @@ class SkillsService extends GetxService {
         if (files.length >= 100) break;
       }
       return 'Read with read_context(source,page):\n${files.join('\n')}';
-    }));
+    }, available: () => current?.documents.isNotEmpty == true));
     agent.addTool(AgentTool(
         'read_context',
         'Read a selected skill, its bundled resource, or a mentioned workspace file by page (starting at 1).',
@@ -242,7 +242,7 @@ class SkillsService extends GetxService {
         turn.documents[id] = ContextDocument(id, await file.readAsString());
       }
       return turn.read(id, (args['page'] as num?)?.toInt() ?? 1);
-    }));
+    }, available: () => current?.documents.isNotEmpty == true));
     agent.addTool(AgentTool(
         'search_context',
         'Find relevant excerpts in selected skills and mentioned files.',
@@ -250,7 +250,7 @@ class SkillsService extends GetxService {
       final turn = current;
       if (turn == null) return 'No selected context.';
       return turn.search('${args['query'] ?? ''}');
-    }));
+    }, available: () => current?.documents.isNotEmpty == true));
   }
 }
 

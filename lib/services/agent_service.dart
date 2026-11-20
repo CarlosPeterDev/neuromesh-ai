@@ -90,6 +90,10 @@ class AgentService extends GetxService {
   static const _modeKey = 'agent_chat_mode';
   static const _autoMemKey = 'agent_auto_memory';
   static const maxSteps = 20;
+  static const finalAnswerPrompt =
+      'Give the final answer to the original request using the actual tool '
+      'results so far. If evidence or an action is still missing, say what '
+      'could not be completed. Reply in ordinary text without tools.';
   static const maxMemory = 60;
 
   final HiveService _hive = Get.find<HiveService>();
@@ -1471,6 +1475,8 @@ class AgentService extends GetxService {
     final sources = <WebResult>[];
     var ranTool = false;
     var nudges = 0;
+    var contextCalls = 0;
+    var contextMisses = 0;
     final request = userText ?? prompt;
     final speech = literalSpeechText(request);
     final fileName = namedWorkspaceFile(request);
@@ -1603,22 +1609,50 @@ class AgentService extends GetxService {
         return ToolLoopResult(
             _autoLinkFiles(_withSources(last, sources), trace), trace, false);
       }
+      final contextCall =
+          call.name == 'search_context' || call.name == 'read_context';
+      final arguments = Map.fromEntries(call.arguments.entries.toList()
+        ..sort((a, b) => a.key.compareTo(b.key)));
+      final key = '${call.name}${jsonEncode(arguments)}';
+      if (!seen.add(key) ||
+          (contextCall &&
+              (contextCalls >= 5 ||
+                  contextMisses >= 2 ||
+                  !printedToolNames.contains(call.name)))) {
+        onVisible('');
+        onStatus('Writing the answer…');
+        final finalHistory = [
+          ...hist,
+          {'role': 'user', 'content': finalAnswerPrompt},
+        ];
+        final written = await generate(finalAnswerPrompt, finalHistory, (_) {});
+        if (cancelled() || _cancel) return ToolLoopResult('', trace, false);
+        final answer = _stripPrintedTools(
+            parseToolCall(written)?.textBefore ?? stripCall(written),
+            printedToolNames);
+        return ToolLoopResult(
+            _autoLinkFiles(_withSources(
+                answer.trim().isEmpty || isGenericOffer(answer)
+                    ? 'I couldn’t finish the request with the information I found.'
+                    : answer,
+                sources), trace),
+            trace,
+            false);
+      }
       ranTool = true;
-
       final label = stepLabel(call.name, call.arguments);
       onStatus(label);
-      final key = '${call.name}${jsonEncode(call.arguments)}';
       final idx = trace.length;
       final sw = Stopwatch()..start();
-      trace
-          .add(stepLine(call.name, call.arguments, label, null, running: true));
+      trace.add(stepLine(call.name, call.arguments, label, null, running: true));
       onTrace?.call(List.of(trace));
-      String result;
-      if (!seen.add(key)) {
-        result =
-            'You already ran this exact call. Use a different query or argument, or answer now.';
-      } else {
-        result = await executeTool(call, confirm);
+      final result = await executeTool(call, confirm);
+      if (contextCall) {
+        contextCalls++;
+        if (result.startsWith('No ') ||
+            result.startsWith('Error:') ||
+            result.startsWith('Unknown ') ||
+            result.startsWith('Select ')) contextMisses++;
       }
       trace[idx] = stepLine(call.name, call.arguments, label, result,
           ms: sw.elapsedMilliseconds);
@@ -1871,6 +1905,10 @@ class AgentService extends GetxService {
       case 'write_file':
       case 'write_user_file':
         return 'Writing ${q('name').isNotEmpty ? q('name') : q('path')}';
+      case 'search_context':
+        return 'Searching attached context';
+      case 'read_context':
+        return 'Reading attached context';
       case 'search_in_file':
         return 'Searching ${q('name')} for "${q('query')}"';
       case 'list_files':

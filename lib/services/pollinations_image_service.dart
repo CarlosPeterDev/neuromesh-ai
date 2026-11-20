@@ -72,15 +72,18 @@ class PollinationsImageService {
   Future<Uint8List> _request(http.Client client, Uri uri) async {
     final request = http.Request('GET', uri)..followRedirects = false;
     final response = await client.send(request);
+    final retryAfter = int.tryParse(response.headers['retry-after'] ?? '');
+    if (response.statusCode == 429 ||
+        (response.statusCode == 402 && retryAfter != null)) {
+      final wait = retryAfter == null ? 'later' : 'in $retryAfter seconds';
+      throw FormatException(
+          'Pollinations is rate-limiting anonymous requests. Try again $wait.');
+    }
     if (response.statusCode == 401 ||
         response.statusCode == 402 ||
         response.statusCode == 403) {
       throw const FormatException(
           'Pollinations declined anonymous image generation for this request.');
-    }
-    if (response.statusCode == 429) {
-      throw const FormatException(
-          'Pollinations is rate-limiting anonymous requests. Try again later.');
     }
     if (response.statusCode != 200) {
       throw FormatException(

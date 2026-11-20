@@ -66,7 +66,7 @@ String bestPassages(String text, String query, {int maxChars = 1000}) {
 }
 
 final _filler = RegExp(
-    r'^(please|pls|hey|hi|ok|okay|can you|could you|would you|i want you to|i want to know|tell me|search( the web| online)?( for)?|look up|find( out)?|google)\b[\s,:]*',
+    r'^(please|pls|hey|hi|ok|okay|now|can you|could you|would you|i want you to|i want to know|tell me|search( the web| online)?( for)?|look up|find( out)?|google)\b[\s,:]*',
     caseSensitive: false);
 
 /// Turns a chat message into a search query: drops politeness, and when the
@@ -79,6 +79,9 @@ String searchQuery(String question, {String? previous}) {
     if (next == q) break;
     q = next;
   }
+  q = q.replaceFirst(
+      RegExp(r'\s*[,;]?\s+(?:and\s+)?then\s+(?:write|summari[sz]e|create|make|generate|read|turn)\b[\s\S]*$', caseSensitive: false),
+      '');
   q = q.replaceAll(RegExp(r'[?؟!]+$'), '').trim();
   if (q.isEmpty) q = question.trim();
   final retry = RegExp(

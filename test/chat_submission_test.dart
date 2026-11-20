@@ -72,6 +72,21 @@ void main() {
     expect(cloud.calls, 0);
   });
 
+  test('web research writes a paragraph, then narrates exactly that paragraph',
+      () async {
+    Get.put<WebSearchService>(_TestWeb());
+    cloud.answer = 'Sport improves fitness and brings communities together [1].';
+    chat.textController.text =
+        'OK now search for the importance of sport in modern society '
+        'then write a paragraph then create an audio file that reads it';
+    await chat.sendMessage();
+    expect(cloud.lastInput, contains('Write one plain-language paragraph'));
+    expect(agent.narration?.arguments['text'],
+        'Sport improves fitness and brings communities together.');
+    expect(chat.messages.last.content, contains('nmfile:research.wav'));
+    expect(chat.messages.last.content, contains('Sources:'));
+  });
+
   test('a second send during attachment import cannot duplicate the request',
       () async {
     attachDocument();
@@ -251,6 +266,7 @@ class _WorkspaceAgent extends AgentService {
   final imported = Completer<String>();
   int imports = 0;
   ParsedToolCall? imageCall;
+  ParsedToolCall? narration;
   bool directImageRequest = false;
 
   @override
@@ -260,6 +276,10 @@ class _WorkspaceAgent extends AgentService {
       imageCall = call;
       directImageRequest = userRequestedOnlineImage;
       return 'Generated online with Pollinations (Sana).';
+    }
+    if (call.name == 'text_to_speech') {
+      narration = call;
+      return 'Saved research.wav. Show it with [Audio](nmfile:research.wav).';
     }
     return super.executeTool(call, confirm,
         userRequestedOnlineImage: userRequestedOnlineImage);
@@ -275,6 +295,7 @@ class _WorkspaceAgent extends AgentService {
 class _TestCloud extends CloudService {
   int calls = 0;
   String? lastInput;
+  String answer = 'Reply';
 
   @override
   Future<String> sendMessage({
@@ -286,7 +307,7 @@ class _TestCloud extends CloudService {
   }) async {
     calls++;
     lastInput = messages.last['content'];
-    return 'Reply';
+    return answer;
   }
 }
 
