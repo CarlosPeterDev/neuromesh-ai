@@ -113,6 +113,7 @@ void main() {
     for (final request in [
       'Write a paragraph about the importance of sports then use the tts tool to convert it to audio file',
       'A paragraph you write about sports and be in audio file',
+      'Create audio file talk about the importance of sports',
     ]) {
       chat.textController.text = request;
       await chat.sendMessage();
@@ -123,8 +124,22 @@ void main() {
       expect(chat.messages.last.content, contains('nmfile:research.wav'));
       expect(chat.messages.last.content, isNot(contains('notes.txt')));
     }
-    expect(local.calls, 2);
+    expect(local.calls, 3);
     expect(cloud.calls, 0);
+  });
+
+  test('TTS follow-up narrates the last reply without using a file converter',
+      () async {
+    cloud.answer = 'Sports help people stay active and build teamwork.';
+    chat.textController.text = 'Write a short introduction about sports';
+    await chat.sendMessage();
+    chat.textController.text = 'Use the tts tool to convert it to tts';
+    await chat.sendMessage();
+
+    expect(cloud.calls, 1);
+    expect(agent.narration?.arguments['text'], cloud.answer);
+    expect(chat.messages.last.content, contains('nmfile:research.wav'));
+    expect(chat.messages.last.content, isNot(contains('convert_file')));
   });
 
   test('web research writes a paragraph, then narrates exactly that paragraph',

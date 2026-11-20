@@ -9,7 +9,6 @@ import '../controllers/model_controller.dart';
 import '../utils/page_text.dart';
 import '../utils/model_file_role.dart';
 import 'agent_service.dart';
-import 'local_image_service.dart';
 import 'voice_models.dart';
 import 'voice_service.dart';
 
@@ -24,13 +23,12 @@ void registerExtraTools(AgentService agent) {
 
   agent.addTool(AgentTool(
     'models_status',
-    'Show which AI models are installed and ready: chat models, listening (speech to text), speaking (text to speech) and image models. Call this before using text_to_speech, transcribe_audio or generate_image, or when the user asks what you can do.',
+    'Show which AI models are installed and ready: chat models, listening (speech to text) and speaking (text to speech). Use this to check voice choices for text_to_speech and transcribe_audio.',
     '{}',
     (args) async {
       final mc = Get.find<ModelController>();
       final vs = Get.find<VoiceModelStore>();
       final v = Get.find<VoiceService>();
-      final img = Get.find<LocalImageService>();
       final b = StringBuffer();
       b.writeln('Chat model loaded now: ${mc.lastLoadedModelName.isEmpty ? '(none)' : mc.lastLoadedModelName}');
       final files = mc.downloadedFiles.toList();
@@ -48,7 +46,7 @@ void registerExtraTools(AgentService agent) {
             '${m.id} — ${m.title} [${m.lang}]${m.speakers.isEmpty ? '' : '; speakers: ${m.speakers.join(', ')}'}');
         b.writeln('$heading: ${entries.isEmpty ? 'NONE (download in Models → Voice)' : entries.join('\n')}${loaded ? '\nRuntime loaded' : ''}');
       }
-      b.writeln('Image model: ${img.lastModelName ?? 'NONE (Models → Image models)'}');
+      b.writeln('Image generation: Pollinations online (internet required).');
       return b.toString().trim();
     },
   ));

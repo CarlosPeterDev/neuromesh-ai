@@ -1,15 +1,20 @@
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
+import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:neuromesh_ai/services/agent_service.dart';
 import 'package:neuromesh_ai/services/agent_tools.dart';
 import 'package:neuromesh_ai/services/mcp_client.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
+import 'package:neuromesh_ai/services/user_files.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   group('local chat context fitting', () {
     test('preserves short voice and ordinary requests under context pressure',
         () {
@@ -41,7 +46,9 @@ void main() {
         {'role': 'user', 'content': prompt},
       ];
       expect(AgentService.fitToContext('', history, prompt, 1024), prompt);
-      expect(history, [{'role': 'user', 'content': prompt}]);
+      expect(history, [
+        {'role': 'user', 'content': prompt}
+      ]);
       final imported = [
         {'role': 'assistant', 'content': 'Imported greeting'},
         {'role': 'user', 'content': prompt},
@@ -171,6 +178,117 @@ void main() {
     expect(result.answer, contains('(nmfile:speech.wav)'));
     expect(traceUpdates.first.single, contains('"run":true'));
     expect(traceUpdates.last.single, contains('"run":false'));
+  });
+
+  test('a compact model prompt lets the agent discover and then use a tool',
+      () async {
+    Get.put(HiveService());
+    addTearDown(Get.reset);
+    final agent = AgentService();
+    final toolPrompt = agent.toolPrompt(
+        request: 'Could you narrate this?', contextSize: 1024, maxTokens: 120);
+    expect(toolPrompt, contains('search_tools'));
+    expect(agent.wantsTools('Could you narrate this?'), isTrue);
+    expect(agent.wantsTools('Explain why the sky is blue'), isFalse);
+
+    var generation = 0;
+    final result = await agent.runToolLoop(
+      prompt: 'Calculate the sum',
+      history: const [],
+      confirm: (_, __, ___) async => false,
+      onVisible: (_) {},
+      onStatus: (_) {},
+      cancelled: () => false,
+      generate: (prompt, _, __) async {
+        generation++;
+        switch (generation) {
+          case 1:
+            return '<tool_call>{"name":"search_tools","arguments":{"query":"calculate a sum"}}</tool_call>';
+          case 2:
+            expect(prompt, contains('calculator:'));
+            expect(prompt,
+                contains('Use a matching tool to do the original task'));
+            return '<tool_call>{"name":"calculator","arguments":{"expression":"2+3"}}</tool_call>';
+          default:
+            expect(prompt, contains('5'));
+            return 'The sum is 5.';
+        }
+      },
+    );
+    expect(result.answer, 'The sum is 5.');
+    expect(result.trace, hasLength(2));
+  });
+
+  test('tool search finds TTS and hides blocked and unavailable tools',
+      () async {
+    Get.put(HiveService());
+    addTearDown(Get.reset);
+    final agent = AgentService();
+    Future<String> search(String text) => agent.executeTool(
+        ParsedToolCall('search_tools', {'query': text}, ''),
+        (_, __, ___) async => false);
+    expect(await search('TTS'), startsWith('text_to_speech:'));
+    expect(await search('STT'), startsWith('transcribe_audio:'));
+    expect(
+        await search('delete_user_file'), isNot(contains('delete_user_file:')));
+    agent.policy[AgentService.keyOf('built-in', 'text_to_speech')] = 'block';
+    expect(await search('TTS'), isNot(contains('text_to_speech:')));
+  });
+
+  test('shared folder changes require approval and stay on the selected tree',
+      () async {
+    final dir = await Directory.systemTemp.createTemp('shared_folder');
+    Hive.init(dir.path);
+    addTearDown(() async {
+      Get.reset();
+      await Hive.close();
+      await dir.delete(recursive: true);
+    });
+    Get.put(await HiveService().init());
+    final files = Get.put(UserFilesService());
+    const folder = GrantedFolder('content://docs/tree/shared', 'Shared');
+    files.folders.add(folder);
+    const channel = MethodChannel('com.neuromesh.ai/device');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final requested = <Map>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      expect(call.method, 'mutateSharedFile');
+      final args = call.arguments as Map;
+      requested.add(args);
+      return args['name'] ?? args['path'];
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(channel, null);
+    });
+
+    final agent = AgentService();
+    Future<String> use(String action,
+            {bool allow = true, String folder = 'Shared'}) =>
+        agent.executeTool(
+          ParsedToolCall(
+              action,
+              {
+                'folder': folder,
+                'path': 'drafts/report.txt',
+                'name': 'final.txt',
+                'content': 'new paragraph',
+              },
+              ''),
+          (_, __, ___) async => allow,
+        );
+    expect(await use('delete_user_file', allow: false), contains('denied'));
+    expect(await use('delete_user_file', folder: 'Something else'),
+        contains('exact name'));
+    expect(requested, isEmpty);
+    expect(await use('append_user_file'), startsWith('Appended'));
+    expect(await use('rename_user_file'),
+        'Renamed drafts/report.txt to final.txt.');
+    expect(await use('delete_user_file'), 'Deleted drafts/report.txt.');
+    expect(await use('create_user_folder'), startsWith('Created folder'));
+    expect(requested.map((args) => args['action']),
+        ['append', 'rename', 'delete', 'mkdir']);
+    expect(requested.map((args) => args['uri']).toSet(), {folder.uri});
   });
 
   test('repeated context searches finish with one synthesis pass', () async {

@@ -46,15 +46,45 @@ final _narrationInstruction = RegExp(
   dotAll: true,
 );
 
+final _audioTopic = RegExp(
+  r'^\s*(?:please\s+)?(?:create|make|generate|record|produce)\s+(?:an?\s+)?'
+  r'(?:audio|wav|speech|voice)\s+files?\s+(?:that\s+)?'
+  r'(?:(?:talks?|speaks?|discuss(?:es)?)\s+(?:about\s+)?|about\s+|explains?\s+)(.+?)\s*$',
+  caseSensitive: false,
+);
+
+/// A request to use the previous answer as the input to text-to-speech.
+bool asksToNarrateReply(String request) =>
+    RegExp(r'\b(it|that|above|previous|last reply|your (?:answer|response))\b',
+            caseSensitive: false)
+        .hasMatch(request) &&
+    RegExp(
+      r'\b(?:use (?:the )?(?:tts|text.to.speech)|(?:read|say)\b.*\baloud|narrate|convert\b.*\b(?:tts|speech|audio|wav))\b',
+      caseSensitive: false,
+      dotAll: true,
+    ).hasMatch(request);
+
+bool correctsNarrationTool(String request) => RegExp(
+      r'^\s*(?:the\s+)?(?:tool\s+name\s+is|(?:please\s+)?use\s+(?:the\s+)?)\s*'
+      r'(?:tts|text[\s_-]+to[\s_-]+speech)(?:\s+tool)?[.!?]?\s*$',
+      caseSensitive: false,
+    ).hasMatch(request);
+
 /// Returns the text-writing portion of an explicit write-then-narrate request.
 String? narrationDraftRequest(String request) {
-  if (!_writingRequest.hasMatch(request) || literalSpeechText(request) != null) {
+  final topic = _audioTopic.firstMatch(request)?.group(1);
+  if (topic != null) return 'Write a short spoken narration about $topic';
+  if (!_writingRequest.hasMatch(request) ||
+      literalSpeechText(request) != null) {
     return null;
   }
   final match = _narrationInstruction.firstMatch(request);
   if (match == null) return null;
-  final draft = request.substring(0, match.start).trimRight()
-      .replaceFirst(RegExp(r'[,;:.]+$'), '').trim();
+  final draft = request
+      .substring(0, match.start)
+      .trimRight()
+      .replaceFirst(RegExp(r'[,;:.]+$'), '')
+      .trim();
   return draft.isEmpty ? null : draft;
 }
 
@@ -64,7 +94,8 @@ final _namedWorkspaceFile = RegExp(
   caseSensitive: false,
 );
 
-String? namedWorkspaceFile(String request) => _namedWorkspaceFile.firstMatch(request)?.group(1);
+String? namedWorkspaceFile(String request) =>
+    _namedWorkspaceFile.firstMatch(request)?.group(1);
 
 /// Finds the first tool call in [reply]. Tolerates a missing closing tag
 /// and surrounding prose; returns null when there is no valid call.
@@ -112,13 +143,18 @@ ParsedToolCall? parseToolCall(String reply) {
           final obj = jsonDecode(reply.substring(jsonStart, i + 1));
           if (obj is Map) {
             final name = obj['name'] ?? obj['tool'] ?? obj['function'];
-            final args = obj['arguments'] ?? obj['parameters'] ?? obj['args'] ?? obj['input'];
+            final args = obj['arguments'] ??
+                obj['parameters'] ??
+                obj['args'] ??
+                obj['input'];
             if (name is String && (!bare || args is Map)) {
               var before = reply.substring(0, start).trim();
               before = before.replaceAll(RegExp(r'```\w*\s*$'), '').trim();
               return ParsedToolCall(
                 name,
-                args is Map ? Map<String, dynamic>.from(args) : <String, dynamic>{},
+                args is Map
+                    ? Map<String, dynamic>.from(args)
+                    : <String, dynamic>{},
                 before,
               );
             }
@@ -136,7 +172,8 @@ ParsedToolCall? parseToolCall(String reply) {
 double evaluateExpression(String input) {
   final p = _ExprParser(input);
   final v = p.parse();
-  if (v.isNaN || v.isInfinite) throw const FormatException('Result is not a number');
+  if (v.isNaN || v.isInfinite)
+    throw const FormatException('Result is not a number');
   return v;
 }
 
@@ -247,7 +284,8 @@ class _ExprParser {
       i++;
     }
     if (i == numStart) {
-      throw FormatException(i < s.length ? 'Unexpected "${s[i]}"' : 'Unexpected end');
+      throw FormatException(
+          i < s.length ? 'Unexpected "${s[i]}"' : 'Unexpected end');
     }
     final v = double.tryParse(s.substring(numStart, i));
     if (v == null) throw const FormatException('Bad number');

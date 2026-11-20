@@ -76,6 +76,15 @@ class DeviceBridge(private val context: Context) {
                         call.argument<ByteArray>("bytes") ?: ByteArray(0)
                     )
                 }
+                "mutateSharedFile" -> background(result) {
+                    mutateSharedFile(
+                        call.argument<String>("uri")!!,
+                        call.argument<String>("path") ?: "",
+                        call.argument<String>("action") ?: "",
+                        call.argument<String>("name") ?: "",
+                        call.argument<ByteArray>("bytes") ?: ByteArray(0)
+                    )
+                }
                 "releaseFolder" -> background(result) {
                     try {
                         context.contentResolver.releasePersistableUriPermission(
@@ -268,14 +277,20 @@ class DeviceBridge(private val context: Context) {
                 if (n <= 0) break
                 buf.write(chunk, 0, n)
             }
-            return mapOf("bytes" to buf.toByteArray(), "size" to f.length(), "truncated" to (f.length() > buf.size()))
+            val size = f.length()
+            val truncated = size > buf.size() || (buf.size() == limit && input.read() != -1)
+            return mapOf("bytes" to buf.toByteArray(), "size" to maxOf(size, buf.size().toLong()),
+                "truncated" to truncated)
         }
     }
 
-    private fun writeFile(uri: String, path: String, bytes: ByteArray): Boolean {
-        val clean = path.split('/').filter { it.isNotEmpty() }
-        if (clean.isEmpty()) throw IllegalArgumentException("Give a file path")
+    private fun writeFile(uri: String, path: String, bytes: ByteArray, append: Boolean = false): Boolean {
+        requireWriteGrant(uri)
+        val clean = mutationPath(path)
         val existing = resolve(uri, path, create = true)
+        if (existing != null && !existing.isFile) {
+            throw IllegalArgumentException("Not a file: $path")
+        }
         val target = if (existing != null && existing.isFile) {
             existing
         } else {
@@ -286,11 +301,64 @@ class DeviceBridge(private val context: Context) {
             val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
             parent.createFile(mime, name) ?: throw IllegalStateException("Could not create $name")
         }
-        context.contentResolver.openOutputStream(target.uri, "wt").use { out ->
+        val mode = if (append) "wa" else "wt"
+        context.contentResolver.openOutputStream(target.uri, mode).use { out ->
             if (out == null) throw IllegalStateException("Cannot write ${target.name}")
             out.write(bytes)
         }
         return true
+    }
+
+    private fun requireWriteGrant(tree: String) {
+        if (context.contentResolver.persistedUriPermissions.none {
+                it.uri == Uri.parse(tree) && it.isWritePermission
+            }) {
+            throw SecurityException("Share this folder with write access in Android's folder picker.")
+        }
+    }
+
+    private fun mutationPath(path: String): List<String> = path.split('/').also { parts ->
+        require(parts.all { part ->
+            part.isNotBlank() && part != "." && part != ".." &&
+                part.none { it == '\\' || it == ':' || it.isISOControl() }
+        }) { "Use a relative path inside the shared folder." }
+    }
+
+    private fun mutateSharedFile(
+        uri: String, path: String, action: String, name: String, bytes: ByteArray
+    ): String {
+        requireWriteGrant(uri)
+        val parts = mutationPath(path)
+        if (action == "append") {
+            writeFile(uri, path, bytes, append = true)
+            return path
+        }
+        val parentPath = parts.dropLast(1).joinToString("/")
+        val parent = resolve(uri, parentPath)
+            ?: throw IllegalArgumentException("Parent folder not found: $parentPath")
+        require(parent.isDirectory) { "The parent is not a folder." }
+        val existing = parent.findFile(parts.last())
+        if (action == "mkdir") {
+            require(existing == null) { "That folder or file already exists." }
+            val created = parent.createDirectory(parts.last())
+                ?: throw IllegalStateException("The provider could not create the folder.")
+            return parts.dropLast(1).plus(created.name ?: parts.last()).joinToString("/")
+        }
+        require(existing?.isFile == true) { "No file found at $path." }
+        val file = checkNotNull(existing)
+        return when (action) {
+            "delete" -> {
+                check(file.delete()) { "The provider could not delete the file." }
+                path
+            }
+            "rename" -> {
+                require(mutationPath(name).size == 1) { "Give only the new file name." }
+                require(parent.findFile(name) == null) { "That name is already in use." }
+                check(file.renameTo(name)) { "The provider could not rename the file." }
+                file.name ?: name
+            }
+            else -> throw IllegalArgumentException("Unknown shared-file action")
+        }
     }
 
     private fun thermalStatus(): Int {
