@@ -31,6 +31,7 @@ class ModelHelperService {
     if (model.runtime != AiModel.runtimeLlama ||
         modelFileRole(model.filename).isHelper ||
         modelFileRole(helper.filename) != ModelFileRole.projector) return false;
+    if (model.mmprojFilename == helper.filename) return true;
     final modelRepo = huggingFaceRepository(model.url);
     final helperRepo = huggingFaceRepository(helper.url);
     if (modelRepo != null && helperRepo != null) return modelRepo == helperRepo;

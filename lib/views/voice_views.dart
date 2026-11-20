@@ -67,6 +67,8 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
   final _hive = Get.find<HiveService>();
   final _store = Get.find<VoiceModelStore>();
   bool _previewing = false;
+  bool _importingVoiceModels = false;
+  String? _voiceImportProgress;
   String? _exportingModel;
 
   String get _sttId => _hive.getSetting<String>(_kSttId) ?? '';
@@ -105,6 +107,63 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
     }
   }
 
+  Future<void> _importVoiceModels() async {
+    setState(() => _importingVoiceModels = true);
+    final imported = <String>[];
+    final failed = <String>[];
+    try {
+      final selection = await FilePicker.pickFiles(
+          type: FileType.custom, allowedExtensions: ['zip'], allowMultiple: true);
+      final files = selection?.files ?? [];
+      for (var index = 0; index < files.length; index++) {
+        final file = files[index];
+        if (mounted) {
+          setState(() => _voiceImportProgress =
+              'Importing ${index + 1} of ${files.length}');
+        }
+        try {
+          final path = file.path;
+          if (path == null) throw const FormatException('Couldn’t open this file.');
+          final model = await _store.importZip(path);
+          imported.add(model.title);
+        } catch (error) {
+          failed.add('${file.name}: $error');
+        }
+      }
+    } catch (error) {
+      failed.add('$error');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _importingVoiceModels = false;
+          _voiceImportProgress = null;
+        });
+      }
+    }
+    if (!mounted || (imported.isEmpty && failed.isEmpty)) return;
+    if (failed.isEmpty) {
+      Get.snackbar('Voice models imported', imported.join(', '));
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Voice import results'),
+        content: SingleChildScrollView(
+          child: Text([
+            if (imported.isNotEmpty) '${imported.length} imported',
+            ...failed,
+          ].join('\n\n')),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Done')),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Obx(() {
@@ -126,21 +185,8 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
           child: Wrap(spacing: 8, runSpacing: 8, children: [
             OutlinedButton.icon(
               icon: const Icon(Icons.file_open_rounded),
-              label: const Text('Import voice model (.zip)'),
-              onPressed: () async {
-                final r = await FilePicker.pickFiles(
-                    type: FileType.custom, allowedExtensions: ['zip']);
-                final path = r?.files.single.path;
-                if (path == null) return;
-                try {
-                  final m = await _store.importZip(path);
-                  await _store.scan();
-                  Get.snackbar('Imported', m.title);
-                  if (mounted) setState(() {});
-                } catch (e) {
-                  Get.snackbar('Import failed', '$e');
-                }
-              },
+              label: Text(_voiceImportProgress ?? 'Import voice models (.zip)'),
+              onPressed: _importingVoiceModels ? null : _importVoiceModels,
             ),
             OutlinedButton.icon(
               icon: const Icon(Icons.swap_horiz_rounded),

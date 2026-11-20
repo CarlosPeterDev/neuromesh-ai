@@ -437,14 +437,30 @@ class ModelTransferServer {
 
 /// Connection errors can include the entire request URI and pairing token.
 String transferErrorMessage(Object error) {
-  if (error is SocketException || error is http.ClientException ||
-      error is TimeoutException) {
-    return 'Couldn’t reach the other device. $lanConnectionHelp';
+  if (_isTransferConnectionError(error)) {
+    final detail = '$error'.toLowerCase();
+    if (detail.contains('connection refused')) {
+      return 'The sender’s address responded, but sharing isn’t listening. '
+          'Start sharing again and scan the new code.';
+    }
+    if (detail.contains('no route') || detail.contains('unreachable')) {
+      return 'This device has no local route to the sender’s address. '
+          'Start sharing again using the sender’s Wi-Fi address. If both '
+          'devices are on the same Wi-Fi, try connecting one to the other’s hotspot.';
+    }
+    return 'The sender didn’t respond. Keep the Send screen open and scan its '
+        'current code. If both devices are on the same Wi-Fi, try a device '
+        'hotspot to check whether the router blocks device-to-device traffic.';
   }
   final message = error is FormatException ? error.message : '$error';
   return redactSecrets(message).replaceAll(
       RegExp(r'(#backup=)[A-Za-z0-9_-]+'), '#backup=[REDACTED]');
 }
+
+bool _isTransferConnectionError(Object error) =>
+    error is SocketException ||
+    error is http.ClientException ||
+    error is TimeoutException;
 
 class TransferCancelled implements Exception {
   @override
@@ -462,6 +478,7 @@ class TransferProgress {
 class ModelTransferClient {
   final Uri base;
   final String token;
+  String? _sourceAddress;
   http.Client? _client;
   bool _cancel = false;
   int _done = 0;
@@ -516,10 +533,32 @@ class ModelTransferClient {
   }
 
   Future<List<TransferItem>> fetchList() async {
-    final c = lanHttpClient();
+    try {
+      final items = await _fetchList();
+      _sourceAddress = null;
+      return items;
+    } catch (error) {
+      if (!_isTransferConnectionError(error)) rethrow;
+      final alternatives =
+          lanSourceAddresses(base.host, await lanIpv4Endpoints()).take(2);
+      for (final source in alternatives) {
+        try {
+          final items = await _fetchList(sourceAddress: source);
+          _sourceAddress = source;
+          return items;
+        } catch (fallbackError) {
+          if (!_isTransferConnectionError(fallbackError)) rethrow;
+        }
+      }
+      rethrow;
+    }
+  }
+
+  Future<List<TransferItem>> _fetchList({String? sourceAddress}) async {
+    final c = lanHttpClient(sourceAddress: sourceAddress);
     try {
       final req = http.Request('GET', _uri('/list'))..followRedirects = false;
-      final response = await c.send(req).timeout(const Duration(seconds: 15));
+      final response = await c.send(req).timeout(const Duration(seconds: 5));
       if (response.statusCode >= 300 && response.statusCode < 400) {
         throw const FormatException('The sender tried to redirect the connection.');
       }
@@ -605,7 +644,7 @@ class ModelTransferClient {
     _done = 0;
     _total = items.fold<int>(0, (a, i) => a + i.size);
     final failures = <String>[];
-    _client = lanHttpClient();
+    _client = lanHttpClient(sourceAddress: _sourceAddress);
     try {
       for (final it in items) {
         if (_cancel) throw TransferCancelled();

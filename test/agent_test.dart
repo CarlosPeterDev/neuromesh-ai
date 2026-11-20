@@ -173,6 +173,34 @@ void main() {
     expect(traceUpdates.last.single, contains('"run":false'));
   });
 
+  test('repeated context searches finish with one synthesis pass', () async {
+    Get.put(HiveService());
+    addTearDown(Get.reset);
+    final agent = AgentService();
+    agent.addTool(AgentTool('search_context', 'Search context', '{}',
+        (_) async => 'No matching excerpt.'));
+    var generations = 0;
+    final result = await agent.runToolLoop(
+      prompt: 'Write a short answer',
+      history: const [],
+      confirm: (_, __, ___) async => true,
+      cancelled: () => false,
+      onVisible: (_) {},
+      onStatus: (_) {},
+      generate: (prompt, history, _) async {
+        generations++;
+        if (prompt == AgentService.finalAnswerPrompt) {
+          return 'I could not find the requested information.';
+        }
+        return '<tool_call>{"name":"search_context","arguments":{"query":"topic"}}</tool_call>';
+      },
+    );
+    expect(generations, 3);
+    expect(result.trace, hasLength(1));
+    expect(result.answer, contains('could not find'));
+    expect(result.hitLimit, isFalse);
+  });
+
   group('parseToolCall', () {
     test('reads a normal call', () {
       final c = parseToolCall(
@@ -287,7 +315,8 @@ class _SpeechTestAgent extends AgentService {
   ParsedToolCall? call;
 
   @override
-  Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm) async {
+  Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm,
+      {bool userRequestedOnlineImage = false}) async {
     this.call = call;
     return 'Saved speech.wav. Show it with [📎 speech.wav](nmfile:speech.wav).';
   }

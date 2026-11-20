@@ -104,7 +104,7 @@ class _SendTabState extends State<_SendTab>
     final on = _server.running;
     return ListView(padding: const EdgeInsets.all(16), children: [
       const Text(
-          'Start sharing, then open "Receive" on the other device and scan this code (or type the address). Both devices must be on the same Wi-Fi. Nothing goes through the internet.'),
+          'Start sharing, then open "Receive" on the other device and scan this code (or type the address). Use the same Wi-Fi or connect the receiving device to the sender’s hotspot. Keep this screen open while sharing.'),
       const SizedBox(height: 16),
       if (widget.clusterBackup) ...[
         CheckboxListTile(
@@ -318,15 +318,14 @@ class _ReceiveTabState extends State<_ReceiveTab> {
           suffixIcon: IconButton(
               tooltip: 'Scan code',
               icon: const Icon(Icons.qr_code_scanner_rounded),
-              onPressed: busy ? null : _scan),
+              onPressed: busy || _loading ? null : _scan),
         ),
       ),
       const SizedBox(height: 8),
       FilledButton(
           onPressed: _loading || busy ? null : _connect,
-          child: _loading
-              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-              : const Text('Connect')),
+          child: Text(_loading ? 'Connecting over the local network…' : 'Connect')),
+      if (_loading) const LinearProgressIndicator(),
       if (_error != null)
         Padding(
             padding: const EdgeInsets.only(top: 10),

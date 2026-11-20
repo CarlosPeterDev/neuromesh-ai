@@ -245,6 +245,12 @@ class ClusterService extends GetxService {
     return Uri(scheme: _qrScheme, host: 'worker', queryParameters: {
       'host': host,
       'port': '${LlamaCluster.defaultPort}',
+      if (localAddresses.length > 1)
+        'alt': localAddresses
+            .where((entry) => entry.address != host)
+            .map((entry) => entry.address)
+            .take(2)
+            .join(','),
       if (deviceName.isNotEmpty) 'name': deviceName,
       if (status.ramMb > 0) 'ram': '${status.ramMb}',
       if (status.bandwidth > 0) 'bw': status.bandwidth.toStringAsFixed(1),
@@ -340,7 +346,7 @@ class ClusterService extends GetxService {
       bandwidth: double.tryParse(params['bw'] ?? ''),
       model: params['name'],
       id: params['id'],
-    ));
+    ), alternateHosts: (params['alt'] ?? '').split(',').take(2));
   }
 
   /// Adds a worker by IP ("192.168.1.20" or "192.168.1.20:50052"). Returns
@@ -433,34 +439,53 @@ class ClusterService extends GetxService {
     }
   }
 
-  Future<String?> _add(ClusterWorker candidate) async {
-    if (!_validWorker(candidate)) return 'Enter the worker’s private IPv4 address and port.';
+  Future<String?> _add(ClusterWorker candidate,
+      {Iterable<String> alternateHosts = const []}) async {
+    if (!_validWorker(candidate)) {
+      return 'Enter the worker’s private IPv4 address and port.';
+    }
     await refreshWifiAddress();
-    if (localAddresses.any((entry) => entry.address == candidate.host)) {
+    final local = localAddresses.map((entry) => entry.address).toSet();
+    final hosts = <String>{candidate.host, ...alternateHosts}
+        .where((host) => isPrivateLanAddress(host) && !local.contains(host))
+        .toList();
+    if (hosts.isEmpty) {
       return 'This address belongs to this device. Use the code from the worker device.';
     }
-    var worker = candidate;
-    var ready = await _probeWorker(worker);
-    if (!ready) {
-      final id = worker.id;
-      if (id != null) {
-        final current = (await _discoverWorkers())
-            .firstWhereOrNull((item) => item.id == id);
-        if (current != null) worker = current;
-      } else {
-        await Future<void>.delayed(const Duration(milliseconds: 450));
+
+    final choices = hosts
+        .map((host) => candidate.movedTo(host, candidate.port))
+        .toList();
+    final replies = await Future.wait(choices.map(_probeWorker));
+    ClusterWorker? worker;
+    for (var i = 0; i < replies.length; i++) {
+      if (replies[i]) {
+        worker = choices[i];
+        break;
       }
-      ready = await _probeWorker(worker);
     }
-    if (!ready) {
-      return 'Couldn’t reach the worker at ${worker.endpoint}. Wait for Ready on the worker. $lanConnectionHelp';
+    if (worker == null && candidate.id != null) {
+      final current = (await _discoverWorkers()).firstWhereOrNull(
+          (item) => item.id == candidate.id && !local.contains(item.host));
+      if (current != null && await _probeWorker(current)) worker = current;
     }
-    workers.removeWhere((item) => item.endpoint == worker.endpoint ||
-        (worker.id != null && item.id == worker.id));
-    workers.add(worker);
-    lastWorkerReply[worker.endpoint] = DateTime.now();
-    unreachableWorkers.remove(worker.endpoint);
-    found.removeWhere((item) => item.endpoint == worker.endpoint);
+    if (worker == null && candidate.id == null && choices.length == 1) {
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      if (await _probeWorker(choices.single)) worker = choices.single;
+    }
+    if (worker == null) {
+      return 'No worker answered at ${candidate.endpoint}. '
+          'Open Phone cluster on the other device, wait for Ready, then scan '
+          'its current code. If both devices are already on the same Wi-Fi, '
+          'try joining the worker’s hotspot.';
+    }
+    final paired = worker;
+    workers.removeWhere((item) => item.endpoint == paired.endpoint ||
+        (paired.id != null && item.id == paired.id));
+    workers.add(paired);
+    lastWorkerReply[paired.endpoint] = DateTime.now();
+    unreachableWorkers.remove(paired.endpoint);
+    found.removeWhere((item) => item.endpoint == paired.endpoint);
     await _save();
     return null;
   }
