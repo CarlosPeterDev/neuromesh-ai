@@ -204,7 +204,7 @@ class VoiceService extends GetxService {
   FlutterTts? _system;
   bool _stopSpeaking = false;
   bool _isClone = false;
-  bool _native = false; // kokoro/kitten: sherpa phonemizes itself
+  bool _multiSpeaker = false; // Kokoro and Kitten honor the selected speaker.
   int sid = 0;
   double speed = 1.0;
   Float32List? _cloneRef;
@@ -345,11 +345,11 @@ class VoiceService extends GetxService {
       _replaceTts(m, cfg);
       return;
     }
+    await _preparePhonemizer();
     if (m.engine == 'kokoro' || m.engine == 'kitten') {
       final onnx = await _firstFile(dir, (p) => p.endsWith('.onnx'));
       final voices = await _firstFile(dir, (p) => p.endsWith('voices.bin'));
       final tokens = await _firstFile(dir, (p) => p.endsWith('tokens.txt'));
-      final espeakDir = '$dir/espeak-ng-data';
       final dictDir = '$dir/dict';
       final lexicons = Directory(dir)
           .listSync()
@@ -371,7 +371,6 @@ class VoiceService extends GetxService {
                 model: onnx,
                 voices: voices,
                 tokens: tokens,
-                dataDir: espeakDir,
                 dictDir: Directory(dictDir).existsSync() ? dictDir : '',
                 lexicon: lexicons.join(','),
               ),
@@ -382,7 +381,6 @@ class VoiceService extends GetxService {
                 model: onnx,
                 voices: voices,
                 tokens: tokens,
-                dataDir: espeakDir,
               ),
               numThreads: 4,
               debug: false);
@@ -392,14 +390,6 @@ class VoiceService extends GetxService {
     }
     final model = await _firstFile(dir, (p) => p.endsWith('.onnx'));
     final tokens = await _firstFile(dir, (p) => p.endsWith('tokens.txt'));
-    if (!_phonemizerReady) {
-      await piper.initBindingsAsync();
-      final data = await piper.extractEspeakNgData();
-      if (piper.PiperPhonemize.initialize(data) < 0) {
-        throw Exception('Could not start the phonemizer');
-      }
-      _phonemizerReady = true;
-    }
     final cfg = sherpa.OfflineTtsConfig(
       model: sherpa.OfflineTtsModelConfig(
         vits: sherpa.OfflineTtsVitsModelConfig(model: model, tokens: tokens),
@@ -411,6 +401,16 @@ class VoiceService extends GetxService {
     _replaceTts(m, cfg);
   }
 
+  Future<void> _preparePhonemizer() async {
+    if (_phonemizerReady) return;
+    await piper.initBindingsAsync();
+    final data = await piper.extractEspeakNgData();
+    if (piper.PiperPhonemize.initialize(data) < 0) {
+      throw StateError('Could not start the phonemizer.');
+    }
+    _phonemizerReady = true;
+  }
+
   void _replaceTts(VoiceModelInfo model, sherpa.OfflineTtsConfig config) {
     final previous = _tts;
     _tts = null;
@@ -419,8 +419,13 @@ class VoiceService extends GetxService {
     _tts = sherpa.OfflineTts(config);
     _ttsId = model.id;
     _isClone = model.clone;
-    _native = model.engine == 'kokoro' || model.engine == 'kitten';
-    _espeak = model.espeakVoice;
+    _multiSpeaker = model.engine == 'kokoro' || model.engine == 'kitten';
+    final modelLanguage = _tts!.lang;
+    _espeak = model.espeakVoice.isNotEmpty
+        ? model.espeakVoice
+        : modelLanguage.isNotEmpty
+            ? modelLanguage
+            : 'en-us';
   }
 
   VoiceModelInfo? _requestedModel(VoiceKind kind, String id) {
@@ -605,7 +610,10 @@ class VoiceService extends GetxService {
           ? null
           : (samples: audio.samples, rate: audio.sampleRate);
     }
-    if (_native) {
+    final model = voiceModelById(_ttsId ?? '');
+    if (model?.id == 'kokoro-multi' &&
+        tts.config.model.kokoro.lexicon.isNotEmpty &&
+        RegExp(r'\p{Script=Han}', unicode: true).hasMatch(chunk)) {
       final audio = tts.generateWithConfig(
         text: chunk,
         config: sherpa.OfflineTtsGenerationConfig(sid: voice, speed: rate),
@@ -614,14 +622,29 @@ class VoiceService extends GetxService {
           ? null
           : (samples: audio.samples, rate: audio.sampleRate);
     }
-    final cps = piper.PiperPhonemize.phonemize(chunk, voice: _espeak)
+    final speakerName =
+        model != null && voice >= 0 && voice < model.speakers.length
+            ? model.speakers[voice]
+            : '';
+    final locale = RegExp(r'\(([A-Z]{2}) [FM]\)$').firstMatch(speakerName)?.group(1);
+    final phonemizerVoice = switch (locale) {
+      'UK' => 'en-gb',
+      'ES' => 'es',
+      'FR' => 'fr',
+      'HI' => 'hi',
+      'IT' => 'it',
+      'JA' => 'ja',
+      'PT' => 'pt-br',
+      _ => _espeak,
+    };
+    final cps = piper.PiperPhonemize.phonemize(chunk, voice: phonemizerVoice)
         .where((s) => s.isNotEmpty)
         .toList();
     if (cps.isEmpty) return null;
     final audio = tts.generateWithConfig(
       text: '',
       config: sherpa.OfflineTtsGenerationConfig(
-          sid: 0, speed: rate, phonemeCodepoints: cps),
+          sid: _multiSpeaker ? voice : 0, speed: rate, phonemeCodepoints: cps),
     );
     return audio.samples.isEmpty
         ? null
