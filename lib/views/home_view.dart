@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../controllers/home_controller.dart';
+import '../services/opencode_adapter.dart';
 import '../widgets/chat_drawer.dart';
+import 'agent_hub_view.dart';
 import 'chat_view.dart';
 import 'model_view.dart';
 import 'server_view.dart';
@@ -84,6 +86,16 @@ class _HomeViewState extends State<HomeView> with RouteAware {
         label: 'Settings'),
   ];
 
+  List<_NavItem> _navigationItems(BuildContext context) => [
+        ..._tabs,
+        if (hasDesktopAgents)
+          _NavItem(
+            icon: Icons.terminal_outlined,
+            activeIcon: Icons.terminal_rounded,
+            label: agentHubUsesArabic(context) ? 'الوكلاء' : 'Agents',
+          ),
+      ];
+
   bool get _isWide {
     // Force bottom navbar for all layouts per user request
     return false;
@@ -109,11 +121,12 @@ class _HomeViewState extends State<HomeView> with RouteAware {
               body: Obx(() {
                 final content = IndexedStack(
                   index: controller.currentTab.value,
-                  children: const [
-                    ChatView(),
-                    ModelView(),
-                    ServerView(),
-                    SettingsView()
+                  children: [
+                    const ChatView(),
+                    const ModelView(),
+                    const ServerView(),
+                    const SettingsView(),
+                    if (hasDesktopAgents) const AgentHubView(),
                   ],
                 );
                 if (_isWide) {
@@ -139,6 +152,7 @@ class _HomeViewState extends State<HomeView> with RouteAware {
     final accent = isDark ? const Color(0xFF0A84FF) : const Color(0xFF007AFF);
     final muted = isDark ? const Color(0xFF7C7C80) : const Color(0xFF8E8E93);
     final current = controller.currentTab.value;
+    final tabs = _navigationItems(context);
     return Container(
       decoration: BoxDecoration(
         color: isDark ? Colors.black : Colors.white,
@@ -155,12 +169,12 @@ class _HomeViewState extends State<HomeView> with RouteAware {
         child: SizedBox(
           height: 54,
           child: Row(children: [
-            for (var i = 0; i < _tabs.length; i++)
+            for (var i = 0; i < tabs.length; i++)
               Expanded(
                 child: Semantics(
                   selected: current == i,
                   button: true,
-                  label: _tabs[i].label,
+                  label: tabs[i].label,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: () {
@@ -173,14 +187,14 @@ class _HomeViewState extends State<HomeView> with RouteAware {
                         AnimatedSwitcher(
                           duration: const Duration(milliseconds: 160),
                           child: Icon(
-                            current == i ? _tabs[i].activeIcon : _tabs[i].icon,
+                            current == i ? tabs[i].activeIcon : tabs[i].icon,
                             key: ValueKey(current == i),
                             size: 23,
                             color: current == i ? accent : muted,
                           ),
                         ),
                         const SizedBox(height: 3),
-                        Text(_tabs[i].label,
+                        Text(tabs[i].label,
                             style: GoogleFonts.inter(
                                 fontSize: 10.5,
                                 letterSpacing: 0.1,
@@ -202,6 +216,7 @@ class _HomeViewState extends State<HomeView> with RouteAware {
   Widget _buildSidebar(BuildContext context, bool isDark) {
     final accent = isDark ? const Color(0xFF0A84FF) : const Color(0xFF007AFF);
     final muted = Theme.of(context).hintColor;
+    final tabs = _navigationItems(context);
 
     return Container(
       width: 76,
@@ -217,9 +232,9 @@ class _HomeViewState extends State<HomeView> with RouteAware {
         Expanded(child: Obx(() {
           final current = controller.currentTab.value;
           return ListView.builder(
-            itemCount: _tabs.length,
+            itemCount: tabs.length,
             itemBuilder: (_, i) {
-              final tab = _tabs[i];
+              final tab = tabs[i];
               final sel = current == i;
               return Padding(
                 padding:
