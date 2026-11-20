@@ -21,6 +21,23 @@ enum ModelFileRole {
   bool get isHelper => this != model;
 }
 
+/// Identity hints recorded by publishers in a model or helper header.
+class ModelArtifact {
+  final ModelFileRole? role;
+  final Set<String> names;
+  final Set<String> baseNames;
+  final Set<String> repositories;
+  final Set<String> baseRepositories;
+
+  const ModelArtifact({
+    this.role,
+    this.names = const {},
+    this.baseNames = const {},
+    this.repositories = const {},
+    this.baseRepositories = const {},
+  });
+}
+
 ModelFileRole modelFileRole(String path) {
   final parts = path.toLowerCase().split(RegExp(r'[/\\]'));
   final name = parts.last;

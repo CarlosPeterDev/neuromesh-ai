@@ -13,9 +13,13 @@ class AiModel {
         lower.contains('vision');
   }
 
-  ModelFileKind get fileKind => runtime == runtimeSd && filename.toLowerCase().endsWith('.zip')
-      ? ModelFileKind.model
-      : modelFileKind(filename);
+  ModelFileRole get fileRole => artifact?.role ?? modelFileRole(filename);
+
+  ModelFileKind get fileKind => fileRole.isHelper
+      ? ModelFileKind.helper
+      : runtime == runtimeSd && filename.toLowerCase().endsWith('.zip')
+          ? ModelFileKind.model
+          : modelFileKind(filename);
 
   final String name;
   final String filename;
@@ -27,6 +31,7 @@ class AiModel {
   final bool isVision;
   final bool isImported;
   final bool isCustom;
+  final ModelArtifact? artifact;
 
   /// GGUF vision models ship a separate projector ("mmproj") file that
   /// turns images into tokens. Empty for text-only models.
@@ -50,6 +55,7 @@ class AiModel {
     this.isVision = false,
     this.isImported = false,
     this.isCustom = false,
+    this.artifact,
     this.mmprojFilename = '',
     this.mmprojUrl = '',
     this.recommendedFor = const {},
@@ -111,6 +117,7 @@ class AiModel {
     bool? isVision,
     bool? isImported,
     bool? isCustom,
+    ModelArtifact? artifact,
     String? mmprojFilename,
     String? mmprojUrl,
     Set<String>? recommendedFor,
@@ -126,6 +133,7 @@ class AiModel {
       isVision: isVision ?? this.isVision,
       isImported: isImported ?? this.isImported,
       isCustom: isCustom ?? this.isCustom,
+      artifact: artifact ?? this.artifact,
       mmprojFilename: mmprojFilename ?? this.mmprojFilename,
       mmprojUrl: mmprojUrl ?? this.mmprojUrl,
       recommendedFor: recommendedFor ?? this.recommendedFor,

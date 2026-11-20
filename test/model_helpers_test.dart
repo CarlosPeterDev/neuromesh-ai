@@ -3,15 +3,19 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:neuromesh_ai/core/constants.dart';
 import 'package:neuromesh_ai/models/ai_model.dart';
+import 'package:neuromesh_ai/services/installed_vision_helper.dart';
 import 'package:neuromesh_ai/services/hf_service.dart';
 import 'package:neuromesh_ai/services/model_helper_service.dart';
 import 'package:neuromesh_ai/utils/model_file_role.dart';
 
 void main() {
   test('helper file classification preserves complete MTP models', () {
-    expect(modelFileRole('imatrix_micro3.gguf'), ModelFileRole.quantizationData);
-    expect(modelFileRole('qwen-imatrix-F16.gguf'), ModelFileRole.quantizationData);
+    expect(
+        modelFileRole('imatrix_micro3.gguf'), ModelFileRole.quantizationData);
+    expect(
+        modelFileRole('qwen-imatrix-F16.gguf'), ModelFileRole.quantizationData);
     expect(modelFileRole('Qwen-Q4_K_M.gguf'), ModelFileRole.model);
     expect(modelFileRole('Family-7B-MTP-Q4_K_M.gguf'), ModelFileRole.model);
     expect(modelFileRole('mmproj-family-f16.gguf'), ModelFileRole.projector);
@@ -46,7 +50,113 @@ void main() {
         isFalse);
     expect(
         ModelHelperService.suggestsPair(main, model('Family-VL-7B-lora.gguf')),
+        isTrue);
+  });
+
+  test('verified Artemis helpers find installed companions in either direction',
+      () async {
+    final artemis = AiModel.fromMap(AppConstants.artemisStarter);
+    final model = artemis.copyWith(
+        filename: 'Qwen3.5-0.8B-Artemis-Q5_K_M.gguf',
+        url: '',
+        mmprojFilename: '',
+        mmprojUrl: '');
+    final other = model.copyWith(filename: 'Qwen3.5-4B-Q4_K_M.gguf');
+    final helper = model.copyWith(filename: 'mmproj-BF16 (1).gguf');
+    final unidentified = model.copyWith(filename: 'mmproj-F16.gguf');
+    final VisionHelperSource identity = (
+      repository: 'turintech/Qwen3.5-0.8B-Artemis-GGUF',
+      path: 'mmproj-BF16.gguf',
+      family: InstalledVisionHelpers.artemisFamily,
+    );
+    Future<VisionHelperSource?> identify(String filename) async =>
+        filename == helper.filename ? identity : null;
+    final inventory = [model, other, helper, unidentified];
+
+    final reverse = await ModelHelperService.installedCompanions(
+        selected: helper,
+        isHelper: true,
+        installed: inventory,
+        identify: identify);
+    expect(reverse.installed, [model]);
+    expect(reverse.source, identity);
+
+    final forward = await ModelHelperService.installedCompanions(
+        selected: model,
+        isHelper: false,
+        installed: inventory,
+        identify: identify);
+    expect(forward.installed, [helper]);
+
+    final otherHelper = await ModelHelperService.installedCompanions(
+        selected: unidentified,
+        isHelper: true,
+        installed: inventory,
+        identify: identify);
+    expect(otherHelper.source, isNull);
+    expect(otherHelper.installed, isEmpty);
+  });
+
+  test('metadata links adapters and other helpers to their named base', () {
+    final base = AiModel.fromMap({
+      'name': 'Base',
+      'filename': 'text-q4.gguf',
+      'url': 'https://huggingface.co/example/my-base/resolve/main/text-q4.gguf',
+    }).copyWith(artifact: const ModelArtifact(names: {'Example Base 7B'}));
+    final adapter = base.copyWith(
+        filename: 'custom.safetensors',
+        url: '',
+        artifact: const ModelArtifact(
+            role: ModelFileRole.adapter,
+            baseRepositories: {'example/my-base'}));
+    final vision = adapter.copyWith(
+        filename: 'vision.gguf',
+        artifact: const ModelArtifact(
+            role: ModelFileRole.projector, baseNames: {'Example Base 7B'}));
+    expect(adapter.fileKind, ModelFileKind.helper);
+    expect(ModelHelperService.suggestsPair(base, adapter), isTrue);
+    expect(ModelHelperService.suggestsPair(base, vision), isTrue);
+    expect(ModelHelperService.companionRepository(adapter), 'example/my-base');
+    expect(
+        ModelHelperService.suggestsPair(
+            base.copyWith(
+                filename: 'Other model.gguf',
+                url: '',
+                artifact: const ModelArtifact()),
+            adapter),
         isFalse);
+  });
+
+  test('matches renamed files against repository checksums with a size gate',
+      () async {
+    final model = AiModel.fromMap({'filename': 'mmproj-F16 (1).gguf'});
+    const correct =
+        HfGgufFile(path: 'parts/mmproj-F16.gguf', size: 203, sha256: 'good');
+    const wrong =
+        HfGgufFile(path: 'mmproj-BF16.gguf', size: 203, sha256: 'wrong');
+    var fingerprints = 0;
+    Future<String?> fingerprint(String filename) async {
+      expect(filename, model.filename);
+      fingerprints++;
+      return 'good';
+    }
+
+    expect(
+        await ModelHelperService.matchPublishedFile(
+            model: model,
+            size: 204,
+            files: [correct, wrong],
+            fingerprint: fingerprint),
+        isNull);
+    expect(fingerprints, 0);
+    expect(
+        await ModelHelperService.matchPublishedFile(
+            model: model,
+            size: 203,
+            files: [wrong, correct],
+            fingerprint: fingerprint),
+        correct);
+    expect(fingerprints, 1);
   });
 
   test('repository exposes unknown files without treating them as models',
@@ -122,6 +232,16 @@ void main() {
     expect(
         ModelHelperService.canAttach(
             model, 'owner/family', [main, draft], draft),
+        isFalse);
+    final renamed = model.copyWith(filename: 'my-model.gguf', url: '');
+    expect(
+        ModelHelperService.canAttach(
+            renamed, 'owner/family', [main, helper], helper,
+            verifiedModelPath: main.path),
+        isTrue);
+    expect(
+        ModelHelperService.canAttach(
+            renamed, 'owner/family', [main, helper], helper),
         isFalse);
     expect(huggingFaceRepository('https://huggingface.co.evil/owner/family'),
         isNull);

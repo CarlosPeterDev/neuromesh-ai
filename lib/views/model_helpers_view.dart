@@ -7,6 +7,8 @@ import '../core/ui.dart';
 import '../models/ai_model.dart';
 import '../services/download_service.dart';
 import '../services/hf_service.dart';
+import '../services/installed_vision_helper.dart';
+import '../services/model_artifact_metadata.dart';
 import '../services/model_helper_service.dart';
 import '../utils/model_file_role.dart';
 import '../widgets/model_file_filter.dart';
@@ -30,7 +32,8 @@ class ModelCompanionsButton extends StatelessWidget {
     if (type == ModelFileKind.unknown) return const SizedBox.shrink();
     return TextButton.icon(
       icon: const Icon(Icons.extension_outlined),
-      label: Text(type == ModelFileKind.helper ? 'Find main models' : 'Find helpers'),
+      label: Text(
+          type == ModelFileKind.helper ? 'Find main models' : 'Find helpers'),
       onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
         builder: (_) => ModelHelpersView(
           model: model,
@@ -61,23 +64,96 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
   final _hf = HfService();
   late final _query =
       TextEditingController(text: ModelHelperService.searchQuery(widget.model));
+  List<AiModel> _installed = [];
+  VisionHelperSource? _verifiedHelper;
+  String? _publishedPath;
+  bool _checkingInstalled = true;
   List<HfRepo> _repos = [];
   List<HfGgufFile> _files = [];
   String? _repository;
   String? _error;
   bool _busy = false;
   int _request = 0;
-  bool get _isHelper => (widget.sourceKind ?? widget.model.fileKind) == ModelFileKind.helper;
-  late ModelFileKind? _kind = _isHelper ? ModelFileKind.model : ModelFileKind.helper;
+  bool get _isHelper =>
+      (widget.sourceKind ?? widget.model.fileKind) == ModelFileKind.helper;
+  late ModelFileKind? _kind =
+      _isHelper ? ModelFileKind.model : ModelFileKind.helper;
 
   @override
   void initState() {
     super.initState();
-    final repository = huggingFaceRepository(widget.model.url);
+    _identifyCompanions();
+  }
+
+  Future<void> _identifyCompanions() async {
+    final controller = Get.find<ModelController>();
+    final matches = await ModelHelperService.installedCompanions(
+      selected: widget.model,
+      isHelper: _isHelper,
+      installed: controller.availableModels
+          .where((model) => controller.isDownloaded(model.filename))
+          .toList(),
+      identify: controller.identifyInstalledVisionHelper,
+    );
+    if (!mounted) return;
+    setState(() {
+      _installed = matches.installed;
+      _verifiedHelper = matches.source;
+      _checkingInstalled = false;
+    });
+    if (_request != 0) return;
+
+    final repository = _verifiedHelper?.repository ??
+        ModelHelperService.companionRepository(widget.model);
     if (repository != null || _query.text.trim().isNotEmpty) {
-      _load(repository: repository);
+      await _load(repository: repository);
+    } else if (_isHelper &&
+        _installed.isEmpty &&
+        controller.isDownloaded(widget.model.filename)) {
+      await _findInInstalledRepositories(controller);
     }
   }
+
+  Future<void> _findInInstalledRepositories(ModelController controller) async {
+    // Only consult repositories already associated with the user's installed
+    // models. The local filename and fingerprint stay on the device.
+    final repositories = controller.availableModels
+        .where((model) =>
+            model.fileKind == ModelFileKind.model &&
+            controller.isDownloaded(model.filename))
+        .map(ModelHelperService.companionRepository)
+        .whereType<String>()
+        .toSet()
+        .take(4);
+    if (repositories.isEmpty) return;
+    setState(() => _checkingInstalled = true);
+    try {
+      final matches = await Future.wait(repositories.map((repository) async {
+        try {
+          final files = await _hf.listRepositoryFiles(repository);
+          final match = await _matchLocalFile(controller, widget.model, files);
+          return match == null ? null : (repository: repository, files: files);
+        } on Exception {
+          return null;
+        }
+      }));
+      if (!mounted || _request != 0) return;
+      final match = matches.nonNulls.firstOrNull;
+      if (match != null)
+        await _load(repository: match.repository, repositoryFiles: match.files);
+    } finally {
+      if (mounted) setState(() => _checkingInstalled = false);
+    }
+  }
+
+  Future<HfGgufFile?> _matchLocalFile(
+          ModelController controller, AiModel model, List<HfGgufFile> files) =>
+      ModelHelperService.matchPublishedFile(
+        model: model,
+        size: controller.fileSizes[model.filename] ?? 0,
+        files: files,
+        fingerprint: controller.installedFileFingerprint,
+      );
 
   @override
   void dispose() {
@@ -86,7 +162,9 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
     super.dispose();
   }
 
-  Future<void> _load({String? repository}) async {
+  Future<void> _load(
+      {String? repository, List<HfGgufFile>? repositoryFiles}) async {
+    repository ??= artifactRepository(_query.text);
     if (repository == null && _query.text.trim().isEmpty) {
       setState(() => _error = 'Enter the model or repository name to search.');
       return;
@@ -99,14 +177,45 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
     try {
       final files = repository == null
           ? <HfGgufFile>[]
-          : await _hf.listRepositoryFiles(repository);
+          : repositoryFiles ?? await _hf.listRepositoryFiles(repository);
       final repos = repository == null
           ? await _hf.searchModels(_query.text.trim(),
               limit: 20, images: widget.model.runtime == AiModel.runtimeSd)
           : <HfRepo>[];
+      final controller = Get.find<ModelController>();
+      final exact = repository == null
+          ? null
+          : await _matchLocalFile(controller, widget.model, files);
+      final companions = <AiModel>[];
+      if (repository != null) {
+        final installed = controller.availableModels.where((model) =>
+            controller.isDownloaded(model.filename) &&
+            !_installed.any((item) => item.filename == model.filename));
+        for (final candidate in installed) {
+          if (_isHelper &&
+              exact != null &&
+              candidate.fileKind == ModelFileKind.model &&
+              (ModelHelperService.companionRepository(candidate) ==
+                      repository ||
+                  files.any((file) => file.filename == candidate.filename))) {
+            companions.add(candidate);
+          } else if (!_isHelper &&
+              candidate.fileRole.isHelper &&
+              (exact != null ||
+                  ModelHelperService.companionRepository(widget.model) ==
+                      repository ||
+                  files
+                      .any((file) => file.filename == widget.model.filename)) &&
+              await _matchLocalFile(controller, candidate, files) != null) {
+            companions.add(candidate);
+          }
+        }
+      }
       if (!mounted || request != _request) return;
       setState(() {
         _repository = repository;
+        _publishedPath = exact?.path;
+        _installed = [..._installed, ...companions];
         _files = files;
         _repos = repos;
       });
@@ -132,7 +241,9 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
       _error = null;
     });
     try {
-      await ModelHelperService.attach(widget.model, repository, _files, file);
+      await ModelHelperService.attach(widget.model, repository, _files, file,
+          verifiedModelPath: _publishedPath);
+      if (mounted) await _identifyCompanions();
       if (mounted)
         Get.snackbar('Helper linked',
             'Check the download in Models, then reload the main model.');
@@ -188,6 +299,7 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
             model, widget.model.filename, widget.model.url);
       }
       await controller.downloadModel(model);
+      if (mounted) await _identifyCompanions();
     } catch (error) {
       if (mounted) setState(() => _error = '$error');
     } finally {
@@ -200,24 +312,41 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
     final controller = Get.find<ModelController>();
     final isHelper = _isHelper;
     final currentInstalled = controller.isDownloaded(widget.model.filename);
-    final localMatches = controller.availableModels.where((candidate) =>
-        controller.isDownloaded(candidate.filename) &&
-        (isHelper
-            ? ModelHelperService.suggestsPair(candidate, widget.model)
-            : ModelHelperService.suggestsPair(widget.model, candidate)));
-    final repositoryHasCurrentFile = _files.any((file) =>
-        widget.repositoryPath == null
-            ? file.filename == widget.model.filename
-            : file.path == widget.repositoryPath);
+    final selectable = _installed.isNotEmpty ||
+            _checkingInstalled ||
+            !currentInstalled ||
+            (_isHelper
+                ? widget.model.fileRole != ModelFileRole.projector
+                : widget.model.runtime != AiModel.runtimeLlama)
+        ? const <AiModel>[]
+        : controller.availableModels
+            .where((candidate) =>
+                controller.isDownloaded(candidate.filename) &&
+                (_isHelper
+                    ? candidate.fileKind == ModelFileKind.model &&
+                        candidate.runtime == AiModel.runtimeLlama &&
+                        candidate.filename.toLowerCase().endsWith('.gguf')
+                    : candidate.fileRole == ModelFileRole.projector))
+            .toList();
+    final verifiedPath = _verifiedHelper?.repository == _repository
+        ? _verifiedHelper?.path
+        : null;
+    final sourcePath = _publishedPath ?? verifiedPath ?? widget.repositoryPath;
+    final repositoryHasCurrentFile = _files.any((file) => sourcePath == null
+        ? file.filename == widget.model.filename
+        : file.path == sourcePath);
     final images = widget.model.runtime == AiModel.runtimeSd;
     final files = _files.where((file) {
-      final sourceFile = _repository == huggingFaceRepository(widget.model.url) &&
-          widget.repositoryPath == file.path;
-      return !sourceFile && (_kind == null || file.kindInRepository(images: images) == _kind);
+      final sourceFile = (_publishedPath ?? verifiedPath) == file.path ||
+          (_repository == huggingFaceRepository(widget.model.url) &&
+              widget.repositoryPath == file.path);
+      return !sourceFile &&
+          (_kind == null || file.kindInRepository(images: images) == _kind);
     });
     return Scaffold(
       appBar: appScreenBar(context,
-          title: isHelper ? 'Find main models' : 'Find helpers', showBack: true),
+          title: isHelper ? 'Find main models' : 'Find helpers',
+          showBack: true),
       body: ListView(padding: const EdgeInsets.all(16), children: [
         Text(widget.model.filename),
         if (widget.model.runtime == AiModel.runtimeSd)
@@ -225,28 +354,56 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
             icon: const Icon(Icons.layers_outlined),
             label: const Text('Choose image model components'),
             onPressed: () => Get.to(() => Scaffold(
-              appBar: appScreenBar(context, title: 'Image model components', showBack: true),
-              body: ListView(padding: const EdgeInsets.all(16), children: [
-                HfBrowser(images: true, initialQuery: ModelHelperService.searchQuery(widget.model)),
-              ]),
-            )),
+                  appBar: appScreenBar(context,
+                      title: 'Image model components', showBack: true),
+                  body: ListView(padding: const EdgeInsets.all(16), children: [
+                    HfBrowser(
+                        images: true,
+                        initialQuery:
+                            ModelHelperService.searchQuery(widget.model)),
+                  ]),
+                )),
           ),
-        if (localMatches.isNotEmpty) ...[
+        if (_installed.isNotEmpty) ...[
           const SizedBox(height: 12),
           Text(isHelper
               ? 'Possible installed main models'
               : 'Possible installed helpers'),
-          for (final candidate in localMatches)
+          for (final candidate in _installed)
             ListTile(
                 title: Text(candidate.filename),
                 subtitle: Text(candidate.fileKind.label),
-                trailing: const Icon(Icons.link),
-                onTap: _busy
+                trailing: (isHelper ? widget.model : candidate).fileRole ==
+                        ModelFileRole.projector
+                    ? const Icon(Icons.link)
+                    : null,
+                onTap: _busy ||
+                        (isHelper ? widget.model : candidate).fileRole !=
+                            ModelFileRole.projector
                     ? null
                     : () => isHelper
                         ? _attachLocal(candidate, widget.model)
                         : _attachLocal(widget.model, candidate)),
         ],
+        if (selectable.isNotEmpty)
+          ExpansionTile(
+            title: Text(isHelper
+                ? 'Choose an installed vision model'
+                : 'Choose an installed vision helper'),
+            subtitle:
+                const Text('Confirm compatibility with the publisher first'),
+            children: [
+              for (final candidate in selectable)
+                ListTile(
+                  title: Text(candidate.filename),
+                  onTap: _busy
+                      ? null
+                      : () => _isHelper
+                          ? _attachLocal(candidate, widget.model)
+                          : _attachLocal(widget.model, candidate),
+                ),
+            ],
+          ),
         const SizedBox(height: 12),
         Text(isHelper
             ? 'Compare the main models listed with this helper. Check the repository instructions for the matching model.'
@@ -261,10 +418,15 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
             onPressed: _busy ? null : () => _load(),
             icon: const Icon(Icons.search),
             label: const Text('Search repositories')),
-        if (_query.text.trim().isEmpty && _repository == null && !_busy)
+        if (_query.text.trim().isEmpty &&
+            _repository == null &&
+            !_busy &&
+            !_checkingInstalled &&
+            _verifiedHelper == null &&
+            _installed.isEmpty)
           const Text(
-              'Enter the model name from the helper’s download page. A generic helper filename cannot identify its model.'),
-        if (_busy) const LinearProgressIndicator(),
+              'This file has no identifiable companion. Enter the model name or publisher repository.'),
+        if (_busy || _checkingInstalled) const LinearProgressIndicator(),
         if (_error != null) ...[
           Text(_error!,
               style: TextStyle(color: Theme.of(context).colorScheme.error)),
@@ -286,7 +448,9 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
                   mode: LaunchMode.externalApplication),
               icon: const Icon(Icons.open_in_new),
               label: Text('Read $_repository instructions')),
-          ModelFileFilter(selected: _kind, onChanged: (kind) => setState(() => _kind = kind)),
+          ModelFileFilter(
+              selected: _kind,
+              onChanged: (kind) => setState(() => _kind = kind)),
           if (!repositoryHasCurrentFile && !_busy)
             const Text(
                 'This repository does not list your exact file. Check its model card for compatibility.'),
@@ -306,27 +470,36 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
                         Text(
                             '${file.kindInRepository(images: images).label} · ${DownloadService.formatBytes(file.size)}'),
                         const SizedBox(height: 8),
-                        Text(file.kindInRepository(images: images) == ModelFileKind.unknown
+                        Text(file.kindInRepository(images: images) ==
+                                ModelFileKind.unknown
                             ? 'The file type could not be identified.'
                             : file.role.help),
-                        if (!isHelper && currentInstalled &&
+                        if (!isHelper &&
+                            currentInstalled &&
                             ModelHelperService.canAttach(
-                              widget.model, _repository!, _files, file))
+                                widget.model, _repository!, _files, file,
+                                verifiedModelPath: _publishedPath))
                           TextButton(
                               onPressed: _busy ? null : () => _attach(file),
                               child: const Text(
                                   'Attach and download vision helper')),
-                        if (file.kindInRepository(images: images) == ModelFileKind.model &&
-                            HfService.canDownloadSingleFile(file, images: images)) ...[
-                          TextButton(
-                            onPressed: _busy
-                                ? null
-                                : () => _downloadMain(file, pair: false),
-                            child: const Text('Download main model'),
-                          ),
+                        if (file.kindInRepository(images: images) ==
+                                ModelFileKind.model &&
+                            HfService.canDownloadSingleFile(file,
+                                images: images)) ...[
+                          if (controller.isDownloaded(file.filename))
+                            const Text('Installed')
+                          else
+                            TextButton(
+                              onPressed: _busy
+                                  ? null
+                                  : () => _downloadMain(file, pair: false),
+                              child: const Text('Download main model'),
+                            ),
                           if (repositoryHasCurrentFile &&
+                              !controller.isDownloaded(file.filename) &&
                               file.role == ModelFileRole.model &&
-                              modelFileRole(widget.model.filename) ==
+                              widget.model.fileRole ==
                                   ModelFileRole.projector &&
                               controller.isDownloaded(widget.model.filename))
                             TextButton(

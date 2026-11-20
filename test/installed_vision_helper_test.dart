@@ -4,6 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:neuromesh_ai/core/constants.dart';
 import 'package:neuromesh_ai/models/ai_model.dart';
 import 'package:neuromesh_ai/services/installed_vision_helper.dart';
+import 'package:neuromesh_ai/services/model_helper_service.dart';
+import 'package:neuromesh_ai/utils/model_file_role.dart';
 
 void main() {
   late Directory directory;
@@ -56,8 +58,24 @@ void main() {
     final path = Platform.environment['NEUROMESH_TEST_ARTEMIS_PROJECTOR'];
     if (path == null) return;
     const filename = 'mmproj-BF16.gguf';
-    expect(
-        await InstalledVisionHelpers().find(model, {filename: path}), filename);
+    final finder = InstalledVisionHelpers();
+    expect(await finder.find(model, {filename: path}), filename);
+    final renamed = model.copyWith(
+        filename: 'custom-weights.gguf',
+        artifact: const ModelArtifact(names: {'Qwen3.5 0.8B Artemis'}));
+    expect(await finder.find(renamed, {filename: path}), filename);
+    final identity = await finder.identify(path);
+    expect(identity?.repository, 'turintech/Qwen3.5-0.8B-Artemis-GGUF');
+    expect(identity?.path, filename);
+    final helper = model.copyWith(filename: 'mmproj-BF16 (1).gguf', url: '');
+    final result = await ModelHelperService.installedCompanions(
+      selected: helper,
+      isHelper: true,
+      installed: const [],
+      identify: (_) => finder.identify(path),
+    );
+    expect(result.source, identity);
+    expect(result.installed, isEmpty);
     final unrelated =
         model.copyWith(filename: 'Qwen3.5-4B-Q4_K_M.gguf', mmprojFilename: '');
     expect(await InstalledVisionHelpers().find(unrelated, {filename: path}),

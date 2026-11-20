@@ -189,7 +189,7 @@ class ModelView extends GetView<ModelController> {
   }
 
   Future<void> _showImportedModel(BuildContext context, AiModel model) async {
-    final role = modelFileRole(model.filename);
+    final role = model.fileRole;
     final search = await confirmSheet(
       context,
       title: '${role.label} imported',
@@ -1601,13 +1601,13 @@ class ModelView extends GetView<ModelController> {
       // Primary action (right). While downloading: a progress ring with the
       // percentage (cancel lives in the pinned downloads card at the top).
       final optionalHelper = model.hasVisionProjector &&
-          controller.isLlamaModel(model) && !modelFileRole(model.filename).isHelper;
+          controller.isLlamaModel(model) && !model.fileRole.isHelper;
       final Widget primaryAction;
       if (isCurrentlyDownloading) {
         primaryAction = _DownloadRing(filename: model.filename);
       } else if (isDownloaded) {
-        if (modelFileRole(model.filename).isHelper) {
-          primaryAction = AppTag(modelFileRole(model.filename).label);
+        if (model.fileRole.isHelper) {
+          primaryAction = AppTag(model.fileRole.label);
         } else if (isThisModelLoading) {
           primaryAction = Text(
               isThisImageModelLoading || loadPercent == '0'
@@ -1728,7 +1728,7 @@ class ModelView extends GetView<ModelController> {
       ].join(' · ');
       void openDetails() => _showModelDetails(
           context, model, subtitle, secondary, disableActions, primaryAction,
-          onLoad: modelFileRole(model.filename).isHelper ? null : load,
+          onLoad: model.fileRole.isHelper ? null : load,
           onLoadTextOnly: optionalHelper && load != null
               ? () => controller.loadModel(actualFilename, includeHelpers: false)
               : null);
@@ -2028,17 +2028,17 @@ class ModelView extends GetView<ModelController> {
             const SizedBox(height: 12),
             Text(model.fileKind == ModelFileKind.unknown
                 ? 'The file type could not be identified.'
-                : modelFileRole(model.filename).help),
+                : model.fileRole.help),
             TextButton.icon(
               icon: const Icon(Icons.extension_outlined),
-              label: Text(modelFileRole(model.filename).isHelper
+              label: Text(model.fileRole.isHelper
                   ? 'Find the matching main model' : 'Find model helpers'),
               onPressed: () {
                 Navigator.pop(ctx);
                 Get.to(() => ModelHelpersView(model: model));
               },
             ),
-            if (onLoad != null && !modelFileRole(model.filename).isHelper) ...[
+            if (onLoad != null && !model.fileRole.isHelper) ...[
               const SizedBox(height: 18),
               PrimaryButton(
                 label: onLoadTextOnly == null ? 'Load model' : 'Load with vision helper',
