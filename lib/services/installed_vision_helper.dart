@@ -4,7 +4,6 @@ import 'package:crypto/crypto.dart';
 
 import '../core/constants.dart';
 import '../models/ai_model.dart';
-import '../utils/model_file_role.dart';
 import 'gguf_metadata.dart';
 
 String visionModelFamily(String name) => name
