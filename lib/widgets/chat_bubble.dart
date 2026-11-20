@@ -45,9 +45,9 @@ class ChatBubble extends StatelessWidget {
     final i = content.lastIndexOf('\n\nSources:\n');
     if (i < 0) return (content, const []);
     final links = <(String, String)>[];
-    for (final m in RegExp(r'^\d+\. \[(.*)\]\((https?://[^)\s]+)\)\s*$',
-            multiLine: true)
-        .allMatches(content.substring(i))) {
+    for (final m
+        in RegExp(r'^\d+\. \[(.*)\]\((https?://[^)\s]+)\)\s*$', multiLine: true)
+            .allMatches(content.substring(i))) {
       links.add((m.group(1)!, m.group(2)!));
     }
     if (links.isEmpty) return (content, const []);
@@ -57,14 +57,16 @@ class ChatBubble extends StatelessWidget {
   static Future<void> openLink(BuildContext context, String url) async {
     final uri = Uri.tryParse(url);
     var ok = false;
-    if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
+    if (uri != null &&
+        uri.host.isNotEmpty &&
+        (uri.scheme == 'http' || uri.scheme == 'https')) {
       try {
         ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
       } catch (_) {}
     }
     if (!ok && context.mounted) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text('Could not open $url')));
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text('Could not open $url')));
     }
   }
 
@@ -95,7 +97,8 @@ class ChatBubble extends StatelessWidget {
           autofocus: true,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, edited),
               child: const Text('Resend')),
@@ -103,7 +106,8 @@ class ChatBubble extends StatelessWidget {
       ),
     );
     if (context.mounted && result != null && result.trim().isNotEmpty) {
-      await Get.find<ChatController>().resendLast(result, messageId: message.id);
+      await Get.find<ChatController>()
+          .resendLast(result, messageId: message.id);
     }
   }
 
@@ -217,37 +221,16 @@ class ChatBubble extends StatelessWidget {
             textDirection: detectDirection(answerContent),
             child: SizedBox(
               width: double.infinity,
-              child: MarkdownBody(
-                data: answerContent,
-                selectable: true,
-                // Plain URLs become tappable links too, not only [text](url).
-                extensionSet: md.ExtensionSet.gitHubFlavored,
-                inlineSyntaxes: chatMathSyntax(),
-                blockSyntaxes: const [ChatMathBlock()],
-                builders: {
-                  ...chatMathBuilders(),
-                  'pre': _CodeBlockBuilder(context)
-                },
-                styleSheet: answerStyle(context),
-                sizedImageBuilder: (cfg) => cfg.uri.toString().startsWith(nmFileScheme)
-                    ? agentImage(cfg.uri, cfg.alt, project: message.workspaceProject)
-                    : const SizedBox.shrink(),
-                onTapLink: (text, href, title) {
-                  if (href == null) return;
-                  if (href.startsWith(nmFileScheme)) {
-                    final agent = Get.find<AgentService>();
-                    agent.inProject(message.workspaceProject ?? '',
-                        () => openAgentFile(context, href.substring(nmFileScheme.length)));
-                  } else {
-                    openLink(context, href);
-                  }
-                },
+              child: AssistantMarkdown(
+                text: answerContent,
+                workspaceProject: message.workspaceProject,
+                showWorkspaceImages: true,
               ),
             ),
           ),
         if (sources.isNotEmpty) ...[
           const SizedBox(height: 10),
-          _SourcesList(sources: sources, muted: muted),
+          ChatSourcesList(sources: sources, muted: muted),
         ],
         if (steps.isNotEmpty) ...[
           if (answerContent.isNotEmpty) const SizedBox(height: 10),
@@ -520,19 +503,61 @@ class _CopyButtonState extends State<_CopyButton> {
   }
 }
 
-
 /// "Sources" row that stays collapsed (showing the first site names) until
 /// tapped, then lists every source as a tappable chip.
-class _SourcesList extends StatefulWidget {
-  final List<(String, String)> sources;
-  final Color muted;
-  const _SourcesList({required this.sources, required this.muted});
+/// Displays clickable Markdown links while keeping the full answer selectable.
+class AssistantMarkdown extends StatelessWidget {
+  const AssistantMarkdown({
+    super.key,
+    required this.text,
+    this.workspaceProject,
+    this.showWorkspaceImages = false,
+  });
+
+  final String text;
+  final String? workspaceProject;
+  final bool showWorkspaceImages;
 
   @override
-  State<_SourcesList> createState() => _SourcesListState();
+  Widget build(BuildContext context) {
+    return SelectionArea(
+      child: MarkdownBody(
+        data: text,
+        extensionSet: md.ExtensionSet.gitHubFlavored,
+        inlineSyntaxes: chatMathSyntax(),
+        blockSyntaxes: const [ChatMathBlock()],
+        builders: {...chatMathBuilders(), 'pre': _CodeBlockBuilder(context)},
+        styleSheet: ChatBubble.answerStyle(context),
+        sizedImageBuilder: (cfg) =>
+            showWorkspaceImages && cfg.uri.toString().startsWith(nmFileScheme)
+                ? agentImage(cfg.uri, cfg.alt, project: workspaceProject)
+                : const SizedBox.shrink(),
+        onTapLink: (_, href, __) {
+          if (href == null) return;
+          if (href.startsWith(nmFileScheme)) {
+            Get.find<AgentService>().inProject(
+              workspaceProject ?? '',
+              () => openAgentFile(context, href.substring(nmFileScheme.length)),
+            );
+          } else {
+            ChatBubble.openLink(context, href);
+          }
+        },
+      ),
+    );
+  }
 }
 
-class _SourcesListState extends State<_SourcesList> {
+class ChatSourcesList extends StatefulWidget {
+  final List<(String, String)> sources;
+  final Color muted;
+  const ChatSourcesList({required this.sources, required this.muted});
+
+  @override
+  State<ChatSourcesList> createState() => _SourcesListState();
+}
+
+class _SourcesListState extends State<ChatSourcesList> {
   bool _open = false;
 
   String _host(int i) =>
@@ -555,7 +580,9 @@ class _SourcesListState extends State<_SourcesList> {
             const SizedBox(width: 6),
             Flexible(
               child: Text(
-                _open ? 'Sources ($n)' : 'Sources ($n) · $preview${n > 2 ? ' …' : ''}',
+                _open
+                    ? 'Sources ($n)'
+                    : 'Sources ($n) · $preview${n > 2 ? ' …' : ''}',
                 overflow: TextOverflow.ellipsis,
                 style: GoogleFonts.inter(
                     fontSize: 12.5, fontWeight: FontWeight.w600, color: muted),
@@ -579,7 +606,8 @@ class _SourcesListState extends State<_SourcesList> {
                       style: GoogleFonts.inter(fontSize: 10, color: muted))),
               label: Text(_host(i), style: GoogleFonts.inter(fontSize: 12)),
               tooltip: '${widget.sources[i].$1}\n${widget.sources[i].$2}',
-              onPressed: () => ChatBubble.openLink(context, widget.sources[i].$2),
+              onPressed: () =>
+                  ChatBubble.openLink(context, widget.sources[i].$2),
             ),
         ]),
       ],
@@ -618,7 +646,9 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
           child: SelectableText(
             text,
             style: GoogleFonts.firaCode(
-                fontSize: 13, height: 1.5, color: Theme.of(context).colorScheme.onSurface),
+                fontSize: 13,
+                height: 1.5,
+                color: Theme.of(context).colorScheme.onSurface),
           ),
         ),
         Positioned(
@@ -632,8 +662,8 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
             icon: const Icon(Icons.copy_rounded),
             onPressed: () {
               Clipboard.setData(ClipboardData(text: text));
-              ScaffoldMessenger.maybeOf(context)
-                  ?.showSnackBar(const SnackBar(content: Text('Copied'), duration: Duration(seconds: 1)));
+              ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
+                  content: Text('Copied'), duration: Duration(seconds: 1)));
             },
           ),
         ),

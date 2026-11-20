@@ -22,6 +22,9 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import kotlinx.coroutines.*
 import java.net.InetSocketAddress
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
 import java.net.Socket
 import kotlin.coroutines.resume
 
@@ -161,6 +164,10 @@ class ClusterChannel(
                 val ok = probe(call.argument<String>("endpoint") ?: "", 2000)
                 withContext(Dispatchers.Main) { result.success(ok) }
             }
+            "probeDiagnostic" -> scope.launch {
+                val reason = probeStatus(call.argument<String>("endpoint") ?: "", 2500)
+                withContext(Dispatchers.Main) { result.success(reason) }
+            }
             "setCluster" -> scope.launch {
                 val endpoints = call.argument<List<String>>("endpoints") ?: emptyList()
                 val weights = call.argument<List<Double>>("weights") ?: emptyList()
@@ -226,16 +233,32 @@ class ClusterChannel(
         return am.runningAppProcesses?.any { it.processName == name } == true
     }
 
-    private suspend fun probe(endpoint: String, timeoutMs: Int): Boolean = withContext(Dispatchers.IO) {
-        val host = endpoint.substringBeforeLast(':')
-        val port = endpoint.substringAfterLast(':').toIntOrNull() ?: return@withContext false
-        try {
-            Socket().use { it.connect(InetSocketAddress(host, port), timeoutMs) }
-            true
-        } catch (e: Exception) {
-            false
+    private suspend fun probe(endpoint: String, timeoutMs: Int): Boolean =
+        probeStatus(endpoint, timeoutMs) == "reachable"
+
+    private suspend fun probeStatus(endpoint: String, timeoutMs: Int): String =
+        withContext(Dispatchers.IO) {
+            val host = endpoint.substringBeforeLast(':')
+            val port = endpoint.substringAfterLast(':').toIntOrNull()
+                ?: return@withContext "invalid"
+            try {
+                Socket().use { it.connect(InetSocketAddress(host, port), timeoutMs) }
+                "reachable"
+            } catch (_: NoRouteToHostException) {
+                "no_route"
+            } catch (_: SocketTimeoutException) {
+                "timeout"
+            } catch (error: ConnectException) {
+                val detail = error.message.orEmpty()
+                when {
+                    detail.contains("ENETUNREACH") || detail.contains("EHOSTUNREACH") -> "no_route"
+                    detail.contains("ECONNREFUSED") || detail.contains("refused", ignoreCase = true) -> "refused"
+                    else -> "unavailable"
+                }
+            } catch (_: Exception) {
+                "unavailable"
+            }
         }
-    }
 
     /** Browses for workers for [timeoutMs], then resolves each one in turn. */
     private suspend fun discover(timeoutMs: Long): List<Map<String, Any?>> {

@@ -10,6 +10,7 @@ import '../services/cluster_service.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
 import '../core/haptics.dart';
+import '../services/pollinations_image_service.dart';
 
 /// Landing screen shown in the Chat tab before the first message is sent.
 ///
@@ -43,6 +44,13 @@ class HomeEmptyState extends StatelessWidget {
                 _Greeting(t: t, compact: typing),
                 const SizedBox(height: 32),
                 const Spacer(),
+                if (!typing)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Text(PollinationsImageService.internetNotice,
+                        style: Theme.of(context).textTheme.bodySmall,
+                        textAlign: TextAlign.center),
+                  ),
                 if (!typing)
                   Obx(() {
                     final settings = Get.find<SettingsController>();

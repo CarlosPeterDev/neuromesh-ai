@@ -147,6 +147,10 @@ class SettingsController extends GetxController {
     cloudProvider.value = _hive.getSetting(AppConstants.keyCloudProvider,
             defaultValue: 'openrouter') ??
         'openrouter';
+    if (cloudProvider.value == 'stability') {
+      cloudProvider.value = 'openrouter';
+      inferenceMode.value = 'local';
+    }
     openaiKey.value = _hive.getSetting(AppConstants.keyOpenaiKey) ?? '';
     anthropicKey.value = _hive.getSetting(AppConstants.keyAnthropicKey) ?? '';
     googleKey.value = _hive.getSetting(AppConstants.keyGoogleKey) ?? '';

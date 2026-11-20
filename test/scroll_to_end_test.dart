@@ -3,6 +3,32 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:neuromesh_ai/widgets/scroll_to_end.dart';
 
 void main() {
+  testWidgets('Models jump button returns to the top', (tester) async {
+    final controller = ScrollController(initialScrollOffset: 1200);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: ScrollToEnd(
+          label: 'Go to top',
+          toStart: true,
+          controller: controller,
+          child: ListView.builder(
+            controller: controller,
+            itemExtent: 64,
+            itemCount: 70,
+            itemBuilder: (_, index) => Text('Model $index'),
+          ),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Go to top'));
+    await tester.pumpAndSettle();
+    expect(find.text('Model 0'), findsOneWidget);
+    expect(find.byTooltip('Go to top'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+  });
+
   for (final explicitController in [true, false]) {
     testWidgets(
         'jumps to the end with explicit scroll controller $explicitController',

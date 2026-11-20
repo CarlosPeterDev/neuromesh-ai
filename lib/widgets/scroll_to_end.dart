@@ -8,12 +8,14 @@ class ScrollToEnd extends StatefulWidget {
     required this.label,
     this.controller,
     this.onJump,
+    this.toStart = false,
   });
 
   final Widget child;
   final String label;
   final ScrollController? controller;
   final VoidCallback? onJump;
+  final bool toStart;
 
   @override
   State<ScrollToEnd> createState() => _ScrollToEndState();
@@ -36,7 +38,7 @@ class _ScrollToEndState extends State<ScrollToEnd> {
       final position = _attached;
       final show = position != null &&
           position.hasContentDimensions &&
-          position.extentAfter > 180;
+          _remaining(position) > 180;
       if (show != _show) setState(() => _show = show);
     });
   }
@@ -48,6 +50,9 @@ class _ScrollToEndState extends State<ScrollToEnd> {
     return _position;
   }
 
+  double _remaining(ScrollPosition position) =>
+      widget.toStart ? position.extentBefore : position.extentAfter;
+
   Future<void> _jump() async {
     widget.onJump?.call();
     final position = _attached;
@@ -56,13 +61,15 @@ class _ScrollToEndState extends State<ScrollToEnd> {
     for (var attempt = 0; mounted && attempt < 4; attempt++) {
       if (_attached != position ||
           !position.hasContentDimensions ||
-          position.extentAfter <= 1) return;
-      final end = position.maxScrollExtent;
+          _remaining(position) <= 1) return;
+      final end =
+          widget.toStart ? position.minScrollExtent : position.maxScrollExtent;
       await position.animateTo(end,
           duration: Duration(milliseconds: attempt == 0 ? 240 : 100),
           curve: Curves.easeOutCubic);
-      if (!mounted || _attached != position || position.pixels < end - 1)
-        return;
+      if (!mounted ||
+          _attached != position ||
+          (position.pixels - end).abs() > 1) return;
     }
   }
 
@@ -91,7 +98,9 @@ class _ScrollToEndState extends State<ScrollToEnd> {
               heroTag: null,
               tooltip: widget.label,
               onPressed: _jump,
-              child: const Icon(Icons.keyboard_arrow_down_rounded),
+              child: Icon(widget.toStart
+                  ? Icons.keyboard_arrow_up_rounded
+                  : Icons.keyboard_arrow_down_rounded),
             ),
           ),
       ],

@@ -6,11 +6,9 @@ import '../core/ui.dart';
 import '../widgets/home_empty_state.dart' show providerLabel;
 import '../services/inference_service.dart';
 import '../services/hive_service.dart';
-import '../services/local_image_service.dart';
 import '../services/update_service.dart';
 import '../services/device_info_service.dart';
 import '../services/device_info_native.dart' as platform_info;
-import '../ffi/sd_ffi_bindings.dart';
 import '../services/cluster_service.dart';
 import 'cluster_view.dart';
 import 'log_view.dart';
@@ -20,6 +18,7 @@ import 'diagnostics_view.dart';
 import 'memory_view.dart';
 import 'workload_placement_view.dart';
 import 'model_transfer_view.dart';
+import 'pollinations_view.dart';
 
 const _tabular = [FontFeature.tabularFigures()];
 
@@ -44,14 +43,18 @@ class _SettingsViewState extends State<SettingsView> {
   static const _keywords = <String, String>{
     'Appearance': 'theme dark light font text size',
     'Inference mode': 'local cloud ollama provider',
-    'Model parameters': 'thinking reasoning temperature context size max tokens seed stop sequences top p top k',
-    'GGUF & LiteRT': 'performance cpu gpu vulkan threads hardware acceleration ram',
+    'Model parameters':
+        'thinking reasoning temperature context size max tokens seed stop sequences top p top k',
+    'GGUF & LiteRT':
+        'performance cpu gpu vulkan threads hardware acceleration ram',
     'Image generation': 'image size resolution diffusion steps backend',
     'Memory': 'preferences facts remember automatic learning personal',
-    'Workload placement': 'voice tts stt speech audio transcribe image device cluster',
+    'Workload placement':
+        'voice tts stt speech audio transcribe image device cluster',
     'Phone cluster': 'pair devices master worker server',
     'Report an error': 'diagnostics zip crash bug upload report delivery',
-    'Device transfer': 'move backup migrate restore chats models settings Wi-Fi',
+    'Device transfer':
+        'move backup migrate restore chats models settings Wi-Fi',
     'Toolbox': 'backup export import files profiles roles prompts',
     'Device': 'free ram storage battery hardware',
     'App updates': 'version release upgrade',
@@ -70,7 +73,10 @@ class _SettingsViewState extends State<SettingsView> {
         return terms.every(text.toLowerCase().contains);
       }).toList();
       if (rows.isNotEmpty) {
-        matches.addAll([header, AppGroup(dividerIndent: group.dividerIndent, children: rows)]);
+        matches.addAll([
+          header,
+          AppGroup(dividerIndent: group.dividerIndent, children: rows)
+        ]);
       }
     }
     return matches;
@@ -87,187 +93,189 @@ class _SettingsViewState extends State<SettingsView> {
         final showUpdates =
             UpdateService.isSupported && Get.isRegistered<UpdateService>();
         final sections = _filter([
-            const SectionHeader('Appearance & feedback',
-                padding: EdgeInsets.fromLTRB(4, 8, 4, 8)),
-            AppGroup(dividerIndent: 60, children: [
-              _navRow(
-                context,
-                icon: Icons.palette_outlined,
-                title: 'Appearance',
-                value: _themeLabel(),
-                builder: (ctx) => _buildAppearanceGroup(ctx),
+          const SectionHeader('Appearance & feedback',
+              padding: EdgeInsets.fromLTRB(4, 8, 4, 8)),
+          AppGroup(dividerIndent: 60, children: [
+            _navRow(
+              context,
+              icon: Icons.palette_outlined,
+              title: 'Appearance',
+              value: _themeLabel(),
+              builder: (ctx) => _buildAppearanceGroup(ctx),
+            ),
+            AppRow(
+              icon: Icons.vibration_rounded,
+              title: 'Haptic feedback',
+              trailing: Switch(
+                value: controller.hapticsEnabled.value,
+                onChanged: controller.setHapticsEnabled,
               ),
+              onTap: () => controller
+                  .setHapticsEnabled(!controller.hapticsEnabled.value),
+            ),
+          ]),
+          const SectionHeader('Chat & model defaults'),
+          AppGroup(dividerIndent: 60, children: [
+            AppRow(
+              icon: Icons.psychology_alt_outlined,
+              title: 'Memory',
+              subtitle: 'Review saved facts and preferences',
+              chevron: true,
+              onTap: () => Get.to(() => const MemoryView()),
+            ),
+            _navRow(
+              context,
+              icon: Icons.memory_rounded,
+              title: 'Inference mode',
+              value:
+                  controller.inferenceMode.value == 'local' ? 'Local' : 'Cloud',
+              builder: (ctx) => _buildInferenceGroup(ctx),
+            ),
+            _navRow(
+              context,
+              icon: Icons.chat_bubble_outline_rounded,
+              title: 'System prompt',
+              value: controller.globalSystemPrompt.value.trim().isEmpty
+                  ? 'Default'
+                  : 'Custom',
+              builder: (ctx) => _buildSystemPromptGroup(ctx),
+              reactive: false,
+            ),
+            _navRow(
+              context,
+              icon: Icons.tune_rounded,
+              title: 'Model parameters',
+              value: controller.temperature.value.toStringAsFixed(2),
+              builder: (ctx) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildModelParametersGroup(ctx),
+                    const SectionHeader('Stop sequences'),
+                    _buildStopSequencesGroup(ctx),
+                  ]),
+            ),
+          ]),
+          const SectionHeader('On-device performance'),
+          AppGroup(dividerIndent: 60, children: [
+            _navRow(
+              context,
+              icon: Icons.speed_rounded,
+              title: 'GGUF & LiteRT',
+              value: switch (controller.liteRtPerformanceMode.value) {
+                'gpu_fast' => 'GPU fast',
+                'cpu_safe' => 'CPU safe',
+                _ => 'Auto fast',
+              },
+              builder: (ctx) => _buildLiteRtGroup(ctx),
+            ),
+            _navRow(
+              context,
+              icon: Icons.image_outlined,
+              title: 'Image generation',
+              value: 'Pollinations · Online',
+              builder: (ctx) => const PollinationsPanel(),
+            ),
+          ]),
+          const SectionHeader('Connected devices'),
+          AppGroup(dividerIndent: 60, children: [
+            if (Get.isRegistered<ClusterService>())
               AppRow(
-                icon: Icons.vibration_rounded,
-                title: 'Haptic feedback',
-                trailing: Switch(
-                  value: controller.hapticsEnabled.value,
-                  onChanged: controller.setHapticsEnabled,
-                ),
-                onTap: () => controller
-                    .setHapticsEnabled(!controller.hapticsEnabled.value),
-              ),
-            ]),
-            const SectionHeader('Chat & model defaults'),
-            AppGroup(dividerIndent: 60, children: [
-              AppRow(
-                icon: Icons.psychology_alt_outlined,
-                title: 'Memory',
-                subtitle: 'Review saved facts and preferences',
+                icon: Icons.hub_outlined,
+                title: 'Phone cluster',
+                trailing: Text(
+                    switch (Get.find<ClusterService>().role) {
+                      ClusterRole.master => 'Master',
+                      ClusterRole.worker => 'Worker',
+                      ClusterRole.off => 'Off',
+                    },
+                    style:
+                        AppTokens.of(context).caption.copyWith(fontSize: 14)),
                 chevron: true,
-                onTap: () => Get.to(() => const MemoryView()),
+                onTap: () => Get.to(() => const ClusterView()),
               ),
-              _navRow(
-                context,
-                icon: Icons.memory_rounded,
-                title: 'Inference mode',
-                value: controller.inferenceMode.value == 'local'
-                    ? 'Local'
-                    : 'Cloud',
-                builder: (ctx) => _buildInferenceGroup(ctx),
+            AppRow(
+              icon: Icons.devices_other_rounded,
+              title: 'Workload placement',
+              subtitle: 'Choose phones for speech, recognition and images',
+              chevron: true,
+              onTap: () => Get.to(() => const WorkloadPlacementView()),
+            ),
+          ]),
+          const SectionHeader('Utilities'),
+          AppGroup(dividerIndent: 60, children: [
+            AppRow(
+              icon: Icons.handyman_outlined,
+              title: 'Toolbox',
+              subtitle: 'Roles, prompts, profiles, export, backup',
+              chevron: true,
+              onTap: () => Get.to(() => const ToolboxView()),
+            ),
+            AppRow(
+              icon: Icons.swap_horiz_rounded,
+              title: 'Device transfer',
+              subtitle: 'Move models and app data over Wi-Fi',
+              chevron: true,
+              onTap: () =>
+                  Get.to(() => const ModelTransferView(clusterBackup: true)),
+            ),
+          ]),
+          const SectionHeader('Support & app info'),
+          AppGroup(dividerIndent: 60, children: [
+            if (showUpdates) _buildUpdatesRow(context),
+            _navRow(
+              context,
+              icon: Icons.smartphone_rounded,
+              title: 'Device',
+              value: '${device.totalRamGB.value.toStringAsFixed(1)} GB RAM',
+              builder: (ctx) => AppGroup(children: [_buildDeviceCard(ctx)]),
+              reactive: false,
+            ),
+            AppRow(
+              icon: Icons.bug_report_outlined,
+              title: 'Report an error',
+              chevron: true,
+              onTap: () => Get.to(() => const DiagnosticsView()),
+            ),
+            AppRow(
+              icon: Icons.article_outlined,
+              title: 'Logs',
+              chevron: true,
+              onTap: () => Get.to(() => const LogView()),
+            ),
+            AppRow(
+              leading: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.asset('assets/icons/appicon.png',
+                    width: 32, height: 32),
               ),
-              _navRow(
-                context,
-                icon: Icons.chat_bubble_outline_rounded,
-                title: 'System prompt',
-                value: controller.globalSystemPrompt.value.trim().isEmpty
-                    ? 'Default'
-                    : 'Custom',
-                builder: (ctx) => _buildSystemPromptGroup(ctx),
-                reactive: false,
-              ),
-              _navRow(
-                context,
-                icon: Icons.tune_rounded,
-                title: 'Model parameters',
-                value: controller.temperature.value.toStringAsFixed(2),
-                builder: (ctx) => Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _buildModelParametersGroup(ctx),
-                      const SectionHeader('Stop sequences'),
-                      _buildStopSequencesGroup(ctx),
-                    ]),
-              ),
-            ]),
-            const SectionHeader('On-device performance'),
-            AppGroup(dividerIndent: 60, children: [
-              _navRow(
-                context,
-                icon: Icons.speed_rounded,
-                title: 'GGUF & LiteRT',
-                value: switch (controller.liteRtPerformanceMode.value) {
-                  'gpu_fast' => 'GPU fast',
-                  'cpu_safe' => 'CPU safe',
-                  _ => 'Auto fast',
-                },
-                builder: (ctx) => _buildLiteRtGroup(ctx),
-              ),
-              _navRow(
-                context,
-                icon: Icons.image_outlined,
-                title: 'Image generation',
-                value: controller.imageGenBackend.value == Backend.cpu
-                    ? 'CPU'
-                    : 'GPU',
-                builder: (ctx) => _buildImageGenerationGroup(ctx),
-              ),
-            ]),
-            const SectionHeader('Connected devices'),
-            AppGroup(dividerIndent: 60, children: [
-              if (Get.isRegistered<ClusterService>())
-                AppRow(
-                  icon: Icons.hub_outlined,
-                  title: 'Phone cluster',
-                  trailing: Text(
-                      switch (Get.find<ClusterService>().role) {
-                        ClusterRole.master => 'Master',
-                        ClusterRole.worker => 'Worker',
-                        ClusterRole.off => 'Off',
-                      },
-                      style: AppTokens.of(context).caption.copyWith(fontSize: 14)),
-                  chevron: true,
-                  onTap: () => Get.to(() => const ClusterView()),
-                ),
-              AppRow(
-                icon: Icons.devices_other_rounded,
-                title: 'Workload placement',
-                subtitle: 'Choose phones for speech, recognition and images',
-                chevron: true,
-                onTap: () => Get.to(() => const WorkloadPlacementView()),
-              ),
-            ]),
-            const SectionHeader('Utilities'),
-            AppGroup(dividerIndent: 60, children: [
-              AppRow(
-                icon: Icons.handyman_outlined,
-                title: 'Toolbox',
-                subtitle: 'Roles, prompts, profiles, export, backup',
-                chevron: true,
-                onTap: () => Get.to(() => const ToolboxView()),
-              ),
-              AppRow(
-                icon: Icons.swap_horiz_rounded,
-                title: 'Device transfer',
-                subtitle: 'Move models and app data over Wi-Fi',
-                chevron: true,
-                onTap: () => Get.to(
-                    () => const ModelTransferView(clusterBackup: true)),
-              ),
-            ]),
-            const SectionHeader('Support & app info'),
-            AppGroup(dividerIndent: 60, children: [
-              if (showUpdates) _buildUpdatesRow(context),
-              _navRow(
-                context,
-                icon: Icons.smartphone_rounded,
-                title: 'Device',
-                value: '${device.totalRamGB.value.toStringAsFixed(1)} GB RAM',
-                builder: (ctx) => AppGroup(children: [_buildDeviceCard(ctx)]),
-                reactive: false,
-              ),
-              AppRow(
-                icon: Icons.bug_report_outlined,
-                title: 'Report an error',
-                chevron: true,
-                onTap: () => Get.to(() => const DiagnosticsView()),
-              ),
-              AppRow(
-                icon: Icons.article_outlined,
-                title: 'Logs',
-                chevron: true,
-                onTap: () => Get.to(() => const LogView()),
-              ),
-              AppRow(
-                leading: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.asset('assets/icons/appicon.png',
-                      width: 32, height: 32),
-                ),
-                title: 'NeuroMesh AI',
-                subtitle: controller.appVersion.value.isEmpty
-                    ? 'Connect Devices. Multiply Intelligence.'
-                    : 'Version ${controller.appVersion.value}',
-              ),
-            ]),
+              title: 'NeuroMesh AI',
+              subtitle: controller.appVersion.value.isEmpty
+                  ? 'Connect Devices. Multiply Intelligence.'
+                  : 'Version ${controller.appVersion.value}',
+            ),
+          ]),
         ]);
         return ListView(
           padding: kPagePadding,
           children: [
             TextField(
               controller: _search,
-              onChanged: (value) => setState(() => _query = value.trim().toLowerCase()),
+              onChanged: (value) =>
+                  setState(() => _query = value.trim().toLowerCase()),
               textInputAction: TextInputAction.search,
-              decoration: appInputDecoration(context, hint: 'Search settings').copyWith(
+              decoration:
+                  appInputDecoration(context, hint: 'Search settings').copyWith(
                 prefixIcon: const Icon(Icons.search_rounded),
-                suffixIcon: _query.isEmpty ? null : IconButton(
-                  tooltip: 'Clear search',
-                  onPressed: () {
-                    _search.clear();
-                    setState(() => _query = '');
-                  },
-                  icon: const Icon(Icons.close_rounded),
-                ),
+                suffixIcon: _query.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Clear search',
+                        onPressed: () {
+                          _search.clear();
+                          setState(() => _query = '');
+                        },
+                        icon: const Icon(Icons.close_rounded),
+                      ),
               ),
             ),
             if (sections.isEmpty)
@@ -593,11 +601,8 @@ class _SettingsViewState extends State<SettingsView> {
 
   String _localSubtitle() {
     final inf = Get.find<InferenceService>();
-    final localImage = Get.find<LocalImageService>();
     if (inf.isModelLoaded.value) {
       return 'Active: ${inf.loadedModelName.value}';
-    } else if (localImage.isModelLoaded.value) {
-      return 'Active: ${localImage.loadedModelName.value}';
     }
     return 'No model loaded';
   }
@@ -887,125 +892,8 @@ class _SettingsViewState extends State<SettingsView> {
       ],
     );
   }
-
-  Widget _buildImageGenerationGroup(BuildContext context) {
-    final t = AppTokens.of(context);
-    final stepsValue = controller.imageSteps.value.toDouble();
-    const safeMax = 8.0;
-    final isOver = stepsValue > safeMax;
-    final selectedBackend = controller.imageGenBackend.value;
-    final gpuBackend = controller.recommendedImageGpuBackend();
-    final gpuAvailable = gpuBackend != Backend.cpu;
-    final size = controller.imageGenSize.value;
-    final guard = controller.imageGenGpuGuardMb.value;
-
-    return AppGroup(children: [
-      // Steps
-      _sliderRow(
-        context,
-        label: 'Steps',
-        valueLabel: controller.imageSteps.value.toString(),
-        value: stepsValue.clamp(1, 50),
-        min: 1,
-        max: 50,
-        divisions: 49,
-        color: isOver ? t.orange : null,
-        caption: 'Recommended: 15-20 steps',
-        onChanged: (v) => controller.setImageSteps(v.toInt()),
-        below: [
-          if (isOver)
-            AppNotice('More steps = better quality but MUCH slower!',
-                icon: Icons.warning_amber_rounded, color: t.orange),
-        ],
-      ),
-
-      // Size
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Expanded(child: Text('Image size', style: t.body)),
-            Text(size == 0 ? 'Auto' : '${size}px',
-                style: t.body.copyWith(color: t.muted, fontFeatures: _tabular)),
-          ]),
-          const SizedBox(height: 12),
-          AppChips<int>(
-            items: const [
-              (0, 'Auto'),
-              (256, '256'),
-              (320, '320'),
-              (384, '384'),
-              (512, '512'),
-            ],
-            selected: size,
-            onSelected: (v) => controller.setImageGenSize(v),
-          ),
-          const SizedBox(height: 10),
-          Text(
-              'Auto recommended. Bigger size = better detail, but much slower and more memory use.',
-              style: t.small),
-          if (size >= 512) ...[
-            const SizedBox(height: 10),
-            AppNotice(
-                '512 gives more detail but can be MUCH slower, heat the phone, and may fail on some devices.',
-                icon: Icons.warning_amber_rounded,
-                color: t.orange),
-          ],
-        ]),
-      ),
-
-      // GPU safety
-      _sliderRow(
-        context,
-        label: 'GPU safety',
-        valueLabel: guard <= 0 ? 'Off' : '$guard MB',
-        value: guard.toDouble().clamp(0, 4096),
-        min: 0,
-        max: 4096,
-        divisions: 16,
-        caption:
-            'Models at or above this size use CPU. Smaller models can use GPU Experimental.',
-        onChanged: (v) => controller.setImageGenGpuGuardMb(v.toInt()),
-        below: [
-          if (guard <= 0 || guard >= 2048)
-            AppNotice(
-                guard <= 0
-                    ? 'GPU Safety is off. Large models may crash or freeze on GPU.'
-                    : 'High GPU Safety allows larger models on GPU and may crash, freeze, or overheat some phones.',
-                icon: Icons.warning_amber_rounded,
-                color: t.orange),
-        ],
-      ),
-
-      // Backend
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Backend', style: t.body),
-          const SizedBox(height: 2),
-          Text(controller.imageGpuLabel(), style: t.caption),
-          const SizedBox(height: 12),
-          AppSegmented<bool>(
-            items: const [(false, 'CPU'), (true, 'GPU')],
-            selected: selectedBackend != Backend.cpu,
-            onChanged: (useGpu) {
-              if (useGpu == (selectedBackend != Backend.cpu)) return;
-              if (useGpu && !gpuAvailable) return;
-              controller.setImageBackendMode(useGpu);
-            },
-          ),
-          if (selectedBackend != Backend.cpu) ...[
-            const SizedBox(height: 10),
-            Text('GPU is experimental and only used below GPU Safety size.',
-                style: t.small.copyWith(color: t.orange)),
-          ],
-        ]),
-      ),
-    ]);
-  }
 }
 
-/// A settings section on its own page. Rebuilds with the controller state.
 class _SettingsPage extends StatelessWidget {
   final String title;
   final WidgetBuilder builder;

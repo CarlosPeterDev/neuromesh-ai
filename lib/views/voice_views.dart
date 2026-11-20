@@ -16,6 +16,7 @@ import '../controllers/chat_controller.dart';
 import '../controllers/home_controller.dart';
 import '../models/chat_message.dart';
 import '../utils/thought_parser.dart';
+import '../utils/spoken_answer.dart';
 import 'voice_clone_view.dart';
 import 'chat_tools.dart';
 import '../core/ui.dart';
@@ -26,6 +27,7 @@ import '../services/hive_service.dart';
 import '../services/model_transfer_service.dart';
 import 'model_transfer_view.dart';
 import '../widgets/agent_steps.dart';
+import '../widgets/chat_bubble.dart';
 import '../widgets/tool_confirm.dart';
 import '../services/inference_service.dart';
 import '../services/voice_clone_store.dart';
@@ -113,7 +115,9 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
     final failed = <String>[];
     try {
       final selection = await FilePicker.pickFiles(
-          type: FileType.custom, allowedExtensions: ['zip'], allowMultiple: true);
+          type: FileType.custom,
+          allowedExtensions: ['zip'],
+          allowMultiple: true);
       final files = selection?.files ?? [];
       for (var index = 0; index < files.length; index++) {
         final file = files[index];
@@ -123,7 +127,8 @@ class _VoiceModelCatalogState extends State<VoiceModelCatalog> {
         }
         try {
           final path = file.path;
-          if (path == null) throw const FormatException('Couldn’t open this file.');
+          if (path == null)
+            throw const FormatException('Couldn’t open this file.');
           final model = await _store.importZip(path);
           imported.add(model.title);
         } catch (error) {
@@ -781,30 +786,68 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   }
 
   /// Speaks sentences as the model writes them, one after another.
-  Future<void> _speakQueue(Stream<String> sentences, String? sysLang,
-      {void Function(String sentence)? onSpoken}) async {
-    await for (final s in sentences) {
-      if (_ended || _interrupted) break;
-      onSpoken?.call(s); // the caption grows as each sentence is spoken
-      await _voice.speak(s,
-          systemLang: _callVoice == null ? sysLang : null,
+  Future<void> _speakQueue(
+    Stream<String> sentences,
+    String? sysLang, {
+    required void Function(String) caption,
+    required bool Function() shouldStop,
+  }) async {
+    var language = _callVoice == null ? sysLang : null;
+    final fallbackLanguage = _lang == 'ar' ? 'ar' : 'en-US';
+
+    void playback(bool playing) {
+      _speaking = playing;
+      if (shouldStop()) return;
+      if (!playing) {
+        _bargeFrames = 0;
+        _bargeAudio.clear();
+      }
+      _set(playing ? _CallState.speaking : _CallState.thinking,
+          playing ? 'Speaking…' : 'Thinking…');
+    }
+
+    await for (final sentence in sentences) {
+      if (shouldStop()) break;
+      caption(sentence);
+      _set(_CallState.thinking, 'Preparing voice…');
+      try {
+        await _voice.speak(
+          sentence,
+          systemLang: language,
           workerLanguage: _lang,
           localModel: _ttsChoice(_lang),
-          preferLocal: _callVoice != null);
+          preferLocal: _callVoice != null,
+          onPlayback: playback,
+        );
+      } catch (error) {
+        if (shouldStop()) break;
+        if (language == null) {
+          language = fallbackLanguage;
+          _set(_CallState.thinking, 'Switching to system voice…');
+          try {
+            await _voice.speak(sentence,
+                systemLang: language, onPlayback: playback);
+            if (!shouldStop() && mounted) {
+              ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
+                content: Text('Call audio switched to the system voice.'),
+              ));
+            }
+            continue;
+          } catch (_) {
+            if (shouldStop()) break;
+          }
+        }
+        if (mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
+            content:
+                Text('A sentence could not play. It is in the transcript.'),
+          ));
+        }
+      }
     }
   }
 
-  /// What is worth reading aloud: no markdown, links, tool traces or thinking.
-  static String _spoken(String t) => t
-      .replaceAll(RegExp(r'<think>[\s\S]*?(</think>|$)'), '')
-      .split('\n')
-      .where((l) => !l.startsWith('>'))
-      .join('\n')
-      .replaceAll(RegExp(r'!\[[^\]]*\]\([^)]*\)'), '')
-      .replaceAllMapped(
-          RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m.group(1) ?? '')
-      .replaceAll(RegExp(r'[*_`#]+'), '')
-      .trim();
+  static String _spoken(String text) => spokenAnswer(text);
 
   final _shots = <File>[];
 
@@ -925,7 +968,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     final ctl = StreamController<String>();
     try {
       var read = 0;
-      var started = false;
+      var speechExpired = false;
       int? liveIdx;
       void caption(String sentence) {
         if (!mounted) return;
@@ -942,17 +985,10 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         });
       }
 
-      final speakingDone = _speakQueue(ctl.stream, sys, onSpoken: caption)
-          .catchError((Object error) {
-        if (mounted && !_interrupted) {
-          setState(
-            () => _lines.add((
-              me: false,
-              text: 'Voice playback failed: $error',
-            )),
-          );
-        }
-      });
+      bool shouldStopSpeaking() => _ended || _interrupted || speechExpired;
+
+      final speakingDone = _speakQueue(ctl.stream, sys,
+          caption: caption, shouldStop: shouldStopSpeaking);
 
       void feed(String text, {bool flush = false}) {
         if (_ended || _interrupted) return;
@@ -961,11 +997,6 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         final r = nextSentences(v, read, flush: flush);
         read = r.next;
         for (final sentence in r.sentences) {
-          if (!started) {
-            started = true;
-            _speaking = true;
-            _set(_CallState.speaking, 'Speaking…');
-          }
           ctl.add(sentence);
         }
       }
@@ -1086,8 +1117,10 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       unawaited(ctl.close());
       await speakingDone.timeout(
         const Duration(seconds: 180),
-        onTimeout: () {
-          unawaited(_voice.stopSpeaking());
+        onTimeout: () async {
+          speechExpired = true;
+          _speaking = false;
+          await _voice.stopSpeaking();
         },
       );
       final clean = (_ended || _interrupted)
@@ -1439,7 +1472,14 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                           children: [
                             Text(l.me ? 'You' : 'AI',
                                 style: Theme.of(context).textTheme.labelSmall),
-                            SelectableText(l.text),
+                            if (l.me)
+                              SelectableText(l.text)
+                            else
+                              _VoiceAnswer(
+                                text: l.text,
+                                workspaceProject: Get.find<AgentService>()
+                                    .projectForChat(_sessionId),
+                              ),
                           ],
                         ),
                       ),
@@ -1524,6 +1564,27 @@ class _VoiceCallViewState extends State<VoiceCallView> {
           ),
         ]),
       ),
+    );
+  }
+}
+
+class _VoiceAnswer extends StatelessWidget {
+  const _VoiceAnswer({required this.text, required this.workspaceProject});
+  final String text;
+  final String workspaceProject;
+
+  @override
+  Widget build(BuildContext context) {
+    final clean = splitThoughtTags(stripToolTrace(text)).answer;
+    final (answer, sources) = ChatBubble.splitSources(clean);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (answer.trim().isNotEmpty)
+          AssistantMarkdown(text: answer, workspaceProject: workspaceProject),
+        if (sources.isNotEmpty)
+          ChatSourcesList(sources: sources, muted: Theme.of(context).hintColor),
+      ],
     );
   }
 }

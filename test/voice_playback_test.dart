@@ -16,6 +16,7 @@ class _Player implements AudioPlayer {
   Object? error;
   bool playing = false;
   int plays = 0;
+  final paths = <String>[];
 
   @override
   Stream<void> get onPlayerComplete => completed.stream;
@@ -28,6 +29,7 @@ class _Player implements AudioPlayer {
       Duration? position,
       PlayerMode? mode}) async {
     plays++;
+    paths.add((source as DeviceFileSource).path);
     if (!started.isCompleted) started.complete();
     await prepare?.future;
     playing = true;
@@ -64,10 +66,14 @@ void main() {
     await directory.delete(recursive: true);
   });
 
-  VoiceService service({Future<Directory> Function()? temporaryDirectory}) =>
+  VoiceService service({
+    Future<Directory> Function()? temporaryDirectory,
+    Duration playbackGrace = const Duration(seconds: 5),
+  }) =>
       VoiceService(
           player: player,
           workerClient: client,
+          playbackGrace: playbackGrace,
           temporaryDirectory: temporaryDirectory ?? () async => directory)
         ..workerUrl = 'http://worker.invalid:8765';
 
@@ -116,9 +122,39 @@ void main() {
   test('normal completion releases its listener for the next sentence',
       () async {
     final voice = service();
-    await voice.speak('Hello there. A second sentence.');
+    await voice.speak('Hello there.');
+    await voice.speak('A second sentence.');
     expect(player.plays, 2);
+    expect(player.paths.toSet(), hasLength(2));
+    expect(directory.listSync(), isEmpty);
     expect(player.completed.hasListener, isFalse);
+  });
+
+  test('missing completion clears playback and lets the next sentence play',
+      () async {
+    player.autoComplete = false;
+    final voice = service(playbackGrace: const Duration(milliseconds: 20));
+    final playback = <bool>[];
+    await expectLater(voice.speak('First sentence.', onPlayback: playback.add),
+        throwsA(isA<TimeoutException>()));
+    expect(playback, [true, false]);
+    expect(player.playing, isFalse);
+    expect(player.completed.hasListener, isFalse);
+
+    player.autoComplete = true;
+    await voice.speak('Second sentence.');
+    expect(player.plays, 2);
+  });
+
+  test('silent WAV output fails without entering playback', () async {
+    client.close();
+    client = MockClient((_) async =>
+        http.Response.bytes(encodeWav(Float32List(20), 16000), 200));
+    final playback = <bool>[];
+    await expectLater(service().speak('Hello there.', onPlayback: playback.add),
+        throwsFormatException);
+    expect(playback, isEmpty);
+    expect(player.plays, 0);
   });
 
   test('native playback errors reach the caller and release the listener',

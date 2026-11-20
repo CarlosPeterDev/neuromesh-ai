@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:get/get.dart';
@@ -16,16 +17,14 @@ import '../widgets/ask_user.dart';
 import 'agent_tools.dart';
 import 'device_bridge.dart';
 import 'desktop_command_service.dart';
-import '../controllers/model_controller.dart';
-import 'local_image_service.dart';
 import 'scheduler_service.dart';
 import 'voice_service.dart';
-import 'workload_placement.dart';
 import 'document_extractor_service.dart';
 import 'hive_service.dart';
 import 'inference_service.dart';
 import 'mcp_client.dart';
 import 'pollinations_image_service.dart';
+import 'pollinations_credentials.dart';
 import 'user_files.dart';
 import 'web_search_service.dart';
 
@@ -616,27 +615,47 @@ class AgentService extends GetxService {
     ),
     AgentTool(
       'generate_image',
-      'Create an image from a text description. Uses an active local or cluster image model, otherwise sends the description to Pollinations online. Use only for requested image generation and include the returned image and source in the answer.',
-      '{"prompt":"image description","name":"optional output file name"}',
+      'Create an image online with Pollinations. Internet is required. Use the user’s description, ask if the subject is missing, and show the returned image.',
+      '{"prompt":"image description","style":"illustration|photo|design","name":"optional output file name"}',
       (args) async {
-        final prompt = (args['prompt'] ?? '').toString().trim();
-        if (prompt.isEmpty) return 'Error: empty prompt.';
-        final img = Get.find<LocalImageService>();
-        final online = usesOnlineImageGeneration;
-        final extension = online ? 'jpg' : 'png';
-        var name = args['name']?.toString().trim() ?? '';
-        name = name.replaceFirst(RegExp(r'\.(png|jpe?g)$', caseSensitive: false), '');
-        if (name.isEmpty) name = 'image_${DateTime.now().millisecondsSinceEpoch}';
-        final bytes = online
-            ? await PollinationsImageService().generate(prompt)
-            : await img.generateImage(prompt: prompt);
-        if (bytes == null || bytes.isEmpty) {
-          return 'Error: ${img.lastFailureReason ?? 'the image model produced nothing.'}';
+        final image = await PollinationsImageService().create(
+          (args['prompt'] ?? '').toString(),
+          style: (args['style'] ?? '').toString(),
+          key: await PollinationsCredentials.read()
+              .onError<Exception>((_, __) => null),
+        );
+        return _savePollinationsImage(image, args['name'], edited: false);
+      },
+    ),
+    AgentTool(
+      'edit_image',
+      'Edit an existing image online using a free Pollinations image editor. Requires the user’s Pollinations key and an existing workspace image.',
+      '{"prompt":"requested edit","source":"existing workspace image filename","name":"optional output file name"}',
+      (args) async {
+        final key = await PollinationsCredentials.read();
+        if (key == null || key.isEmpty)
+          return PollinationsImageService.editKeyNotice;
+        final encoded = args['attachedImage'];
+        final Uint8List bytes;
+        if (encoded is String) {
+          if (encoded.length > (8 * 1024 * 1024 * 4 ~/ 3) + 4) {
+            return 'Choose an image smaller than 8 MB to edit.';
+          }
+          bytes = base64Decode(encoded);
+        } else {
+          final source = await _safeFile((args['source'] ?? '').toString());
+          if (await source.length() > 8 * 1024 * 1024) {
+            return 'Choose an image smaller than 8 MB to edit.';
+          }
+          bytes = await source.readAsBytes();
         }
-        final file = await _safeFile('$name.$extension');
-        await file.writeAsBytes(bytes);
-        final filename = file.uri.pathSegments.last;
-        return '${online ? PollinationsImageService.attribution : 'Image generated.'}\n\n![Generated image](nmfile:$filename)';
+        final image = await PollinationsImageService().edit(
+          (args['prompt'] ?? '').toString(),
+          bytes,
+          key: key,
+          style: (args['style'] ?? '').toString(),
+        );
+        return _savePollinationsImage(image, args['name'], edited: true);
       },
     ),
     AgentTool(
@@ -925,7 +944,8 @@ class AgentService extends GetxService {
       final desktopShell =
           t.name == 'run_shell' && Get.isRegistered<DesktopCommandService>();
       if (!desktopShell &&
-          policyFor('built-in', t.name, needsConfirm: t.needsConfirm) == 'block') {
+          policyFor('built-in', t.name, needsConfirm: t.needsConfirm) ==
+              'block') {
         continue;
       }
       if (t.available == null || t.available!()) yield t;
@@ -1190,8 +1210,7 @@ class AgentService extends GetxService {
     }
     if (_gVoice.hasMatch(r))
       on.addAll(const {'text_to_speech', 'transcribe_audio', 'models_status'});
-    if (_gImage.hasMatch(r))
-      on.addAll(const {'generate_image', 'models_status'});
+    if (_gImage.hasMatch(r)) on.addAll(const {'generate_image', 'edit_image'});
     if (withFiles || _gFiles.hasMatch(r)) {
       on.addAll(const {
         'append_file',
@@ -1321,7 +1340,8 @@ class AgentService extends GetxService {
           'Shared folders: ${_user!.folders.map((f) => f.name).join(', ')}');
     if (on.any(_isSandboxTool)) {
       if (Get.isRegistered<DesktopCommandService>()) {
-        b.writeln('Use run_shell for the selected desktop or SSH VM target. The user controls command approvals.');
+        b.writeln(
+            'Use run_shell for the selected desktop or SSH VM target. The user controls command approvals.');
       } else {
         b.writeln(
             'The sandbox is one shared Linux for all chats: install what you need (install_packages), run code with run_script, and save reusable tools with create_tool.');
@@ -1631,11 +1651,13 @@ class AgentService extends GetxService {
             parseToolCall(written)?.textBefore ?? stripCall(written),
             printedToolNames);
         return ToolLoopResult(
-            _autoLinkFiles(_withSources(
-                answer.trim().isEmpty || isGenericOffer(answer)
-                    ? 'I couldn’t finish the request with the information I found.'
-                    : answer,
-                sources), trace),
+            _autoLinkFiles(
+                _withSources(
+                    answer.trim().isEmpty || isGenericOffer(answer)
+                        ? 'I couldn’t finish the request with the information I found.'
+                        : answer,
+                    sources),
+                trace),
             trace,
             false);
       }
@@ -1644,7 +1666,8 @@ class AgentService extends GetxService {
       onStatus(label);
       final idx = trace.length;
       final sw = Stopwatch()..start();
-      trace.add(stepLine(call.name, call.arguments, label, null, running: true));
+      trace
+          .add(stepLine(call.name, call.arguments, label, null, running: true));
       onTrace?.call(List.of(trace));
       final result = await executeTool(call, confirm);
       if (contextCall) {
@@ -1678,15 +1701,18 @@ class AgentService extends GetxService {
   static bool isGenericOffer(String answer) =>
       _genericOffer.hasMatch(answer.trim());
 
-  static final _printedTool =
-      RegExp(r'^\s*([a-z][a-z_0-9]+)\s*\{[^\n]*\}\s*$');
+  static final _printedTool = RegExp(r'^\s*([a-z][a-z_0-9]+)\s*\{[^\n]*\}\s*$');
 
   static String _stripPrintedTools(String reply, Set<String> names) {
     if (!reply.contains('{')) return reply;
-    return reply.split('\n').where((line) {
-      final name = _printedTool.firstMatch(line)?.group(1);
-      return name == null || !names.contains(name);
-    }).join('\n').trim();
+    return reply
+        .split('\n')
+        .where((line) {
+          final name = _printedTool.firstMatch(line)?.group(1);
+          return name == null || !names.contains(name);
+        })
+        .join('\n')
+        .trim();
   }
 
   static final _wantsFile = RegExp(
@@ -1955,9 +1981,18 @@ class AgentService extends GetxService {
     return i < 0 ? reply : reply.substring(0, i).trim();
   }
 
-  static bool get usesOnlineImageGeneration =>
-      !Get.find<LocalImageService>().isModelLoaded.value &&
-      WorkloadPlacement.forWorkload(PhoneWorkload.image) == null;
+  Future<String> _savePollinationsImage(PollinationsImage image, Object? name,
+      {required bool edited}) async {
+    var stem = name?.toString().trim() ?? '';
+    stem = stem.replaceFirst(
+        RegExp(r'\.(png|jpe?g|webp)$', caseSensitive: false), '');
+    if (stem.isEmpty) stem = 'image_${DateTime.now().microsecondsSinceEpoch}';
+    final file = await _safeFile('$stem.${image.extension}');
+    await file.writeAsBytes(image.bytes);
+    final filename = file.uri.pathSegments.last;
+    return '${edited ? 'Edited' : 'Generated'} online with Pollinations (${image.model}).'
+        '\n\n![${edited ? 'Edited' : 'Generated'} image](nmfile:$filename)';
+  }
 
   /// Runs one tool call (asking the user first when required).
   Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm,
@@ -1965,18 +2000,19 @@ class AgentService extends GetxService {
     for (final t in _allBuiltIns) {
       if (t.name == call.name) {
         try {
-          if (t.name == 'run_shell' && Get.isRegistered<DesktopCommandService>()) {
+          if (t.name == 'run_shell' &&
+              Get.isRegistered<DesktopCommandService>()) {
             return await Get.find<DesktopCommandService>()
                 .execute(call.arguments, filesDir, confirm);
           }
           final pol =
               policyFor('built-in', t.name, needsConfirm: t.needsConfirm);
           if (pol == 'block') return 'The user has blocked this tool.';
-          if ((pol == 'ask' ||
-                  (t.name == 'generate_image' &&
-                      usesOnlineImageGeneration &&
-                      !userRequestedOnlineImage)) &&
-              !await confirm(t.name, 'built-in', call.arguments)) {
+          final onlineImage =
+              t.name == 'generate_image' || t.name == 'edit_image';
+          final confirmationArgs = {...call.arguments}..remove('attachedImage');
+          if ((pol == 'ask' || (onlineImage && !userRequestedOnlineImage)) &&
+              !await confirm(t.name, 'built-in', confirmationArgs)) {
             return 'The user denied this tool call.';
           }
           final out = await t.run(call.arguments);

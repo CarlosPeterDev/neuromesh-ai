@@ -5,6 +5,8 @@ import android.app.DownloadManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -19,6 +21,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.security.MessageDigest
 import kotlin.concurrent.thread
 import kotlin.system.exitProcess
 import java.util.concurrent.ConcurrentHashMap
@@ -215,6 +218,10 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(null)
                 }
+                "installedApkSigners" -> {
+                    val info = packageManager.getPackageInfo(packageName, signingFlags())
+                    result.success(signerDigests(info).toList())
+                }
                 "installApk" -> {
                     val path = call.argument<String>("path")
                     if (path.isNullOrBlank() || !File(path).exists()) {
@@ -306,9 +313,42 @@ class MainActivity : FlutterActivity() {
         return downloadId
     }
 
+    @Suppress("DEPRECATION")
+    private fun signingFlags(): Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        PackageManager.GET_SIGNING_CERTIFICATES
+    } else {
+        PackageManager.GET_SIGNATURES
+    }
+
+    @Suppress("DEPRECATION")
+    private fun signerDigests(info: PackageInfo): Set<String> {
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.signingInfo?.apkContentsSigners
+        } else {
+            info.signatures
+        }
+        return signatures.orEmpty().map { signature ->
+            MessageDigest.getInstance("SHA-256").digest(signature.toByteArray())
+                .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        }.toSet()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun packageVersion(info: PackageInfo): Long =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode
+        else info.versionCode.toLong()
+
     /** Hands an APK to the system installer. Returns "needs_permission" when
      *  the user still has to allow installs from this app. */
     private fun installApk(file: File): String {
+        val incoming = packageManager.getPackageArchiveInfo(file.absolutePath, signingFlags())
+            ?: return "invalid_apk"
+        if (incoming.packageName != packageName) return "wrong_package"
+        val installed = packageManager.getPackageInfo(packageName, signingFlags())
+        val signers = signerDigests(installed)
+        if (signers.isEmpty() || signerDigests(incoming) != signers) return "different_signer"
+        if (packageVersion(incoming) < packageVersion(installed)) return "older_version"
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             !packageManager.canRequestPackageInstalls()
         ) {

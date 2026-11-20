@@ -42,7 +42,13 @@ class ClusterWorker {
 
   /// The same device at a new address.
   ClusterWorker movedTo(String host, int port) => ClusterWorker(
-      name: name, host: host, port: port, ramMb: ramMb, bandwidth: bandwidth, model: model, id: id);
+      name: name,
+      host: host,
+      port: port,
+      ramMb: ramMb,
+      bandwidth: bandwidth,
+      model: model,
+      id: id);
 
   Map<String, dynamic> toMap() => {
         'name': name,
@@ -112,7 +118,8 @@ class LlamaCluster {
   static Future<void> stopWorker() => _channel.invokeMethod('stopWorker');
 
   static Future<ClusterWorkerStatus> workerStatus() async {
-    final m = await _channel.invokeMapMethod<String, dynamic>('workerStatus') ?? {};
+    final m =
+        await _channel.invokeMapMethod<String, dynamic>('workerStatus') ?? {};
     return ClusterWorkerStatus(
       state: m['state'] as String? ?? 'stopped',
       error: m['error'] as String?,
@@ -146,7 +153,8 @@ class LlamaCluster {
   /// Where the last model load put its weights: llama.cpp buffer name
   /// ("CPU_Mapped", "RPC0[host:port]", …) and size in MB.
   static Future<List<({String name, double mb})>> lastLoadBuffers() async {
-    final list = await _channel.invokeListMethod<Map<dynamic, dynamic>>('lastLoadBuffers');
+    final list = await _channel
+        .invokeListMethod<Map<dynamic, dynamic>>('lastLoadBuffers');
     return [
       for (final m in list ?? const [])
         (name: m['name'] as String, mb: (m['mb'] as num).toDouble()),
@@ -162,6 +170,17 @@ class LlamaCluster {
   }
 
   /// Whether something answers on [endpoint] ("host:port").
+  static Future<String?> probeDiagnostic(String endpoint) async {
+    try {
+      return await _channel
+          .invokeMethod<String>('probeDiagnostic', {'endpoint': endpoint});
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
   static Future<bool> probe(String endpoint) async =>
       await _channel.invokeMethod<bool>('probe', {'endpoint': endpoint}) ??
       false;

@@ -74,6 +74,37 @@ void main() {
     expect(cloud.calls, 0);
   });
 
+  test('vague image requests ask once and use the reply as the description',
+      () async {
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    chat.textController.text = 'Create an image';
+    await chat.sendMessage();
+    expect(agent.imageCall, isNull);
+    expect(chat.messages.last.content, contains('what should it show'));
+    chat.textController.text = 'A fox in a snowy forest';
+    await chat.sendMessage();
+    expect(agent.imageCall?.arguments['prompt'], 'A fox in a snowy forest');
+  });
+
+  test('an edit routes the attached image to the editor', () async {
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    chat.selectedImageBase64.value = 'cGljdHVyZQ==';
+    chat.textController.text = 'Replace the background with a beach';
+    await chat.sendMessage();
+    expect(agent.imageCall?.name, 'edit_image');
+    expect(agent.imageCall?.arguments['attachedImage'], 'cGljdHVyZQ==');
+  });
+
+  test('chat refines prompts using the selected language model', () async {
+    cloud.answer =
+        '{"prompt":"A fox in a snowy forest, soft watercolor","question":"","style":"illustration"}';
+    chat.textController.text = 'Create an image of a fox';
+    await chat.sendMessage();
+    expect(agent.imageCall?.arguments['prompt'],
+        'A fox in a snowy forest, soft watercolor');
+    expect(agent.imageCall?.arguments['style'], 'illustration');
+  });
+
   test('local writing goes directly to TTS without creating a text file',
       () async {
     await hive.setSetting(AppConstants.keyInferenceMode, 'local');
@@ -99,7 +130,8 @@ void main() {
   test('web research writes a paragraph, then narrates exactly that paragraph',
       () async {
     Get.put<WebSearchService>(_TestWeb());
-    cloud.answer = 'Sport improves fitness and brings communities together [1].';
+    cloud.answer =
+        'Sport improves fitness and brings communities together [1].';
     chat.textController.text =
         'OK now search for the importance of sport in modern society '
         'then write a paragraph then create an audio file that reads it';
@@ -208,7 +240,9 @@ void main() {
         chat.messages.last.content, contains('couldn’t read "missing.html"'));
   });
 
-  test('an explicit search retry reuses the original topic and refreshes sources', () async {
+  test(
+      'an explicit search retry reuses the original topic and refreshes sources',
+      () async {
     final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
     const first = 'What is the strongest AI model today for coding?';
     chat.textController.text = first;
@@ -222,7 +256,8 @@ void main() {
     expect(web.refreshed, isTrue);
     expect(cloud.lastInput, contains('Research question:'));
     expect(cloud.lastInput, contains('Published benchmark results'));
-    expect(chat.messages.last.content, contains('https://example.com/benchmark'));
+    expect(
+        chat.messages.last.content, contains('https://example.com/benchmark'));
   });
 
   test('voice messages and attachments remain in the originating chat',
@@ -252,23 +287,31 @@ void main() {
     addTearDown(() => PathProviderPlatform.instance = original);
 
     Future<String> write(String project, String text) => agent.inProject(
-      project,
-      () => agent.executeTool(
-        ParsedToolCall('write_file', {'name': 'notes.txt', 'content': text}, ''),
-        (_, __, ___) async => true,
-      ),
-    );
+          project,
+          () => agent.executeTool(
+            ParsedToolCall(
+                'write_file', {'name': 'notes.txt', 'content': text}, ''),
+            (_, __, ___) async => true,
+          ),
+        );
     expect(await write('Project A', 'first draft'), startsWith('Wrote'));
     expect(await write('Project A', 'second draft'), startsWith('Wrote'));
     expect(await write('Project B', 'other project'), startsWith('Wrote'));
     await agent.inProject('Project A', () async {
       final versions = await agent.workspaceVersions('notes.txt');
       expect(versions, hasLength(1));
-      expect(await agent.restoreWorkspaceVersion('notes.txt', versions.single), isTrue);
-      expect(await File('${(await agent.filesDir()).path}/notes.txt').readAsString(), 'first draft');
+      expect(await agent.restoreWorkspaceVersion('notes.txt', versions.single),
+          isTrue);
+      expect(
+          await File('${(await agent.filesDir()).path}/notes.txt')
+              .readAsString(),
+          'first draft');
     });
     await agent.inProject('Project B', () async {
-      expect(await File('${(await agent.filesDir()).path}/notes.txt').readAsString(), 'other project');
+      expect(
+          await File('${(await agent.filesDir()).path}/notes.txt')
+              .readAsString(),
+          'other project');
       expect(await agent.workspaceVersions('notes.txt'), isEmpty);
     });
   });
@@ -296,7 +339,7 @@ class _WorkspaceAgent extends AgentService {
   @override
   Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm,
       {bool userRequestedOnlineImage = false}) async {
-    if (call.name == 'generate_image') {
+    if (call.name == 'generate_image' || call.name == 'edit_image') {
       imageCall = call;
       directImageRequest = userRequestedOnlineImage;
       return 'Generated online with Pollinations (Sana).';
@@ -361,17 +404,18 @@ class _TestCloud extends CloudService {
   }
 }
 
-
 class _TestWeb extends WebSearchService {
   String? previous;
   bool refreshed = false;
 
   @override
-  Future<WebContext?> buildContext(String question, {String? previous, bool refresh = false}) async {
+  Future<WebContext?> buildContext(String question,
+      {String? previous, bool refresh = false}) async {
     this.previous = previous;
     refreshed = refresh;
     return WebContext('Published benchmark results', const [
-      WebResult('Coding benchmark', 'https://example.com/benchmark', 'Model comparison')
+      WebResult('Coding benchmark', 'https://example.com/benchmark',
+          'Model comparison')
     ]);
   }
 }

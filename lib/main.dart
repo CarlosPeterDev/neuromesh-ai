@@ -14,6 +14,7 @@ import 'controllers/model_controller.dart';
 import 'core/theme.dart';
 //////
 import 'core/routes.dart';
+import 'views/home_view.dart' show homeRouteObserver;
 import 'services/agent_service.dart';
 import 'services/skills_service.dart';
 import 'services/user_files.dart';
@@ -276,6 +277,7 @@ class NeuroMeshApp extends StatelessWidget {
       final themeMode = settings.themeMode.value;
       final scale = settings.fontScale.value; // read here → Obx tracks it
       return GetMaterialApp(
+          navigatorObservers: [homeRouteObserver],
         title: 'NeuroMesh AI',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.lightTheme,

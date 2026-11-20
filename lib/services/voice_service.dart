@@ -154,12 +154,16 @@ class VoiceService extends GetxService {
     AudioPlayer? player,
     http.Client? workerClient,
     Future<Directory> Function()? temporaryDirectory,
+    Duration playbackGrace = const Duration(seconds: 5),
   })  : _player = player ?? AudioPlayer(),
         _workerClient = workerClient,
-        _temporaryDirectory = temporaryDirectory ?? getTemporaryDirectory;
+        _temporaryDirectory = temporaryDirectory ?? getTemporaryDirectory,
+        _playbackGrace = playbackGrace;
 
   final http.Client? _workerClient;
   final Future<Directory> Function() _temporaryDirectory;
+  final Duration _playbackGrace;
+  int _wavSerial = 0;
   sherpa.OfflineRecognizer? _stt;
   String? _sttId;
   sherpa.OfflineTts? _tts;
@@ -554,8 +558,28 @@ class VoiceService extends GetxService {
     }
     final sig = _stopSignal;
     if (sig != null && !sig.isCompleted) sig.complete();
-    await _player.stop();
-    await _system?.stop();
+    await _stopOutput();
+  }
+
+  Future<void> _stopOutput() async {
+    await Future.wait([
+      _stopAudioPlayer(),
+      if (_system != null)
+        _system!
+            .stop()
+            .then<void>((_) {})
+            .timeout(
+              const Duration(seconds: 3),
+              onTimeout: () {},
+            )
+            .catchError((Object _) {}),
+    ]);
+  }
+
+  Future<void> _stopAudioPlayer() async {
+    try {
+      await _player.stop().timeout(const Duration(seconds: 3));
+    } catch (_) {}
   }
 
   /// Synthesizes one chunk with the loaded on-device model.
@@ -661,13 +685,38 @@ class VoiceService extends GetxService {
     }
   }
 
-  Future<void> _playWav(Uint8List wav, int slot) async {
+  Future<void> _playWav(
+    Uint8List wav, {
+    void Function(bool)? onPlayback,
+  }) async {
+    final pcm = decodeWav(wav);
+    if (pcm == null ||
+        pcm.samples.isEmpty ||
+        !pcm.samples.any((sample) => sample.abs() > 0.0001)) {
+      throw const FormatException('The voice model returned silent audio.');
+    }
+    final duration = Duration(
+      milliseconds: (pcm.samples.length * 1000 / pcm.rate).ceil(),
+    );
     if (_stopSpeaking) return;
     final dir = await _temporaryDirectory();
     if (_stopSpeaking) return;
-    final f = File('${dir.path}/nm_tts_${slot % 2}.wav');
-    await f.writeAsBytes(wav);
-    if (_stopSpeaking) return;
+    // Android can keep a prepared audio source when the file URL repeats.
+    final f = File('${dir.path}/nm_tts_${++_wavSerial}.wav');
+    try {
+      await f.writeAsBytes(wav);
+      if (!_stopSpeaking) await _playAudioFile(f, duration, onPlayback);
+    } finally {
+      try {
+        await f.delete();
+      } on FileSystemException {
+        // The cache file may already have been reclaimed.
+      }
+    }
+  }
+
+  Future<void> _playAudioFile(
+      File file, Duration duration, void Function(bool)? onPlayback) async {
     final done = Completer<void>();
     final stopped = Completer<void>();
     _stopSignal = stopped;
@@ -687,23 +736,24 @@ class VoiceService extends GetxService {
       onDone: finish,
     );
     try {
-      await _player.play(DeviceFileSource(f.path));
+      await _player.play(DeviceFileSource(file.path));
       // A stop may arrive while the native player is still preparing. Its
       // late play completion must not restart audio after the interruption.
       if (_stopSpeaking) {
-        await _player.stop();
+        await _stopAudioPlayer();
         return;
       }
-      await Future.any([done.future, stopped.future]);
+      if (!done.isCompleted) onPlayback?.call(true);
+      await Future.any([done.future, stopped.future])
+          .timeout(duration + _playbackGrace);
       if (playbackError != null) {
         Error.throwWithStackTrace(playbackError!, playbackStack!);
       }
     } catch (_) {
-      try {
-        await _player.stop();
-      } catch (_) {}
+      await _stopAudioPlayer();
       rethrow;
     } finally {
+      onPlayback?.call(false);
       await subscription.cancel();
       if (identical(_stopSignal, stopped)) _stopSignal = null;
     }
@@ -717,6 +767,7 @@ class VoiceService extends GetxService {
     String workerLanguage = '',
     VoiceModelInfo? localModel,
     bool preferLocal = false,
+    void Function(bool)? onPlayback,
   }) async {
     final interruption = Completer<void>();
     _speechInterruption = interruption;
@@ -727,6 +778,7 @@ class VoiceService extends GetxService {
           workerLanguage: workerLanguage,
           localModel: localModel,
           preferLocal: preferLocal,
+          onPlayback: onPlayback,
           cancelled: interruption.future);
     } on WorkloadCancelled {
       // User interruption is a normal end of the utterance, not a voice error.
@@ -744,6 +796,7 @@ class VoiceService extends GetxService {
     VoiceModelInfo? localModel,
     bool preferLocal = false,
     required Future<void> cancelled,
+    void Function(bool)? onPlayback,
   }) async {
     final chunks = speechChunks(text);
     if (chunks.isEmpty) return;
@@ -751,13 +804,14 @@ class VoiceService extends GetxService {
         ? WorkloadPlacement.forWorkload(PhoneWorkload.speech)
         : null;
     if (assigned != null) {
-      for (var i = 0; i < chunks.length && !_stopSpeaking; i++) {
+      for (final chunk in chunks) {
+        if (_stopSpeaking) return;
         final audio = await assigned.request(PhoneWorkload.speech.path,
-            payload: {'text': chunks[i], 'language': workerLanguage},
+            payload: {'text': chunk, 'language': workerLanguage},
             cancelled: cancelled,
             timeout: const Duration(seconds: 45));
         if (_stopSpeaking) return;
-        await _playWav(audio, i);
+        await _playWav(audio, onPlayback: onPlayback);
       }
       return;
     }
@@ -766,46 +820,67 @@ class VoiceService extends GetxService {
     final localVoice =
         localModel ?? (_ttsId == null ? null : voiceModelById(_ttsId!));
     if (systemLang != null || (localVoice == null && !useWorker)) {
-      _system ??= FlutterTts();
-      await _system!.awaitSpeakCompletion(true);
-      await _system!.setLanguage(systemLang ?? 'en-US');
       for (final c in chunks) {
         if (_stopSpeaking) return;
-        await _system!.speak(c);
+        await _speakSystem(c, systemLang ?? 'en-US', cancelled, onPlayback);
       }
       return;
     }
     final localSpeaker = localModel == null ? sid : savedSpeaker(localModel);
     final localSpeed = speed;
     var workerOk = useWorker;
-    for (var i = 0; i < chunks.length; i++) {
+    for (final chunk in chunks) {
       if (_stopSpeaking) return;
       if (workerOk) {
-        final wav = await _remoteWav(chunks[i], cancelled: cancelled);
+        final wav = await _remoteWav(chunk, cancelled: cancelled);
         if (_stopSpeaking) return;
         if (wav != null) {
-          await _playWav(wav, i);
+          await _playWav(wav, onPlayback: onPlayback);
           if (_stopSpeaking) return;
           continue;
         }
         workerOk = false; // fall back to this phone for the rest
       }
       if (localVoice == null) {
-        // Worker unreachable and no local voice: use the phone's own voice.
-        _system ??= FlutterTts();
-        await _system!.awaitSpeakCompletion(true);
-        await _system!.setLanguage('en-US');
-        await _system!.speak(chunks[i]);
+        await _speakSystem(chunk, 'en-US', cancelled, onPlayback);
         continue;
       }
       final r = await _withTts(() async {
         await _loadTts(localVoice);
-        return synthesize(chunks[i],
+        return synthesize(chunk,
             speakerIndex: localSpeaker, speakingSpeed: localSpeed);
       });
-      if (r == null || _stopSpeaking) continue;
-      await _playWav(encodeWav(r.samples, r.rate), i);
       if (_stopSpeaking) return;
+      if (r == null) throw StateError('The voice model returned no audio.');
+      await _playWav(encodeWav(r.samples, r.rate), onPlayback: onPlayback);
+      if (_stopSpeaking) return;
+    }
+  }
+
+  Future<void> _speakSystem(String text, String language,
+      Future<void> cancelled, void Function(bool)? onPlayback) async {
+    final system = _system ??= FlutterTts();
+    final preparing = () async {
+      await system.awaitSpeakCompletion(true);
+      await system.setLanguage(language);
+    }();
+    await Future.any([preparing, cancelled])
+        .timeout(const Duration(seconds: 8));
+    if (_stopSpeaking) return;
+    try {
+      onPlayback?.call(true);
+      final speech = system.speak(text).then<void>((result) {
+        if (result == 0 && !_stopSpeaking) {
+          throw StateError('The system voice could not speak.');
+        }
+      });
+      final seconds = 12 + text.length ~/ 7;
+      await Future.any([speech, cancelled]).timeout(Duration(seconds: seconds));
+    } on TimeoutException {
+      await _stopOutput();
+      rethrow;
+    } finally {
+      onPlayback?.call(false);
     }
   }
 

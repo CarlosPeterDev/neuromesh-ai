@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../controllers/home_controller.dart';
@@ -9,8 +10,60 @@ import 'server_view.dart';
 import 'settings_view.dart';
 import '../core/haptics.dart';
 
-class HomeView extends GetView<HomeController> {
+final homeRouteObserver = RouteObserver<PageRoute<dynamic>>();
+
+class HomeView extends StatefulWidget {
   const HomeView({super.key});
+
+  @override
+  State<HomeView> createState() => _HomeViewState();
+}
+
+class _HomeViewState extends State<HomeView> with RouteAware {
+  final controller = Get.find<HomeController>();
+  bool _exitDialogOpen = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute<dynamic>) homeRouteObserver.subscribe(this, route);
+  }
+
+  @override
+  void didPopNext() {
+    if (controller.currentTab.value == 1) controller.modelsToTop();
+  }
+
+  @override
+  void dispose() {
+    homeRouteObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  Future<void> _back() async {
+    if (_exitDialogOpen || controller.goBack()) return;
+    _exitDialogOpen = true;
+    try {
+      final exit = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Exit NeuroMesh AI?'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Stay')),
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Exit')),
+          ],
+        ),
+      );
+      if (exit == true && mounted) await SystemNavigator.pop();
+    } finally {
+      _exitDialogOpen = false;
+    }
+  }
 
   static const _tabs = [
     _NavItem(
@@ -39,41 +92,47 @@ class HomeView extends GetView<HomeController> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Obx(() => Scaffold(
-          key: controller.scaffoldKey,
-          backgroundColor: isDark ? Colors.black : Colors.white,
-          drawer: const ChatDrawer(),
-          drawerScrimColor: Colors.black.withValues(alpha: isDark ? 0.6 : 0.32),
-          // Edge-swipe only where the sidebar makes sense.
-          drawerEnableOpenDragGesture: controller.currentTab.value == 0,
-          drawerEdgeDragWidth: 28,
-          body: Obx(() {
-            final content = IndexedStack(
-              index: controller.currentTab.value,
-              children: const [
-                ChatView(),
-                ModelView(),
-                ServerView(),
-                SettingsView()
-              ],
-            );
-            if (_isWide) {
-              return Row(children: [
-                _buildSidebar(context, isDark),
-                VerticalDivider(
-                    width: 0.5,
-                    thickness: 0.5,
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.08)
-                        : Colors.black.withValues(alpha: 0.08)),
-                Expanded(child: content),
-              ]);
-            }
-            return content;
-          }),
-          bottomNavigationBar:
-              _isWide ? null : _buildBottomNav(context, isDark),
-        ));
+    return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) _back();
+        },
+        child: Obx(() => Scaffold(
+              key: controller.scaffoldKey,
+              backgroundColor: isDark ? Colors.black : Colors.white,
+              drawer: const ChatDrawer(),
+              drawerScrimColor:
+                  Colors.black.withValues(alpha: isDark ? 0.6 : 0.32),
+              // Edge-swipe only where the sidebar makes sense.
+              drawerEnableOpenDragGesture: controller.currentTab.value == 0,
+              drawerEdgeDragWidth: 28,
+              body: Obx(() {
+                final content = IndexedStack(
+                  index: controller.currentTab.value,
+                  children: const [
+                    ChatView(),
+                    ModelView(),
+                    ServerView(),
+                    SettingsView()
+                  ],
+                );
+                if (_isWide) {
+                  return Row(children: [
+                    _buildSidebar(context, isDark),
+                    VerticalDivider(
+                        width: 0.5,
+                        thickness: 0.5,
+                        color: isDark
+                            ? Colors.white.withValues(alpha: 0.08)
+                            : Colors.black.withValues(alpha: 0.08)),
+                    Expanded(child: content),
+                  ]);
+                }
+                return content;
+              }),
+              bottomNavigationBar:
+                  _isWide ? null : _buildBottomNav(context, isDark),
+            )));
   }
 
   Widget _buildBottomNav(BuildContext context, bool isDark) {

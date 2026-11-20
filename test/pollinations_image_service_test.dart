@@ -1,9 +1,100 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:neuromesh_ai/services/pollinations_image_service.dart';
 
 void main() {
+  const freeEditor = 'community/test/flux-edit-free';
+  const freePortrait = 'community/test/lucid-origin:free';
+  final catalog = [
+    {
+      'name': 'community/test/paid-editor-free',
+      'input_modalities': ['text', 'image'],
+      'output_modalities': ['image'],
+      'pricing': {'currency': 'pollen', 'completionImageTokens': '1'}
+    },
+    {
+      'name': freePortrait,
+      'input_modalities': ['text'],
+      'output_modalities': ['image'],
+      'pricing': {'currency': 'pollen'}
+    },
+    {
+      'name': freeEditor,
+      'input_modalities': ['text', 'image'],
+      'output_modalities': ['image'],
+      'pricing': {'currency': 'pollen'}
+    },
+  ];
+
+  test('distinguishes vague creation, photo edits and ordinary writing', () {
+    expect(ImageRequest.parse('Make an image of a fox')?.action,
+        ImageAction.create);
+    expect(ImageRequest.parse('Create an image')?.description, isEmpty);
+    expect(ImageRequest.parse('Edit this photo')?.description, isEmpty);
+    expect(ImageRequest.parse('Add snow', hasImage: true)?.action,
+        ImageAction.edit);
+    expect(ImageRequest.parse('Edit the introduction'), isNull);
+    expect(ImageRequest.parse('Describe this photo', hasImage: true), isNull);
+  });
+
+  test('model routing skips paid and text-only models for edits', () {
+    expect(
+        PollinationsImageService.chooseFreeModel(catalog,
+            edit: false, style: 'illustration'),
+        freePortrait);
+    expect(
+        PollinationsImageService.chooseFreeModel(catalog,
+            edit: false, style: 'photo'),
+        freeEditor);
+    expect(PollinationsImageService.chooseFreeModel(catalog, edit: true),
+        freeEditor);
+    expect(
+        PollinationsImageService.chooseFreeModel(catalog.take(2).toList(),
+            edit: true),
+        isNull);
+  });
+
+  test('uploads the actual image only to the free editing endpoint', () async {
+    final png =
+        Uint8List.fromList([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+    var requests = 0;
+    final client = MockClient((request) async {
+      requests++;
+      expect(request.url.host, 'gen.pollinations.ai');
+      expect(request.followRedirects, isFalse);
+      if (request.url.path == '/image/models') {
+        expect(request.method, 'GET');
+        expect(request.headers['authorization'], isNull);
+        return http.Response(jsonEncode(catalog), 200);
+      }
+      expect(request.url.path, '/v1/images/edits');
+      expect(request.method, 'POST');
+      expect(request.headers['authorization'], 'Bearer sample-key');
+      final body = jsonDecode(request.body) as Map;
+      expect(body['model'], freeEditor);
+      expect(body['image'], [
+        {'image_url': 'data:image/png;base64,${base64Encode(png)}'}
+      ]);
+      expect(body['prompt'], 'Turn the sky purple');
+      return http.Response(
+          jsonEncode({
+            'data': [
+              {'b64_json': base64Encode(png)}
+            ]
+          }),
+          200);
+    });
+    final result = await PollinationsImageService()
+        .edit('Turn the sky purple', png, key: 'sample-key', client: client);
+    expect(result.model, freeEditor);
+    expect(result.extension, 'png');
+    expect(requests, 2);
+  });
+
   test('only explicit standalone image requests dispatch automatically', () {
     for (final request in [
       'Create an image of a fox',
