@@ -18,6 +18,8 @@ import '../services/app_log_service.dart';
 import '../services/device_info_service.dart';
 import '../services/device_bridge.dart';
 import '../services/model_load_diagnostics.dart';
+import '../services/model_artifact_metadata.dart';
+import '../services/model_helper_service.dart';
 import '../views/diagnostics_view.dart';
 import '../models/ai_model.dart';
 import '../ffi/sd_ffi_bindings.dart';
@@ -58,6 +60,8 @@ class ModelController extends GetxController {
   /// list but tell us whether a vision model can read images yet.
   final visionFiles = <String>{}.obs;
   final _installedVisionHelpers = InstalledVisionHelpers();
+  final _artifactReader = ModelArtifactReader();
+  final _artifacts = <String, ModelArtifact>{};
   final _visionSources = <String, AiModel>{};
   final isImporting = false.obs;
   final isPreparingModel = false.obs;
@@ -184,15 +188,23 @@ class ModelController extends GetxController {
   Future<void> refreshDownloaded() async {
     await _deletePartialImports();
     final allFiles = await _download.getDownloadedModels();
-    visionFiles
-      ..clear()
-      ..addAll(allFiles.where(_isVisionProjectorFile));
-    final files =
-        allFiles;
-    downloadedFiles.value = files;
+    final files = allFiles;
     for (final file in files) {
       fileSizes[file] = await _download.getModelSize(file);
+      if (!kIsWeb) {
+        final artifact = await _artifactReader.read(await _download.modelPath(file));
+        if (artifact == null) {
+          _artifacts.remove(file);
+        } else {
+          _artifacts[file] = artifact;
+        }
+      }
     }
+    _artifacts.removeWhere((file, _) => !files.contains(file));
+    visionFiles
+      ..clear()
+      ..addAll(files.where(_isVisionProjectorFile));
+    downloadedFiles.value = files;
 
     // Add any downloaded files that are not in availableModels
     final existingFilenames = availableModels.map((m) {
@@ -241,7 +253,8 @@ class ModelController extends GetxController {
     };
     for (final model in availableModels.toList()) {
       if (!files.contains(model.filename)) continue;
-      final resolved = await _resolveVisionHelper(model, paths: helperPaths);
+      final described = model.copyWith(artifact: _artifacts[model.filename] ?? const ModelArtifact());
+      final resolved = await _resolveVisionHelper(described, paths: helperPaths);
       final index = availableModels.indexWhere((m) => m.filename == model.filename);
       if (index >= 0 && identical(availableModels[index], model)) {
         availableModels[index] = resolved;
@@ -271,16 +284,32 @@ class ModelController extends GetxController {
         isVision: true);
   }
 
+  Future<String?> installedFileFingerprint(String filename) async {
+    if (kIsWeb || !isDownloaded(filename)) return null;
+    return _installedVisionHelpers.fingerprint(await _download.modelPath(filename));
+  }
+
+  Future<VisionHelperSource?> identifyInstalledVisionHelper(
+      String filename) async {
+    if (kIsWeb ||
+        !_isVisionProjectorFile(filename) ||
+        !isDownloaded(filename)) return null;
+    return _installedVisionHelpers.identify(await _download.modelPath(filename));
+  }
+
   Future<AiModel> _resolveVisionHelper(AiModel model,
       {Map<String, String>? paths}) async {
     if (kIsWeb) return model;
-    final source = _withHelper(_visionSources[model.filename] ?? model);
+    final source = _withHelper((_visionSources[model.filename] ?? model)
+        .copyWith(artifact: _artifacts[model.filename] ?? const ModelArtifact()));
     final helpers = paths ?? {
       for (final file in (await _download.getDownloadedModels())
           .where(_isVisionProjectorFile))
         file: await _download.modelPath(file),
     };
-    final match = await _installedVisionHelpers.find(source, helpers);
+    final match = await _installedVisionHelpers.find(source, helpers,
+        matchesMetadata: (filename) => ModelHelperService.matchesBaseMetadata(
+            source, _artifacts[filename]));
     if (match == null || match == source.mmprojFilename) return source;
     _visionSources.putIfAbsent(model.filename, () => source);
     return source.copyWith(mmprojFilename: match, mmprojUrl: '', isVision: true);
@@ -288,8 +317,8 @@ class ModelController extends GetxController {
 
   Future<void> attachVisionHelper(
       AiModel model, String filename, String url) async {
-    if (modelFileRole(filename) != ModelFileRole.projector ||
-        modelFileRole(model.filename).isHelper ||
+    if (!_isVisionProjectorFile(filename) ||
+        model.fileRole.isHelper ||
         model.runtime != AiModel.runtimeLlama) {
       throw const FormatException('Choose a main GGUF model and a vision projector.');
     }
@@ -311,10 +340,11 @@ class ModelController extends GetxController {
     return downloadedFiles.contains(filename);
   }
 
-  bool _isVisionProjectorFile(String filename) {
-    final lower = filename.toLowerCase();
-    return lower.endsWith('.gguf') && lower.contains('mmproj');
-  }
+  ModelFileRole fileRole(String filename) =>
+      _artifacts[filename]?.role ?? modelFileRole(filename);
+
+  bool _isVisionProjectorFile(String filename) =>
+      fileRole(filename) == ModelFileRole.projector;
 
   /// Find the catalogue entry by filename, or by the exact Artemis family
   /// when a user has imported a different quantization.
@@ -766,8 +796,8 @@ class ModelController extends GetxController {
           tone: ToastTone.warning);
       return;
     }
-    if (modelFileRole(filename).isHelper || _isAuxiliaryImageFile(filename)) {
-      showToast('Helper file', modelFileRole(filename).help,
+    if (fileRole(filename).isHelper || _isAuxiliaryImageFile(filename)) {
+      showToast('Helper file', fileRole(filename).help,
           tone: ToastTone.info);
       return;
     }

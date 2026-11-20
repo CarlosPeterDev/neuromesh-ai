@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:neuromesh_ai/services/gguf_metadata.dart';
+import 'package:neuromesh_ai/services/model_artifact_metadata.dart';
+import 'package:neuromesh_ai/utils/model_file_role.dart';
 
 /// Minimal GGUF v3 writer for tests (header + metadata only).
 class _GgufBuilder {
@@ -76,6 +78,40 @@ void main() {
     await f.writeAsBytes(bytes);
     return f.path;
   }
+
+  test('detects a renamed GGUF projector from metadata and keeps its base',
+      () async {
+    final g = _GgufBuilder()
+      ..string('general.architecture', 'clip')
+      ..string('clip.projector_type', 'qwen2vl')
+      ..string('general.base_model.0.name', 'Example Vision 3B')
+      ..string('general.base_model.0.repo_url',
+          'https://huggingface.co/example/vision');
+    final path = await write(g.build());
+    expect(await readGgufInfo(path), isNull);
+    final info = await ModelArtifactReader().read(path);
+    expect(info?.role, ModelFileRole.projector);
+    expect(info?.baseNames, {'Example Vision 3B'});
+    expect(info?.baseRepositories, {'example/vision'});
+  });
+
+  test('detects a renamed Safetensors LoRA from its header', () async {
+    final header = utf8.encode(jsonEncode({
+      '__metadata__': {'base_model_name_or_path': 'example/vision'},
+      'encoder.layer.lora_A.weight': {
+        'dtype': 'F16',
+        'shape': [2],
+        'data_offsets': [0, 4]
+      },
+    }));
+    final prefix = ByteData(8)..setUint64(0, header.length, Endian.little);
+    final file = File('${dir.path}/custom.safetensors');
+    await file
+        .writeAsBytes([...prefix.buffer.asUint8List(), ...header, 0, 0, 0, 0]);
+    final info = await ModelArtifactReader().read(file.path);
+    expect(info?.role, ModelFileRole.adapter);
+    expect(info?.baseRepositories, {'example/vision'});
+  });
 
   // Shaped like Qwen2.5-1.5B: 28 layers, 1536 dim, 12 heads, 2 KV heads.
   Uint8List qwenLike({int padTo = 0}) {

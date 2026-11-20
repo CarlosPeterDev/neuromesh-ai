@@ -92,3 +92,9 @@ Hugging Face files, the active download list, the download queue, and My models 
 - Android llama.cpp token streaming preserves UTF-8 characters across token boundaries and sends UTF-16 to Kotlin. A host check covered fragmented emoji, Arabic, malformed and ASCII characters. The app’s live web search returned sources for the reported sports question and the coding model question. Device reproduction remains open.
 
 Normal writing requests that explicitly ask for narration use the same two-stage flow. Chat runs the writing stage with tools off, then sends the finished text to the WAV tool. No intermediate notes file is necessary. Local orchestration tests cover both writing requests from the user’s screenshot. [Tracking issue](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/39)
+
+## Matching imported models and helpers
+
+- **My models** classifies artifacts from their filenames and supported GGUF and Safetensors metadata. Renamed GGUF projectors and LoRA adapters can be identified from their headers. Associations use saved links, publisher base-model metadata, family names, and verified checksums from Hugging Face. The Artemis BF16 and F16 publisher digests are available offline.
+- **Find main models** and **Find helpers** display compatible installed candidates and show the publisher’s repository when identified. A generic file with insufficient evidence can be searched by model name or repository, or linked manually after compatibility confirmation. Only supported GGUF vision projectors can be attached from this screen. Other helpers are identified and listed for comparison.
+- Tests cover renamed projectors and adapters, general base-model associations, checksum matching, ambiguous files, and the genuine BF16 artifact. Physical Android import and pairing remain to be checked. [Tracking issue](https://github.com/carlospeter582011-prog/neuromesh-ai/issues/41)

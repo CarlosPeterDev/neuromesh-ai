@@ -121,6 +121,21 @@ Future<GgufInfo?> readGgufInfo(String path) async {
   }
 }
 
+/// Small identity fields shared by text GGUFs, projectors, and adapters.
+Future<Map<String, Object?>> readGgufArtifactFields(String path) async {
+  try {
+    final file = await File(path).open();
+    try {
+      final reader = _GgufReader(file, await file.length());
+      return (await reader.fields(artifact: true))?.values ?? const {};
+    } finally {
+      await file.close();
+    }
+  } on Exception {
+    return const {};
+  }
+}
+
 class _GgufReader {
   _GgufReader(this._raf, this._fileLength);
 
@@ -275,7 +290,8 @@ class _GgufReader {
     }
   }
 
-  Future<GgufInfo?> read() async {
+  Future<({int tensorCount, Map<String, Object?> values})?> fields(
+      {required bool artifact}) async {
     final magic = await _bytes(4);
     if (utf8.decode(magic.buffer.asUint8List(magic.offsetInBytes, 4)) !=
         'GGUF') {
@@ -291,20 +307,33 @@ class _GgufReader {
     for (var i = 0; i < kvCount; i++) {
       final key = await _string();
       final type = await _u32();
-      final keep = key == 'general.architecture' ||
-          key == 'general.name' ||
-          key == 'general.size_label' ||
-          key == 'general.file_type' ||
-          key == 'general.parameter_count' ||
-          key == 'split.count' ||
-          key.endsWith('.block_count') ||
-          key.endsWith('.context_length') ||
-          key.endsWith('.embedding_length') ||
-          key.contains('.attention.');
+      final keep = artifact
+          ? key.startsWith('general.') ||
+              key == 'adapter.type' ||
+              key == 'clip.projector_type' ||
+              key == 'clip.has_vision_encoder' ||
+              key == 'clip.has_text_encoder'
+          : key == 'general.architecture' ||
+              key == 'general.name' ||
+              key == 'general.size_label' ||
+              key == 'general.file_type' ||
+              key == 'general.parameter_count' ||
+              key == 'split.count' ||
+              key.endsWith('.block_count') ||
+              key.endsWith('.context_length') ||
+              key.endsWith('.embedding_length') ||
+              key.contains('.attention.');
       final value = await _value(type, keep: keep);
       if (keep) values[key] = value;
     }
 
+    return (tensorCount: tensorCount, values: values);
+  }
+
+  Future<GgufInfo?> read() async {
+    final fields = await this.fields(artifact: false);
+    if (fields == null) return null;
+    final (:tensorCount, :values) = fields;
     final arch = values['general.architecture'];
     if (arch is! String) return null;
     int? intOf(String key) {

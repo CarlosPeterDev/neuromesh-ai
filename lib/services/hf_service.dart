@@ -46,7 +46,8 @@ class HfRepo {
   /// from the name ("Qwen2.5-7B", "gemma-270m"). Null when unknown.
   double? get paramsB {
     if (totalParams != null && totalParams! > 0) return totalParams! / 1e9;
-    final m = RegExp(r'(?<![a-z0-9])(\d+(?:\.\d+)?)\s?([bm])(?![a-z])', caseSensitive: false)
+    final m = RegExp(r'(?<![a-z0-9])(\d+(?:\.\d+)?)\s?([bm])(?![a-z])',
+            caseSensitive: false)
         .firstMatch(name);
     if (m == null) return null;
     final v = double.tryParse(m.group(1)!);
@@ -83,7 +84,9 @@ class HfRepo {
     final gguf = json['gguf'];
     return HfRepo(
       architecture: gguf is Map ? gguf['architecture']?.toString() : null,
-      totalParams: gguf is Map && gguf['total'] is num ? (gguf['total'] as num).toInt() : null,
+      totalParams: gguf is Map && gguf['total'] is num
+          ? (gguf['total'] as num).toInt()
+          : null,
       pipelineTag: json['pipeline_tag']?.toString(),
       tags: json['tags'] is List
           ? (json['tags'] as List).map((e) => e.toString()).toList()
@@ -110,8 +113,9 @@ bool isImageAddon(String lowerName) =>
 class HfGgufFile {
   final String path;
   final int size;
+  final String? sha256;
 
-  const HfGgufFile({required this.path, required this.size});
+  const HfGgufFile({required this.path, required this.size, this.sha256});
 
   String get filename => path.split('/').last;
   ModelFileRole get role => modelFileRole(path);
@@ -209,8 +213,8 @@ class HfService {
   /// Files exposed by the repository browser, including unclassified items.
   Future<List<HfGgufFile>> listRepositoryFiles(String repoId,
       {bool recursive = true}) async {
-    final data = await _getJson(Uri.https(_host, '/api/models/$repoId/tree/main',
-        {if (recursive) 'recursive': 'true'}));
+    final data = await _getJson(Uri.https(_host,
+        '/api/models/$repoId/tree/main', {if (recursive) 'recursive': 'true'}));
     if (data is! List) throw HfException('Unexpected reply from Hugging Face.');
     final files = <HfGgufFile>[];
     for (final item in data.whereType<Map<String, dynamic>>()) {
@@ -219,7 +223,14 @@ class HfService {
       if (path.isEmpty) continue;
       final lfs = item['lfs'];
       final size = (lfs is Map ? lfs['size'] : null) ?? item['size'];
-      files.add(HfGgufFile(path: path, size: (size as num?)?.toInt() ?? 0));
+      final digest = lfs is Map ? lfs['oid'] : null;
+      files.add(HfGgufFile(
+        path: path,
+        size: (size as num?)?.toInt() ?? 0,
+        sha256: digest is String && RegExp(r'^[a-f0-9]{64}$').hasMatch(digest)
+            ? digest
+            : null,
+      ));
     }
     return files;
   }
@@ -228,7 +239,8 @@ class HfService {
   Future<List<HfGgufFile>> listGgufFiles(String repoId,
       {bool images = false, bool includeHelpers = false}) async {
     final files = (await listRepositoryFiles(repoId, recursive: !images))
-        .where((file) => canDownloadSingleFile(file, images: images) &&
+        .where((file) =>
+            canDownloadSingleFile(file, images: images) &&
             (includeHelpers || images || !file.role.isHelper))
         .toList();
     files.sort((a, b) => a.size.compareTo(b.size));
@@ -259,14 +271,16 @@ class HfService {
 
   Future<dynamic> _getJson(Uri uri) async {
     try {
-      final res =
-          await _client.get(uri, headers: _headers).timeout(const Duration(seconds: 20));
+      final res = await _client
+          .get(uri, headers: _headers)
+          .timeout(const Duration(seconds: 20));
       if (res.statusCode == 200) return jsonDecode(utf8.decode(res.bodyBytes));
       if (res.statusCode == 401 || res.statusCode == 403) {
         throw HfException('This model needs a Hugging Face login.');
       }
       if (res.statusCode == 429) {
-        throw HfException('Hugging Face is rate limiting requests. Try again in a minute.');
+        throw HfException(
+            'Hugging Face is rate limiting requests. Try again in a minute.');
       }
       throw HfException('Hugging Face returned an error (${res.statusCode}).');
     } on HfException {
@@ -274,7 +288,8 @@ class HfService {
     } on TimeoutException {
       throw HfException('Hugging Face took too long to answer.');
     } catch (_) {
-      throw HfException('Could not reach Hugging Face. Check your internet connection.');
+      throw HfException(
+          'Could not reach Hugging Face. Check your internet connection.');
     }
   }
 
