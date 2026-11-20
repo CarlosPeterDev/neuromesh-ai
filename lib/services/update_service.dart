@@ -27,6 +27,7 @@ class AppRelease {
   final String? apkName;
   final String? apkUrl;
   final int apkSize;
+  final String? signerSha256;
 
   const AppRelease({
     required this.version,
@@ -37,6 +38,7 @@ class AppRelease {
     this.apkName,
     this.apkUrl,
     this.apkSize = 0,
+    this.signerSha256,
   });
 }
 
@@ -134,20 +136,35 @@ class UpdateService extends GetxService with WidgetsBindingObserver {
       }
       final res = await http.get(
         Uri.parse(
-            'https://api.github.com/repos/${AppConstants.githubRepo}/releases/latest'),
+            'https://api.github.com/repos/${AppConstants.githubRepo}/releases/tags/latest'),
         headers: const {'Accept': 'application/vnd.github+json'},
       ).timeout(const Duration(seconds: 15));
       if (res.statusCode != 200) {
         throw HttpException('GitHub returned ${res.statusCode}');
       }
-      final release =
-          _parseRelease(jsonDecode(res.body) as Map<String, dynamic>);
+      final release = parseRelease(jsonDecode(res.body) as Map<String, dynamic>,
+          abi: _abiTag());
       final now = DateTime.now();
       lastCheck.value = now;
       await _hive.setSetting(
           AppConstants.keyLastUpdateCheck, now.millisecondsSinceEpoch);
 
       final newer = compareVersions(release.version, currentVersion.value) > 0;
+      if (newer && release.signerSha256 != null) {
+        final signers =
+            await _channel.invokeListMethod<String>('installedApkSigners');
+        if (signers?.contains(release.signerSha256) != true) {
+          availableUpdate.value = null;
+          lastError.value = _differentSignerMessage;
+          state.value = UpdateState.error;
+          if (manual) {
+            showToast('Different Android signer', lastError.value,
+                tone: ToastTone.warning);
+          }
+          return null;
+        }
+      }
+      lastError.value = '';
       availableUpdate.value = newer ? release : null;
       state.value = UpdateState.idle;
       if (manual && !newer) {
@@ -168,7 +185,8 @@ class UpdateService extends GetxService with WidgetsBindingObserver {
     }
   }
 
-  AppRelease _parseRelease(Map<String, dynamic> json) {
+  static AppRelease parseRelease(Map<String, dynamic> json,
+      {required String abi}) {
     final tag = (json['tag_name'] as String? ?? '').trim();
     final assets = (json['assets'] as List? ?? [])
         .cast<Map<String, dynamic>>()
@@ -176,9 +194,18 @@ class UpdateService extends GetxService with WidgetsBindingObserver {
         .toList();
     Map<String, dynamic>? pick(String abi) =>
         assets.firstWhereOrNull((a) => (a['name'] as String).contains(abi));
-    final asset = pick(_abiTag()) ?? pick('universal');
+    final asset = pick(abi) ?? pick('universal');
+    final notes = json['body'] as String? ?? '';
+    final namedVersion = RegExp(r'v(\d+\.\d+\.\d+)')
+        .firstMatch('${asset?['name'] ?? ''} ${json['name'] ?? ''}')
+        ?.group(1);
+    final signer = RegExp(r'^- Android APK signer SHA-256: ([a-f0-9]{64})\s*$',
+            caseSensitive: false, multiLine: true)
+        .firstMatch(notes)
+        ?.group(1);
     return AppRelease(
-      version: _normalize(tag),
+      version: _normalize(namedVersion ?? tag),
+      signerSha256: signer?.toLowerCase(),
       name: (json['name'] as String?)?.trim().isNotEmpty == true
           ? json['name'] as String
           : 'NeuroMesh AI $tag',
@@ -194,7 +221,7 @@ class UpdateService extends GetxService with WidgetsBindingObserver {
   static String _abiTag() {
     switch (Abi.current()) {
       case Abi.androidArm64:
-        return 'arm64-v8a';
+        return 'arm64';
       case Abi.androidArm:
         return 'armeabi-v7a';
       case Abi.androidX64:
@@ -302,6 +329,9 @@ class UpdateService extends GetxService with WidgetsBindingObserver {
     await _install('${dir.path}/$filename');
   }
 
+  static const _differentSignerMessage =
+      'This APK was signed with a different key. Use the same download channel as this installation. Play Store installs update through Google Play.';
+
   Future<void> _install(String path) async {
     state.value = UpdateState.installing;
     try {
@@ -313,6 +343,17 @@ class UpdateService extends GetxService with WidgetsBindingObserver {
       } else {
         _pendingInstallPath = null;
         needsInstallPermission.value = false;
+        final error = switch (result) {
+          'different_signer' => _differentSignerMessage,
+          'wrong_package' => 'This APK is for a different app.',
+          'older_version' => 'This APK is older than the installed app.',
+          'invalid_apk' => 'Android couldn’t read this APK.',
+          _ => null,
+        };
+        if (error != null) {
+          _fail(error);
+          return;
+        }
       }
       state.value = UpdateState.idle;
     } catch (e) {
@@ -360,8 +401,8 @@ class UpdateService extends GetxService with WidgetsBindingObserver {
       if (dir == null || !await dir.exists()) return;
       await for (final f in dir.list()) {
         if (f is! File) continue;
-        final m =
-            RegExp(r'NeuroMesh AI-([\d.]+)-').firstMatch(f.uri.pathSegments.last);
+        final m = RegExp(r'NeuroMesh AI-([\d.]+)-')
+            .firstMatch(f.uri.pathSegments.last);
         if (m == null ||
             compareVersions(m.group(1)!, currentVersion.value) <= 0) {
           await f.delete();

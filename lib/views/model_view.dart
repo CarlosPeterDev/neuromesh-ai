@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../controllers/cloud_model_controller.dart';
 import '../controllers/model_controller.dart';
+import '../controllers/home_controller.dart';
 import '../controllers/settings_controller.dart';
 import '../core/ui.dart';
 import '../models/ai_model.dart';
@@ -13,6 +14,7 @@ import '../services/download_queue.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
 import 'hf_browser.dart';
+import 'pollinations_view.dart';
 import 'model_helpers_view.dart';
 import '../utils/model_file_role.dart';
 import '../widgets/model_file_filter.dart';
@@ -70,7 +72,9 @@ class ModelView extends GetView<ModelController> {
         ],
       ),
       body: ScrollToEnd(
-        label: 'Go to end of models',
+        label: 'Go to top of models',
+        toStart: true,
+        controller: Get.find<HomeController>().modelScroll,
         child: RefreshIndicator(
           onRefresh: () async {
             final scope = controller.modelScope.value;
@@ -84,6 +88,7 @@ class ModelView extends GetView<ModelController> {
           child: Obx(() {
             final scope = controller.modelScope.value;
             return ListView(
+              controller: Get.find<HomeController>().modelScroll,
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
               children: [
                 _buildScopeToggle(),
@@ -98,7 +103,7 @@ class ModelView extends GetView<ModelController> {
                 ] else if (scope == 'browse') ...[
                   const HfBrowser(key: ValueKey('hf-gguf')),
                 ] else if (scope == 'images') ...[
-                  const HfBrowser(key: ValueKey('hf-images'), images: true),
+                  const PollinationsPanel(),
                 ] else if (scope == 'voice')
                   const VoiceModelCatalog()
                 else
@@ -1833,7 +1838,8 @@ class ModelView extends GetView<ModelController> {
   /// My models: everything on the phone. Tap a row to load it.
   List<Widget> _buildLibrary(BuildContext context) {
     final installed = controller.displayedModels
-        .where((m) => controller.isDownloaded(m.filename)).toList();
+        .where((m) => controller.isDownloaded(m.filename) &&
+            (!controller.isImageModel(m) || m.fileKind == ModelFileKind.helper)).toList();
     if (installed.isEmpty) return [_buildEmptyLibrary(context)];
     final filter = controller.libraryKindFilter;
     final picked = filter.value;
@@ -2519,12 +2525,9 @@ class _ModelAvatar extends StatelessWidget {
   final String name;
   final bool image;
   final bool loaded;
-  final double size;
+  static const double size = 38;
   const _ModelAvatar(
-      {required this.name,
-      this.image = false,
-      this.loaded = false,
-      this.size = 38});
+      {required this.name, this.image = false, this.loaded = false});
 
   static const _families = <(String, String, Color)>[
     ('gemma', 'Ge', Color(0xFF4285F4)),

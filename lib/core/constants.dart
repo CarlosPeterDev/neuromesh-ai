@@ -35,7 +35,8 @@ class AppConstants {
   static const String keyCustomCloudModel = 'custom_cloud_model';
   static const String keyGlobalSystemPrompt = 'global_system_prompt';
   static const String keyLocalModelPath = 'local_model_path';
-  static const String keyLocalModelIncludesHelpers = 'local_model_includes_helpers';
+  static const String keyLocalModelIncludesHelpers =
+      'local_model_includes_helpers';
   static const String keyLocalModelName = 'local_model_name';
   static const String keyLocalModelRuntime = 'local_model_runtime';
   static const String keyLocalModelBackend = 'local_model_backend';
@@ -108,13 +109,16 @@ class AppConstants {
   static const artemisStarter = <String, String>{
     'name': 'Qwen 3.5 0.8B Artemis',
     'filename': 'Qwen3.5-0.8B-Artemis-Q4_K_M.gguf',
-    'url': 'https://huggingface.co/turintech/Qwen3.5-0.8B-Artemis-GGUF/resolve/main/Qwen3.5-0.8B-Artemis-Q4_K_M.gguf',
+    'url':
+        'https://huggingface.co/turintech/Qwen3.5-0.8B-Artemis-GGUF/resolve/main/Qwen3.5-0.8B-Artemis-Q4_K_M.gguf',
     'size': '532 MB + 207 MB',
-    'description': 'A small chat model with image input through its vision helper.',
+    'description':
+        'A small chat model with image input through its vision helper.',
     'template': 'chatml',
     'vision': 'true',
     'mmproj_filename': 'mmproj-39d50a89a8cb459a6.gguf',
-    'mmproj_url': 'https://huggingface.co/turintech/Qwen3.5-0.8B-Artemis-GGUF/resolve/main/mmproj-BF16.gguf',
+    'mmproj_url':
+        'https://huggingface.co/turintech/Qwen3.5-0.8B-Artemis-GGUF/resolve/main/mmproj-BF16.gguf',
   };
 
   // Available Models for Download
@@ -335,73 +339,6 @@ class AppConstants {
       'description': 'Ultra-lightweight text model',
       'template': 'llama3',
     },
-    {
-      'name': 'DreamShaper 8 LCM (SD 1.5)',
-      'filename': 'DreamShaper8_LCM.safetensors',
-      'url':
-          'https://huggingface.co/Lykon/dreamshaper-8-lcm/resolve/main/DreamShaper8_LCM.safetensors',
-      'size': '2.0 GB',
-      'description': 'Extremely fast 4-step local image generation',
-      'template': 'sd',
-    },
-    {
-      'name': 'CyberRealistic V8 FP16 (SD 1.5)',
-      'filename': 'CyberRealistic_V8_FP16.safetensors',
-      'recommended': 'image',
-      'url':
-          'https://huggingface.co/cyberdelia/CyberRealistic/resolve/main/CyberRealistic_V8_FP16.safetensors',
-      'size': '2.0 GB',
-      'description':
-          'Photorealistic, uncensored local image generation — FP16 for mobile',
-      'template': 'sd',
-    },
-    {
-      'name': 'CyberRealistic (Apple CoreML FP16)',
-      'filename': 'cyberrealistic.coreml.zip',
-      'url':
-          'https://huggingface.co/orailnooor/cyberrealistic-coreml/resolve/main/cyberrealistic.coreml.zip?download=true',
-      'size': '2.0 GB',
-      'description':
-          'Optimized for Apple devices with M-series chips or 8GB+ RAM',
-      'template': 'sd',
-    },
-    {
-      'name': 'CyberRealistic (Apple CoreML 6-bit)',
-      'filename': 'cyberrealistic-6bit.coreml.zip',
-      'url':
-          'https://huggingface.co/orailnooor/cyberrealistic-coreml/resolve/main/cyberrealistic-6bit.coreml.zip?download=true',
-      'size': '855 MB',
-      'description':
-          'Compressed 6-bit model optimized for Apple devices with 4GB/6GB RAM',
-      'template': 'sd',
-    },
-    {
-      'name': 'Realistic Vision V5.1 fp16 (SD 1.5)',
-      'filename': 'Realistic_Vision_V5.1_fp16-no-ema.safetensors',
-      'url':
-          'https://huggingface.co/SG161222/Realistic_Vision_V5.1_noVAE/resolve/main/Realistic_Vision_V5.1_fp16-no-ema.safetensors',
-      'size': '2.0 GB',
-      'description': 'Highly popular photorealistic portrait and scene model',
-      'template': 'sd',
-    },
-    {
-      'name': 'AbsoluteReality 1.8.1 pruned (SD 1.5)',
-      'filename': 'AbsoluteReality_1.8.1_pruned.safetensors',
-      'url':
-          'https://huggingface.co/Lykon/AbsoluteReality/resolve/main/AbsoluteReality_1.8.1_pruned.safetensors',
-      'size': '2.0 GB',
-      'description': 'Photorealistic general-purpose image generation',
-      'template': 'sd',
-    },
-    {
-      'name': 'AnyLoRA (SD 1.5)',
-      'filename': 'AnyLoRA_noVae_fp16-pruned.safetensors',
-      'url':
-          'https://huggingface.co/Lykon/AnyLoRA/resolve/main/AnyLoRA_noVae_fp16-pruned.safetensors',
-      'size': '2.0 GB',
-      'description': 'Highly versatile Anime / Stylized image generator',
-      'template': 'sd',
-    },
   ];
 
   // Cloud API Endpoints
@@ -413,8 +350,6 @@ class AppConstants {
       'https://generativelanguage.googleapis.com/v1beta/models';
   static const String kimiEndpoint =
       'https://api.moonshot.ai/v1/chat/completions';
-  static const String stabilityEndpoint =
-      'https://api.stability.ai/v2beta/stable-image/generate/sd3';
   static const String nvidiaEndpoint = 'https://integrate.api.nvidia.com/v1';
   static const String openRouterEndpoint = 'https://openrouter.ai/api/v1';
   static const String deepSeekEndpoint = 'https://api.deepseek.com';

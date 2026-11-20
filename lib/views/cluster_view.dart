@@ -71,18 +71,20 @@ class _ClusterViewState extends State<ClusterView> {
                 title: 'Cluster backup & transfer',
                 subtitle: 'Choose data to send or receive on this Wi-Fi',
                 chevron: true,
-                onTap: () => Get.to(() => const ModelTransferView(clusterBackup: true)),
+                onTap: () =>
+                    Get.to(() => const ModelTransferView(clusterBackup: true)),
               ),
               AppRow(
                 icon: Icons.devices_other_rounded,
                 title: 'Workload placement',
-                subtitle: 'Assign speech, recognition and images to worker phones',
+                subtitle: 'Assign speech and recognition to worker phones',
                 chevron: true,
                 onTap: () => Get.to(() => const WorkloadPlacementView()),
               ),
             ]),
             const SizedBox(height: 16),
-            if (role != ClusterRole.off && cluster.wifiAddress.value == null) ...[
+            if (role != ClusterRole.off &&
+                cluster.wifiAddress.value == null) ...[
               AppNotice(
                 'Turn on Wi-Fi. All phones in the cluster must be on the same Wi-Fi network.',
                 icon: Icons.wifi_off_rounded,
@@ -129,9 +131,11 @@ class _ClusterViewState extends State<ClusterView> {
         const SizedBox(height: 12),
         Text('Worker stopped', style: t.bodyStrong),
         const SizedBox(height: 4),
-        Text(s.error ?? 'Unknown error', style: t.caption, textAlign: TextAlign.center),
+        Text(s.error ?? 'Unknown error',
+            style: t.caption, textAlign: TextAlign.center),
         const SizedBox(height: 16),
-        PillButton(label: 'Try again', primary: true, onPressed: cluster.startWorker),
+        PillButton(
+            label: 'Try again', primary: true, onPressed: cluster.startWorker),
       ]);
     } else if (s.peer != null) {
       body = _centered(context, [
@@ -144,14 +148,21 @@ class _ClusterViewState extends State<ClusterView> {
         Row(children: [
           Expanded(child: _Stat(label: 'Holding', value: _gb(s.heldMb))),
           Expanded(child: _Stat(label: 'Free at start', value: _gb(s.ramMb))),
-          Expanded(child: _Stat(label: 'Memory speed', value: '${s.bandwidth.toStringAsFixed(1)} GB/s')),
+          Expanded(
+              child: _Stat(
+                  label: 'Memory speed',
+                  value: '${s.bandwidth.toStringAsFixed(1)} GB/s')),
         ]),
       ]);
     } else if (!s.running || qr == null) {
       body = _centered(context, [
-        const SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 2.5)),
+        const SizedBox(
+            width: 28,
+            height: 28,
+            child: CircularProgressIndicator(strokeWidth: 2.5)),
         const SizedBox(height: 16),
-        Text(s.running ? 'Waiting for Wi-Fi…' : 'Measuring this phone…', style: t.caption),
+        Text(s.running ? 'Waiting for Wi-Fi…' : 'Measuring this phone…',
+            style: t.caption),
       ]);
     } else {
       body = _centered(context, [
@@ -170,7 +181,8 @@ class _ClusterViewState extends State<ClusterView> {
             value: cluster.wifiAddress.value,
             items: [
               for (final entry in cluster.localAddresses)
-                DropdownMenuItem(value: entry.address,
+                DropdownMenuItem(
+                    value: entry.address,
                     child: Text('${entry.address} · ${entry.interfaceName}')),
             ],
             onChanged: (value) {
@@ -181,12 +193,17 @@ class _ClusterViewState extends State<ClusterView> {
         Row(mainAxisSize: MainAxisSize.min, children: [
           StatusDot(t.green, size: 8),
           const SizedBox(width: 6),
-          Text('Ready · ${cluster.wifiAddress.value}:${LlamaCluster.defaultPort}', style: t.caption),
+          Text(
+              'Ready · ${cluster.wifiAddress.value}:${cluster.workerPort.value}',
+              style: t.caption),
         ]),
         const SizedBox(height: 16),
         Row(children: [
           Expanded(child: _Stat(label: 'Free memory', value: _gb(s.ramMb))),
-          Expanded(child: _Stat(label: 'Memory speed', value: '${s.bandwidth.toStringAsFixed(1)} GB/s')),
+          Expanded(
+              child: _Stat(
+                  label: 'Memory speed',
+                  value: '${s.bandwidth.toStringAsFixed(1)} GB/s')),
         ]),
       ]);
     }
@@ -212,6 +229,14 @@ class _ClusterViewState extends State<ClusterView> {
         const SizedBox(height: 16),
       ],
       AppCard(padding: const EdgeInsets.fromLTRB(16, 24, 16, 20), child: body),
+      if (!ClusterService.workerStopsWithApp)
+        TextButton.icon(
+          onPressed: s.starting || s.peer != null
+              ? null
+              : () => _changeWorkerPort(context),
+          icon: const Icon(Icons.settings_ethernet_rounded),
+          label: Text('Worker port ${cluster.workerPort.value}'),
+        ),
       SectionFootnote(ClusterService.workerStopsWithApp
           ? 'Keep this device plugged in, on the same Wi-Fi, with NeuroMesh AI open: '
               'iOS pauses apps in the background. Close NeuroMesh AI to stop sharing.'
@@ -219,6 +244,37 @@ class _ClusterViewState extends State<ClusterView> {
               'open: the screen stays on while sharing, because Android slows '
               'background work. Set Phone cluster to Off to stop.'),
     ];
+  }
+
+  Future<void> _changeWorkerPort(BuildContext context) async {
+    final input = TextEditingController(text: '${cluster.workerPort.value}');
+    final port = await showDialog<int>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Worker port'),
+        content: TextField(
+          controller: input,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(helperText: '1024–65535'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialog),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(dialog, int.tryParse(input.text)),
+              child: const Text('Restart worker')),
+        ],
+      ),
+    );
+    input.dispose();
+    if (port == null) return;
+    if (port < 1024 || port > 65535) {
+      showToast('Invalid port', 'Enter a number from 1024 to 65535.',
+          tone: ToastTone.warning);
+      return;
+    }
+    await cluster.setWorkerPort(port);
   }
 
   Widget _centered(BuildContext context, List<Widget> children) =>
@@ -253,7 +309,8 @@ class _ClusterViewState extends State<ClusterView> {
           AppRow(
             icon: Icons.memory_rounded,
             title: 'Loaded context window',
-            subtitle: '${Get.find<InferenceService>().contextTokensTotal.value} tokens',
+            subtitle:
+                '${Get.find<InferenceService>().contextTokensTotal.value} tokens',
           ),
       ]),
       const SectionFootnote(
@@ -266,10 +323,12 @@ class _ClusterViewState extends State<ClusterView> {
       ),
       SectionHeader(
         'Workers (${cluster.workers.length})',
-        trailing: cluster.workers.isEmpty ? null : TextButton(
-          onPressed: cluster.relocateWorkers,
-          child: const Text('Check connection'),
-        ),
+        trailing: cluster.workers.isEmpty
+            ? null
+            : TextButton(
+                onPressed: cluster.relocateWorkers,
+                child: const Text('Check connection'),
+              ),
       ),
       if (cluster.workers.isEmpty)
         const AppGroup(children: [
@@ -288,16 +347,17 @@ class _ClusterViewState extends State<ClusterView> {
               title: w.model ?? w.name,
               subtitle: [
                 w.endpoint,
-                if (cluster.unreachableWorkers.contains(w.endpoint)) 'Unreachable',
+                if (cluster.unreachableWorkers.contains(w.endpoint))
+                  'Unreachable',
                 if (cluster.lastWorkerReply[w.endpoint] case final reply?)
                   'Last reply ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(reply))}',
                 if (w.ramMb != null) '${_gb(w.ramMb!)} free',
-                if (w.bandwidth != null) '${w.bandwidth!.toStringAsFixed(1)} GB/s',
+                if (w.bandwidth != null)
+                  '${w.bandwidth!.toStringAsFixed(1)} GB/s',
                 if (cluster.profile.value == ClusterProfile.manual)
                   cluster.weightFor(ClusterService.workerKey(w)) == 0
                       ? 'Excluded'
                       : 'Weight ${cluster.weightFor(ClusterService.workerKey(w))}',
-
               ].join(' · '),
               trailing: IconButton(
                 icon: Icon(Icons.close_rounded, color: t.muted),
@@ -378,7 +438,9 @@ class _ClusterViewState extends State<ClusterView> {
             ListTile(
               title: Text(_profileLabel(profile)),
               subtitle: Text(details),
-              trailing: cluster.profile.value == profile ? const Icon(Icons.check_rounded) : null,
+              trailing: cluster.profile.value == profile
+                  ? const Icon(Icons.check_rounded)
+                  : null,
               onTap: () => Navigator.pop(sheet, profile),
             ),
         ],
@@ -399,7 +461,8 @@ class _ClusterViewState extends State<ClusterView> {
     final saved = await showAppSheet<bool>(
       context,
       title: 'Layer weights by device',
-      subtitle: 'Higher weights request more layers. A weight of zero excludes a device from layer assignment. The master still runs the session. Device memory caps and layer sizes can change the final split.',
+      subtitle:
+          'Higher weights request more layers. A weight of zero excludes a device from layer assignment. The master still runs the session. Device memory caps and layer sizes can change the final split.',
       builder: (sheet) => StatefulBuilder(builder: (context, update) {
         final total = values.values.fold<int>(0, (sum, value) => sum + value);
         return Column(
@@ -455,7 +518,8 @@ class _ClusterViewState extends State<ClusterView> {
             onSubmitted: (v) => Navigator.pop(ctx, v),
           ),
           const SizedBox(height: 16),
-          PrimaryButton(label: 'Add', onPressed: () => Navigator.pop(ctx, ctrl.text)),
+          PrimaryButton(
+              label: 'Add', onPressed: () => Navigator.pop(ctx, ctrl.text)),
         ],
       ),
     );
@@ -484,13 +548,20 @@ class _SplitCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = AppTokens.of(context);
-    final colors = [t.accent, t.green, t.orange, const Color(0xFFAF52DE), t.red];
+    final colors = [
+      t.accent,
+      t.green,
+      t.orange,
+      const Color(0xFFAF52DE),
+      t.red
+    ];
     final total = shares.fold<double>(0, (a, s) => a + s.mb);
     return AppCard(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('Loaded model', style: t.bodyStrong),
         const SizedBox(height: 2),
-        Text('Running on ${shares.length} phones · ${_gb(total)}', style: t.caption),
+        Text('Running on ${shares.length} phones · ${_gb(total)}',
+            style: t.caption),
         const SizedBox(height: 14),
         ClipRRect(
           borderRadius: BorderRadius.circular(6),
@@ -501,7 +572,8 @@ class _SplitCard extends StatelessWidget {
                 Expanded(
                   flex: (shares[i].mb / total * 1000).round().clamp(1, 1000),
                   child: Container(
-                    margin: EdgeInsets.only(right: i == shares.length - 1 ? 0 : 2),
+                    margin:
+                        EdgeInsets.only(right: i == shares.length - 1 ? 0 : 2),
                     color: colors[i % colors.length],
                   ),
                 ),
@@ -517,15 +589,19 @@ class _SplitCard extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  shares[i].isThisPhone ? '${shares[i].name} (this phone)' : shares[i].name,
+                  shares[i].isThisPhone
+                      ? '${shares[i].name} (this phone)'
+                      : shares[i].name,
                   style: t.body,
                 ),
               ),
-              Text('${(shares[i].mb / total * 100).round()}%', style: t.bodyStrong),
+              Text('${(shares[i].mb / total * 100).round()}%',
+                  style: t.bodyStrong),
               const SizedBox(width: 10),
               SizedBox(
                 width: 58,
-                child: Text(_gb(shares[i].mb), textAlign: TextAlign.right, style: t.caption),
+                child: Text(_gb(shares[i].mb),
+                    textAlign: TextAlign.right, style: t.caption),
               ),
             ]),
           ),
@@ -559,10 +635,11 @@ class _PulsingDot extends StatefulWidget {
   State<_PulsingDot> createState() => _PulsingDotState();
 }
 
-class _PulsingDotState extends State<_PulsingDot> with SingleTickerProviderStateMixin {
-  late final AnimationController _c =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))
-        ..repeat();
+class _PulsingDotState extends State<_PulsingDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 1400))
+    ..repeat();
 
   @override
   void dispose() {
@@ -589,7 +666,8 @@ class _PulsingDotState extends State<_PulsingDot> with SingleTickerProviderState
           Container(
             width: 24,
             height: 24,
-            decoration: BoxDecoration(shape: BoxShape.circle, color: widget.color),
+            decoration:
+                BoxDecoration(shape: BoxShape.circle, color: widget.color),
             child: const Icon(Icons.hub_rounded, size: 14, color: Colors.white),
           ),
         ]),

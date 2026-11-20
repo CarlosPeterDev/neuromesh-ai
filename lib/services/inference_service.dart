@@ -101,7 +101,7 @@ class InferenceService extends GetxService {
       }
 
       if (modelPath.toLowerCase().endsWith('.safetensors')) {
-        return 'ERROR: Cannot load image generation models (.safetensors) into the local text engine. Native local image generation requires the upcoming stable-diffusion engine update. Use Cloud Stability AI for now.';
+        return 'ERROR: Ask Chat to create the image online with Pollinations.';
       }
 
       final runtime = _runtimeFor(modelPath, modelRuntime);

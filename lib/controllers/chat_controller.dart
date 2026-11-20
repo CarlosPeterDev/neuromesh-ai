@@ -17,12 +17,10 @@ import '../core/constants.dart';
 import '../core/ui.dart';
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
-import '../ffi/sd_ffi_bindings.dart';
 import '../services/pollinations_image_service.dart';
 import '../services/hive_service.dart';
 import '../services/inference_service.dart';
 import '../services/cloud_service.dart';
-import '../services/local_image_service.dart';
 import '../services/app_log_service.dart';
 import '../services/image_generation_notification_service.dart';
 import '../services/document_extractor_service.dart';
@@ -37,6 +35,7 @@ import '../services/web_search_service.dart';
 import '../utils/thought_parser.dart';
 import '../utils/page_text.dart';
 import '../utils/web_search_parse.dart';
+import '../utils/spoken_answer.dart';
 
 const int _visionImageMaxSide = 768;
 const int _visionImageJpegQuality = 72;
@@ -990,10 +989,11 @@ class ChatController extends GetxController {
         r'\b(files?|attachments?|documents?|workspace|html|pdf|docx|read|summari[sz]e|summary|what (?:is|does) (?:in |inside )?it)\b|ملف|لخص',
         caseSensitive: false,
       ).hasMatch(visibleText);
-      final referencesRecentFile = fileQuestion && RegExp(
-        r'\b(?:read|summari[sz]e|summary|summery|describe|contents?|(?:this|that|the) (?:file|attachment|document))\b|اقرأ|لخص',
-        caseSensitive: false,
-      ).hasMatch(visibleText);
+      final referencesRecentFile = fileQuestion &&
+          RegExp(
+            r'\b(?:read|summari[sz]e|summary|summery|describe|contents?|(?:this|that|the) (?:file|attachment|document))\b|اقرأ|لخص',
+            caseSensitive: false,
+          ).hasMatch(visibleText);
       final recentFile =
           fileName == null && referencesRecentFile && explicitFiles.isEmpty
               ? messages.reversed
@@ -1108,13 +1108,24 @@ class ChatController extends GetxController {
       final web = Get.isRegistered<WebSearchService>()
           ? Get.find<WebSearchService>()
           : null;
-      final imagePrompt = fileName == null &&
-              imagePath == null &&
-              imageBase64 == null &&
-              (skillContext?.documents.isEmpty ?? true)
-          ? PollinationsImageService.explicitPrompt(visibleText)
+      final hasAttachedImage = imagePath != null || imageBase64 != null;
+      var imageRequest = fileName == null || fileType == 'image'
+          ? ImageRequest.parse(visibleText, hasImage: hasAttachedImage)
           : null;
-      final searchRequested = imagePrompt == null &&
+      final priorReply = messages.reversed
+          .where((message) => message.role == 'assistant')
+          .firstOrNull
+          ?.content;
+      if (imageRequest == null &&
+          priorReply != null &&
+          priorReply.startsWith('To create your image')) {
+        imageRequest = ImageRequest(ImageAction.create, visibleText);
+      } else if (imageRequest == null &&
+          priorReply != null &&
+          priorReply.startsWith('To edit your image')) {
+        imageRequest = ImageRequest(ImageAction.edit, visibleText);
+      }
+      final searchRequested = imageRequest == null &&
           (explicitSearch ||
               (evidenceName == null &&
                   (!fileQuestion || narrationDraft != null) &&
@@ -1220,19 +1231,49 @@ class ChatController extends GetxController {
           (skillContext?.documents.isEmpty ?? true);
       if (unavailableEvidence != null) {
         rawResponse = unavailableEvidence;
-      } else if (imagePrompt != null &&
-          !Get.find<LocalImageService>().isModelLoaded.value) {
-        final online = AgentService.usesOnlineImageGeneration;
-        streamingResponse.value = online
-            ? 'Creating image online with Pollinations…'
-            : 'Creating image on a cluster worker…';
-        rawResponse = await contextAgent.inProject(
-            project,
-            () => contextAgent.executeTool(
-                  ParsedToolCall('generate_image', {'prompt': imagePrompt}, ''),
-                  confirmToolCall,
-                  userRequestedOnlineImage: true,
-                ));
+      } else if (imageRequest != null) {
+        final request = imageRequest;
+        final source = request.action == ImageAction.edit
+            ? imgBase64 ??
+                await _recentImageForEdit(contextAgent, project, userMsg.id)
+            : null;
+        if (generationId != _generationSerial) return;
+        if (request.action == ImageAction.edit && source == null) {
+          rawResponse =
+              'To edit your image with Pollinations, attach the image and describe the change. Editing sends the image online.';
+        } else if (request.description.isEmpty) {
+          rawResponse = request.action == ImageAction.edit
+              ? 'To edit your image, what would you like me to change?'
+              : 'To create your image, what should it show? You can include a style, setting or mood.';
+        } else {
+          streamingResponse.value = 'Preparing your Pollinations prompt…';
+          final plan = await _prepareOnlineImage(request, inferenceMode);
+          if (generationId != _generationSerial) return;
+          if (plan.question.isNotEmpty) {
+            rawResponse =
+                'To ${request.action == ImageAction.edit ? 'edit' : 'create'} your image, ${plan.question}';
+          } else {
+            streamingResponse.value = request.action == ImageAction.edit
+                ? 'Editing your image online with Pollinations…'
+                : 'Creating your image online with Pollinations…';
+            rawResponse = await contextAgent.inProject(
+                project,
+                () => contextAgent.executeTool(
+                      ParsedToolCall(
+                          request.action == ImageAction.edit
+                              ? 'edit_image'
+                              : 'generate_image',
+                          {
+                            'prompt': plan.prompt,
+                            'style': plan.style,
+                            if (source != null) 'attachedImage': source,
+                          },
+                          ''),
+                      confirmToolCall,
+                      userRequestedOnlineImage: true,
+                    ));
+          }
+        }
       } else if (directSpeech) {
         final result = await contextAgent.inProject(
             project,
@@ -1253,249 +1294,158 @@ class ChatController extends GetxController {
                 ));
         rawResponse = result.markdown;
       } else if (inferenceMode == 'local') {
-        final localImage = Get.find<LocalImageService>();
+        final inference = Get.find<InferenceService>();
+        final agent = Get.find<AgentService>();
+        final stops = Get.find<SettingsController>().stopSequences.toList();
 
-        if (localImage.isModelLoaded.value && !searchRequested &&
-            narrationDraft == null) {
-          // Local image generation
-          final settings = Get.find<SettingsController>();
-          final imageNotifications =
-              Get.find<ImageGenerationNotificationService>();
-          final steps = _hive.getSetting<int>(AppConstants.keyImageSteps,
-                  defaultValue: AppConstants.defaultImageSteps) ??
-              AppConstants.defaultImageSteps;
-          final sizeSetting = settings.imageGenSize.value;
-          final sizeLabel =
-              sizeSetting == 0 ? 'Auto size' : '${sizeSetting}x$sizeSetting';
-          final backendLabel = localImage.currentBackend.value == Backend.cpu
-              ? 'CPU'
-              : localImage.currentBackend.value.displayName
-                  .split(' ')
-                  .first
-                  .toUpperCase();
-          imageGenStep.value = 0;
-          imageGenTotal.value = steps;
-          imageGenEstimatedSecs.value = 0;
-          imageGenStartTime.value = DateTime.now();
-          imageGenDecoding.value = false;
-          await imageNotifications.start(
-            modelName: localImage.loadedModelName.value,
-            backend: backendLabel,
-            steps: steps,
-            sizeLabel: sizeLabel,
-          );
-          print('[ChatController] Starting image generation for: $text');
-          final pngBytes = await localImage.generateImage(
-            prompt: text,
-            onProgress: (step, total) {
-              if (generationId != _generationSerial) return;
-              print(
-                  '[ChatController] Progress callback: step=$step, total=$total');
-              imageGenStep.value = step;
-              imageGenTotal.value = total;
-              if (step >= total && total > 0) {
-                imageGenDecoding.value = true;
-                print(
-                    '[ChatController] Sampling complete, VAE decode in progress');
-                imageNotifications.decoding();
-              }
-              if (step > 0 && total > 0 && step < total) {
-                final start = imageGenStartTime.value;
-                if (start != null) {
-                  final elapsed =
-                      DateTime.now().difference(start).inMilliseconds;
-                  final avgMsPerStep = elapsed / step;
-                  final remainingSteps = total - step;
-                  imageGenEstimatedSecs.value =
-                      (avgMsPerStep * remainingSteps / 1000).ceil();
-                }
-              }
-              imageNotifications.update(
-                step: step,
-                total: total,
-                etaSeconds: imageGenEstimatedSecs.value,
-                elapsedSeconds: imageGenStartTime.value == null
-                    ? 0
-                    : DateTime.now()
-                        .difference(imageGenStartTime.value!)
-                        .inSeconds,
-              );
-              _scrollToBottom();
-            },
-          );
-          // Calculate total generation time
-          final genDurationMs = imageGenStartTime.value != null
-              ? DateTime.now()
-                  .difference(imageGenStartTime.value!)
-                  .inMilliseconds
-              : null;
-          print(
-              '[ChatController] generateImage returned, bytes=${pngBytes?.length}, duration=${genDurationMs}ms');
+        // Explicit "remember that …" is handled directly, without the model.
+        final saved = await agent.rememberDirect(visibleText);
+        if (generationId != _generationSerial) return;
+        final readOnlyFileQuestion = readable &&
+            RegExp(r'^\s*(?:(?:ok|please)[,.]?\s+)*(?:read|summarize|summarise|describe|explain|what is)\b',
+                    caseSensitive: false)
+                .hasMatch(visibleText) &&
+            !RegExp(r'\b(?:create|write|save|edit|modify|change|delete|send|run)\b',
+                    caseSensitive: false)
+                .hasMatch(visibleText);
+        final useTools = narrationDraft == null &&
+            webCtx == null &&
+            streamingAttachmentType.value == null &&
+            !readOnlyFileQuestion &&
+            agent.wantsTools(visibleText,
+                hasFile: needsFileTools ||
+                    (skillContext?.documents.isNotEmpty ?? false));
+        String buildSystem({String latestContext = '', required bool tools}) =>
+            [
+              agent.composeSystem(_effectiveSystemPrompt,
+                  withTools: tools,
+                  request: visibleText,
+                  withFiles: needsFileTools,
+                  contextSize: contextSize),
+              if (skillContext != null && skillContext.documents.isNotEmpty)
+                skillContext.prompt(contextSize ~/ 4,
+                    alreadyIncluded: latestContext),
+            ].join('\n\n');
+        final system = buildSystem(tools: useTools);
 
-          // A stopped job must not post a completed/failed notification.
-          if (generationId != _generationSerial) return;
-          if (pngBytes != null) {
-            await imageNotifications.complete(durationMs: genDurationMs ?? 0);
-            rawResponse = '[IMAGE_BASE64]${base64Encode(pngBytes)}';
-          } else {
-            await imageNotifications.failed();
-            final reason = localImage.lastFailureReason;
-            rawResponse = reason != null
-                ? '⏳ $reason'
-                : '❌ Local image generation failed.';
-          }
-        } else {
-          final inference = Get.find<InferenceService>();
-          final agent = Get.find<AgentService>();
-          final stops = Get.find<SettingsController>().stopSequences.toList();
-
-          // Explicit "remember that …" is handled directly, without the model.
-          final saved = await agent.rememberDirect(visibleText);
-          if (generationId != _generationSerial) return;
-          final readOnlyFileQuestion = readable &&
-              RegExp(r'^\s*(?:(?:ok|please)[,.]?\s+)*(?:read|summarize|summarise|describe|explain|what is)\b',
-                      caseSensitive: false)
-                  .hasMatch(visibleText) &&
-              !RegExp(r'\b(?:create|write|save|edit|modify|change|delete|send|run)\b',
-                      caseSensitive: false)
-                  .hasMatch(visibleText);
-          final useTools = narrationDraft == null && webCtx == null &&
-              streamingAttachmentType.value == null &&
-              !readOnlyFileQuestion &&
-              agent.wantsTools(visibleText,
-                  hasFile: needsFileTools ||
-                      (skillContext?.documents.isNotEmpty ?? false));
-          String buildSystem({String latestContext = '', required bool tools}) => [
-                agent.composeSystem(_effectiveSystemPrompt,
-                    withTools: tools,
+        // LiteRT models can consume image/audio attachments. GGUF currently
+        // returns a clear unsupported message from the inference layer.
+        Future<String> generateOnce(String prompt,
+            List<Map<String, String>> hist, void Function(String) onTok) {
+          final tools = useTools && prompt != AgentService.finalAnswerPrompt;
+          final turn = AgentService.fitTurn(
+            baseSystem: _effectiveSystemPrompt,
+            system: buildSystem(
+                latestContext: hist.lastOrNull?['content'] ?? '', tools: tools),
+            prompt: prompt,
+            history: hist,
+            contextSize: contextSize,
+            request: visibleText,
+            continuationRequest: prompt == finalPrompt
+                ? null
+                : 'Current user request: $visibleText${workspaceName == null ? '' : '\nAttached workspace file: $workspaceName'}',
+            compactTools: !tools
+                ? null
+                : (budget) => agent.toolPrompt(
                     request: visibleText,
                     withFiles: needsFileTools,
-                    contextSize: contextSize),
-                if (skillContext != null && skillContext.documents.isNotEmpty)
-                  skillContext.prompt(contextSize ~/ 4,
-                      alreadyIncluded: latestContext),
-              ].join('\n\n');
-          final system = buildSystem(tools: useTools);
+                    contextSize: contextSize,
+                    maxTokens: budget),
+            needsEvidence: evidenceText.isNotEmpty || webCtx != null,
+          );
+          return inference.generate(
+            prompt: turn.prompt,
+            systemPrompt: turn.system,
+            conversationHistory: turn.history,
+            source: 'chat',
+            imagePath: imagePath,
+            audioPath: fileType == 'audio' ? filePath : null,
+            stopSequences: stops,
+            onToken: onTok,
+          );
+        }
 
-          // LiteRT models can consume image/audio attachments. GGUF currently
-          // returns a clear unsupported message from the inference layer.
-          Future<String> generateOnce(String prompt,
-              List<Map<String, String>> hist, void Function(String) onTok) {
-            final tools = useTools && prompt != AgentService.finalAnswerPrompt;
-            final turn = AgentService.fitTurn(
-              baseSystem: _effectiveSystemPrompt,
-              system: buildSystem(
-                  latestContext: hist.lastOrNull?['content'] ?? '', tools: tools),
-              prompt: prompt,
-              history: hist,
-              contextSize: contextSize,
-              request: visibleText,
-              continuationRequest: prompt == finalPrompt
-                  ? null
-                  : 'Current user request: $visibleText${workspaceName == null ? '' : '\nAttached workspace file: $workspaceName'}',
-              compactTools: !tools
-                  ? null
-                  : (budget) => agent.toolPrompt(
-                      request: visibleText,
-                      withFiles: needsFileTools,
-                      contextSize: contextSize,
-                      maxTokens: budget),
-              needsEvidence: evidenceText.isNotEmpty || webCtx != null,
-            );
-            return inference.generate(
-              prompt: turn.prompt,
-              systemPrompt: turn.system,
-              conversationHistory: turn.history,
-              source: 'chat',
-              imagePath: imagePath,
-              audioPath: fileType == 'audio' ? filePath : null,
-              stopSequences: stops,
-              onToken: onTok,
-            );
-          }
+        if (imagePath == null) {
+          await _compactHistory(
+              history, system, finalPrompt, inference, generationId, sessionId);
+        }
+        if (generationId != _generationSerial) return;
 
-          if (imagePath == null) {
-            await _compactHistory(history, system, finalPrompt, inference,
-                generationId, sessionId);
-          }
-          if (generationId != _generationSerial) return;
-
-          if (!useTools) {
-            void streamToken(String token) {
-              if (generationId != _generationSerial) return;
-              streamingResponse.value += token;
-              trackThoughtTiming();
-              _scrollToBottom();
-            }
-
-            rawResponse = await generateOnce(finalPrompt, history, streamToken);
+        if (!useTools) {
+          void streamToken(String token) {
             if (generationId != _generationSerial) return;
-            if (AgentService.isGenericOffer(rawResponse) &&
-                visibleText.trim().split(RegExp(r'\s+')).length > 4) {
-              streamingResponse.value = '';
-              rawResponse = await generateOnce(
-                '$finalPrompt\n\nProvide the answer or requested result now. Ask a question only if a detail is essential.',
-                history,
-                streamToken,
-              );
-            }
-          } else {
-            var traceMd = '';
-            var visible = '';
-            var status = '';
-            void render() {
-              if (generationId != _generationSerial) return;
-              final parts = <String>[
-                if (traceMd.isNotEmpty) traceMd,
-                if (status.isNotEmpty) '> ⏳ $status',
-              ];
-              streamingResponse.value = [
-                if (parts.isNotEmpty) parts.join('\n'),
-                visible
-              ].where((e) => e.isNotEmpty).join('\n\n');
-              trackThoughtTiming();
-              _scrollToBottom();
-            }
+            streamingResponse.value += token;
+            trackThoughtTiming();
+            _scrollToBottom();
+          }
 
-            Future<ToolLoopResult> runAgentLoop() => agent.runToolLoop(
-                  generate: generateOnce,
-                  allowDirectActions:
-                      skillContext == null || skillContext.documents.isEmpty,
-                  prompt: finalPrompt,
-                  history: history,
-                  confirm: confirmToolCall,
-                  userText: visibleText,
-                  researchQuestion: evidenceName == null &&
-                          !fileQuestion &&
-                          agent.needsResearch(visibleText)
-                      ? visibleText
-                      : null,
-                  cancelled: () => generationId != _generationSerial,
-                  onVisible: (v) {
-                    visible = v;
-                    render();
-                  },
-                  onStatus: (st) {
-                    status = st;
-                    render();
-                  },
-                  onTrace: (t) {
-                    traceMd = t.join('\n');
-                    visible = '';
-                    status = '';
-                    render();
-                  },
-                );
-            final result = await agent.inProject(
-                project,
-                () => skillContext == null
-                    ? runAgentLoop()
-                    : SkillsService.inTurn(skillContext, runAgentLoop));
-            rawResponse = result.markdown;
+          rawResponse = await generateOnce(finalPrompt, history, streamToken);
+          if (generationId != _generationSerial) return;
+          if (AgentService.isGenericOffer(rawResponse) &&
+              visibleText.trim().split(RegExp(r'\s+')).length > 4) {
+            streamingResponse.value = '';
+            rawResponse = await generateOnce(
+              '$finalPrompt\n\nProvide the answer or requested result now. Ask a question only if a detail is essential.',
+              history,
+              streamToken,
+            );
           }
-          if (saved != null && !rawResponse.startsWith('ERROR')) {
-            rawResponse = '🧠 Saved to memory: $saved\n\n$rawResponse';
+        } else {
+          var traceMd = '';
+          var visible = '';
+          var status = '';
+          void render() {
+            if (generationId != _generationSerial) return;
+            final parts = <String>[
+              if (traceMd.isNotEmpty) traceMd,
+              if (status.isNotEmpty) '> ⏳ $status',
+            ];
+            streamingResponse.value = [
+              if (parts.isNotEmpty) parts.join('\n'),
+              visible
+            ].where((e) => e.isNotEmpty).join('\n\n');
+            trackThoughtTiming();
+            _scrollToBottom();
           }
+
+          Future<ToolLoopResult> runAgentLoop() => agent.runToolLoop(
+                generate: generateOnce,
+                allowDirectActions:
+                    skillContext == null || skillContext.documents.isEmpty,
+                prompt: finalPrompt,
+                history: history,
+                confirm: confirmToolCall,
+                userText: visibleText,
+                researchQuestion: evidenceName == null &&
+                        !fileQuestion &&
+                        agent.needsResearch(visibleText)
+                    ? visibleText
+                    : null,
+                cancelled: () => generationId != _generationSerial,
+                onVisible: (v) {
+                  visible = v;
+                  render();
+                },
+                onStatus: (st) {
+                  status = st;
+                  render();
+                },
+                onTrace: (t) {
+                  traceMd = t.join('\n');
+                  visible = '';
+                  status = '';
+                  render();
+                },
+              );
+          final result = await agent.inProject(
+              project,
+              () => skillContext == null
+                  ? runAgentLoop()
+                  : SkillsService.inTurn(skillContext, runAgentLoop));
+          rawResponse = result.markdown;
+        }
+        if (saved != null && !rawResponse.startsWith('ERROR')) {
+          rawResponse = '🧠 Saved to memory: $saved\n\n$rawResponse';
         }
       } else {
         final cloud = Get.find<CloudService>();
@@ -1551,12 +1501,8 @@ class ChatController extends GetxController {
         }
       }
       if (narrationDraft != null && hasAnswer) {
-        final narrationText = (webCtx == null
-                ? generatedText
-                : generatedText.replaceAll(RegExp(r'\s*\[[1-9]\d*\]'), ''))
-            .replaceAllMapped(RegExp(r'\[([^\]]+)\]\(https?://[^)]+\)'),
-                (match) => match.group(1)!)
-            .trim();
+        final narrationText = spokenAnswer(generatedText);
+
         if (canNarrate &&
             narrationText.isNotEmpty &&
             !AgentService.isGenericOffer(narrationText) &&
@@ -1571,13 +1517,13 @@ class ChatController extends GetxController {
           final audio = await contextAgent.inProject(
               project,
               () => contextAgent.executeTool(
-                  ParsedToolCall('text_to_speech', args, ''),
-                  confirmToolCall));
+                  ParsedToolCall('text_to_speech', args, ''), confirmToolCall));
           if (generationId != _generationSerial) return;
           narrationTrace.add(AgentService.stepLine(
               'text_to_speech', args, 'Creating an audio file', audio,
               ms: timer.elapsedMilliseconds));
-          rawResponse = '$generatedText\n\n${audio.replaceFirst('Show it with ', '')}';
+          rawResponse =
+              '$generatedText\n\n${audio.replaceFirst('Show it with ', '')}';
         } else {
           rawResponse += webCtx == null
               ? '\n\nThe model didn’t produce text I could turn into audio.'
@@ -1585,7 +1531,8 @@ class ChatController extends GetxController {
         }
       }
       if (narrationTrace.isNotEmpty) {
-        rawResponse = ToolLoopResult(rawResponse, narrationTrace, false).markdown;
+        rawResponse =
+            ToolLoopResult(rawResponse, narrationTrace, false).markdown;
       }
       if (webCtx != null && hasAnswer) rawResponse += webCtx.sourcesMarkdown();
 
@@ -1681,6 +1628,105 @@ class ChatController extends GetxController {
     }
   }
 
+  bool canSendOnlineImage(String text) {
+    if (text.trim().isEmpty) return false;
+    if (ImageRequest.parse(text,
+            hasImage: selectedImageBase64.value != null ||
+                selectedImagePath.value != null) !=
+        null) return true;
+    final previous = messages.reversed
+            .where((message) => message.role == 'assistant')
+            .firstOrNull
+            ?.content ??
+        '';
+    return previous.startsWith('To create your image') ||
+        previous.startsWith('To edit your image');
+  }
+
+  Future<String?> _recentImageForEdit(
+      AgentService agent, String project, String currentMessage) async {
+    for (final message in messages.reversed) {
+      if (message.id == currentMessage) continue;
+      if (message.imageBase64?.isNotEmpty == true) return message.imageBase64;
+      if (message.role != 'assistant' ||
+          !message.content.contains('online with Pollinations')) continue;
+      final match =
+          RegExp(r'!\[[^\]]*\]\(nmfile:([^)]+)\)').firstMatch(message.content);
+      if (match == null) continue;
+      return agent.inProject(project, () async {
+        final file = await agent.workspaceFile(match.group(1)!);
+        if (file == null || await file.length() > 8 * 1024 * 1024) return null;
+        return base64Encode(await file.readAsBytes());
+      });
+    }
+    return null;
+  }
+
+  Future<({String prompt, String question, String style})> _prepareOnlineImage(
+      ImageRequest request, String inferenceMode) async {
+    final description = request.description.trim();
+    final lower = description.toLowerCase();
+    final style =
+        RegExp(r'\b(?:logo|poster|icon|typography|banner)\b').hasMatch(lower)
+            ? 'design'
+            : RegExp(r'\b(?:photo|realistic|photorealistic|camera)\b')
+                    .hasMatch(lower)
+                ? 'photo'
+                : 'illustration';
+    final fallback = (prompt: description, question: '', style: style);
+    const system =
+        'Prepare an image request for Pollinations. Return JSON only '
+        'with keys prompt, question, style. Preserve the user subject and intended changes. '
+        'Improve visual detail and composition without inventing a new subject. '
+        'For edits, specify the requested changes while preserving the rest. '
+        'If essential details are missing, put one short clarifying question in question. '
+        'Set style to illustration, photo, or design.';
+    if (description.length > 1000) return fallback;
+    try {
+      final inference = Get.find<InferenceService>();
+      final input = '${request.action.name}: $description';
+      final String answer;
+      if (inferenceMode == 'cloud') {
+        answer = await Get.find<CloudService>().sendMessage(messages: [
+          {'role': 'system', 'content': system},
+          {'role': 'user', 'content': input},
+        ], maxTokens: 250);
+      } else if (inference.isModelLoaded.value) {
+        answer = await inference.generate(
+            prompt: input,
+            systemPrompt: system,
+            maxTokens: 250,
+            source: 'chat');
+      } else {
+        return fallback;
+      }
+      final body = splitThoughtTags(answer).answer;
+      final start = body.indexOf('{');
+      final end = body.lastIndexOf('}');
+      if (start < 0 || end <= start) return fallback;
+      final plan = jsonDecode(body.substring(start, end + 1));
+      if (plan is! Map) return fallback;
+      final prompt = plan['prompt'];
+      final question = plan['question'];
+      final selectedStyle = plan['style'];
+      return (
+        prompt: prompt is String &&
+                prompt.trim().isNotEmpty &&
+                prompt.length <= 1000
+            ? prompt.trim()
+            : description,
+        question: question is String && question.trim().length <= 200
+            ? question.trim()
+            : '',
+        style: const {'design', 'illustration', 'photo'}.contains(selectedStyle)
+            ? selectedStyle as String
+            : style,
+      );
+    } on Exception {
+      return fallback;
+    }
+  }
+
   void stopGenerating() {
     if (!isLoading.value && !isStreaming.value) return;
     final partialResponse = streamingResponse.value.trim();
@@ -1704,7 +1750,6 @@ class ChatController extends GetxController {
     imageGenDecoding.value = false;
     _batchCancelled = true;
     unawaited(Get.find<InferenceService>().stopGeneration());
-    Get.find<LocalImageService>().cancelGeneration();
     Get.find<CloudService>().cancel();
   }
 

@@ -12,7 +12,6 @@ import '../services/model_artifact_metadata.dart';
 import '../services/model_helper_service.dart';
 import '../utils/model_file_role.dart';
 import '../widgets/model_file_filter.dart';
-import 'hf_browser.dart';
 
 class ModelCompanionsButton extends StatelessWidget {
   const ModelCompanionsButton({
@@ -354,21 +353,6 @@ class _ModelHelpersViewState extends State<ModelHelpersView> {
           showBack: true),
       body: ListView(padding: const EdgeInsets.all(16), children: [
         Text(widget.model.filename),
-        if (widget.model.runtime == AiModel.runtimeSd)
-          TextButton.icon(
-            icon: const Icon(Icons.layers_outlined),
-            label: const Text('Choose image model components'),
-            onPressed: () => Get.to(() => Scaffold(
-                  appBar: appScreenBar(context,
-                      title: 'Image model components', showBack: true),
-                  body: ListView(padding: const EdgeInsets.all(16), children: [
-                    HfBrowser(
-                        images: true,
-                        initialQuery:
-                            ModelHelperService.searchQuery(widget.model)),
-                  ]),
-                )),
-          ),
         if (_installed.isNotEmpty) ...[
           const SizedBox(height: 12),
           Text(isHelper

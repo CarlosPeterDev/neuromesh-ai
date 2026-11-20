@@ -457,23 +457,15 @@ class ModelController extends GetxController {
     return model.isVision || AiModel.hasVisionMarker(lower);
   }
 
-  /// Downloads a multi-file image model (diffusion model + VAE + text
-  /// encoders…) into one folder, then refreshes the list.
   Future<void> downloadImageBundle(
       String name, List<({String url, String file, int size})> files) async {
-    final safe = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
-    showToast('Downloading', '$safe (${files.length} files)', tone: ToastTone.info);
-    try {
-      final r = await _download.downloadBundle(safe, files);
-      if (r == 'OK') {
-        showToast('Downloaded', safe, tone: ToastTone.success);
-      } else {
-        showToast('Cancelled', safe, tone: ToastTone.warning);
-      }
-    } catch (e) {
-      showToast('Download failed', '$e', tone: ToastTone.warning);
-    }
-    await refreshDownloaded();
+    _showOnlineImageNotice();
+  }
+
+  void _showOnlineImageNotice() {
+    showToast('Online image generation',
+        'Create or edit images in Chat with Pollinations. Internet required.',
+        tone: ToastTone.info);
   }
 
   bool isUncensoredModel(AiModel model) {
@@ -552,6 +544,10 @@ class ModelController extends GetxController {
   }
 
   Future<void> downloadModel(AiModel model) async {
+    if (isImageModel(model)) {
+      _showOnlineImageNotice();
+      return;
+    }
     if (externalDownloadId.value != null &&
         importFileName.value == model.filename) {
       showToast('Already downloading',
@@ -645,6 +641,10 @@ class ModelController extends GetxController {
   bool get supportsDownloadsFolder => !kIsWeb && Platform.isAndroid;
 
   Future<void> downloadModelToDownloads(AiModel model, {ModelFileKind? kind}) async {
+    if (isImageModel(model)) {
+      _showOnlineImageNotice();
+      return;
+    }
     if (model.url.trim().isEmpty) {
       showToast('Download Unavailable', 'This model has no download URL.',
           tone: ToastTone.warning);
@@ -794,6 +794,13 @@ class ModelController extends GetxController {
     if (_modelOperationInProgress) {
       showToast('Model loading', 'Wait for the current model load.',
           tone: ToastTone.warning);
+      return;
+    }
+    final selected = availableModels.firstWhereOrNull((m) => m.filename == filename);
+    if ((selected != null && isImageModel(selected)) ||
+        RegExp(r'\.(safetensors|sdbundle|coreml|mlpackage|mlmodelc)(?:\.zip)?$',
+                caseSensitive: false).hasMatch(filename)) {
+      _showOnlineImageNotice();
       return;
     }
     if (fileRole(filename).isHelper || _isAuxiliaryImageFile(filename)) {
@@ -946,48 +953,7 @@ class ModelController extends GetxController {
       await _unloadModels();
     }
 
-    if (isImage) {
-      report.stage('prepare image backend');
-      // Auto-download TAESD for fast VAE decode if not present
-      String? taesdPath;
-      try {
-        const taesdFilename = 'taesd.safetensors';
-        const taesdUrl =
-            'https://huggingface.co/madebyollin/taesd/resolve/main/diffusion_pytorch_model.safetensors';
-        final hasTaesd = await _download.isModelDownloaded(taesdFilename);
-        if (!hasTaesd &&
-            !_download.activeDownloads.containsKey(taesdFilename)) {
-          print('[ModelController] TAESD not found, downloading...');
-          // On Android this only starts a background download and returns
-          // immediately, so the file may not exist yet.
-          await _download.downloadModel(url: taesdUrl, filename: taesdFilename);
-        }
-        // Only hand sd.cpp a TAESD path that is fully on disk; a missing
-        // file makes the whole model load fail on every backend.
-        if (await _download.isModelDownloaded(taesdFilename)) {
-          taesdPath = await _download.modelPath(taesdFilename);
-          print('[ModelController] Using TAESD for fast decode');
-        } else {
-          print('[ModelController] TAESD not ready yet, using standard VAE');
-        }
-      } catch (e) {
-        print(
-            '[ModelController] TAESD download failed (will use standard VAE): $e');
-      }
-
-      // Progress shows inline on the model's card, like text models.
-      await report.checkpoint('initialize image backend');
-      final result = await _localImage.loadModel(path,
-          modelName: filename, taesdPath: taesdPath,
-          diagnostics: report);
-      if (!_localImage.isModelLoaded.value ||
-          _localImage.loadedModelName.value != filename ||
-          result.startsWith('ERROR:')) {
-        await _reportLoadFailure(filename, report, result);
-        return;
-      }
-      showToast('Image model loaded', result, tone: ToastTone.success);
-    } else {
+    {
       // GGUF vision: pass the projector if it's on disk; otherwise fetch it
       // and load text-only for now.
       String? mmprojPath;

@@ -9,7 +9,6 @@ import 'package:get/get.dart';
 import 'hive_service.dart';
 import 'voice_service.dart';
 import 'voice_models.dart';
-import 'local_image_service.dart';
 import 'lan_network.dart' show lanAddress;
 import 'workload_placement.dart';
 
@@ -73,8 +72,6 @@ class VoiceWorkerServer extends GetxService {
       if (voice.pickInstalled(VoiceKind.tts) != null) PhoneWorkload.speech.name,
       if (voice.pickInstalled(VoiceKind.stt) != null)
         PhoneWorkload.transcription.name,
-      if (Get.find<LocalImageService>().isModelLoaded.value)
-        PhoneWorkload.image.name,
     ];
   }
 
@@ -174,14 +171,7 @@ class VoiceWorkerServer extends GetxService {
         res.headers.contentType = ContentType('audio', 'wav');
         res.add(bytes);
       } else {
-        final bytes = await Get.find<LocalImageService>()
-            .generateImage(prompt: text, allowWorker: false);
-        if (bytes == null) {
-          res.statusCode = 409;
-          return;
-        }
-        res.headers.contentType = ContentType('image', 'png');
-        res.add(bytes);
+        res.statusCode = 404;
       }
     }
     requests.value++;

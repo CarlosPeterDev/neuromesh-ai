@@ -135,7 +135,7 @@ class _WorkloadPlacementViewState extends State<WorkloadPlacementView> {
           children: [
             const SectionHeader('Choose a phone for each workload'),
             AppGroup(children: [
-              for (final job in PhoneWorkload.values)
+              for (final job in PhoneWorkload.values.where((item) => item != PhoneWorkload.image))
                 AppRow(
                   icon: switch (job) {
                     PhoneWorkload.speech => Icons.volume_up_outlined,
@@ -152,7 +152,7 @@ class _WorkloadPlacementViewState extends State<WorkloadPlacementView> {
             ]),
             const SectionHeader('Use this phone as a worker'),
             const AppNotice(
-              'Use a trusted Wi-Fi network. Assigned phones receive audio, text or image prompts for the workload you select.',
+              'Use a trusted Wi-Fi network. Assigned phones receive audio or text prompts for the workload you select.',
               icon: Icons.wifi_rounded,
             ),
             const SizedBox(height: 12),
@@ -165,7 +165,7 @@ class _WorkloadPlacementViewState extends State<WorkloadPlacementView> {
                   title: running ? 'Stop worker' : 'Start worker',
                   subtitle: running
                       ? 'Keep NeuroMesh AI open on this phone.'
-                      : 'Install voice models or load an image model first.',
+                      : 'Install voice models first.',
                   onTap: _starting ? null : _toggleServer,
                 ),
                 if (running) ...[

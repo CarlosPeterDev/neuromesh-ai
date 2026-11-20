@@ -11,7 +11,8 @@ class CloudService extends GetxService {
   final HiveService _hive = Get.find<HiveService>();
 
   String get _provider =>
-      _hive.getSetting(AppConstants.keyCloudProvider, defaultValue: 'openrouter') ??
+      _hive.getSetting(AppConstants.keyCloudProvider,
+          defaultValue: 'openrouter') ??
       'openrouter';
 
   String get _apiKey {
@@ -81,6 +82,7 @@ class CloudService extends GetxService {
   // endpoint) leaves the chat loading forever.
   static const _connectTimeout = Duration(seconds: 30);
   static const _responseTimeout = Duration(seconds: 120);
+
   /// Max gap between streamed chunks. Not const so tests can shorten it.
   static Duration streamIdleTimeout = const Duration(seconds: 60);
 
@@ -134,7 +136,7 @@ class CloudService extends GetxService {
         case 'kimi':
           return await _sendKimi(messages, imageBase64, temperature, maxTokens);
         case 'stability':
-          return await _sendStability(messages);
+          return 'ERROR: Image creation is available through Pollinations in Chat.';
         case 'nvidia':
           return await _sendNvidia(
               messages, imageBase64, temperature, maxTokens);
@@ -706,47 +708,5 @@ class CloudService extends GetxService {
     }
 
     return apiMessages;
-  }
-
-  // ─── Stability AI (Image Generation) ────────────
-
-  Future<String> _sendStability(
-    List<Map<String, String>> messages,
-  ) async {
-    // Extract the latest user prompt for the image generation
-    final userMessages = messages.where((m) => m['role'] == 'user').toList();
-    if (userMessages.isEmpty) {
-      return 'ERROR: No user prompt found for image generation.';
-    }
-
-    final prompt = userMessages.last['content'] ?? '';
-
-    // Create a multipart request since stability AI v2beta uses multipart/form-data
-    var request = http.MultipartRequest(
-        'POST', Uri.parse(AppConstants.stabilityEndpoint));
-    request.headers.addAll({
-      'Authorization': 'Bearer $_apiKey',
-      'Accept': 'application/json',
-    });
-
-    request.fields['prompt'] = prompt;
-    request.fields['model'] = _model;
-    request.fields['output_format'] = 'jpeg';
-
-    final response = await request.send().timeout(_responseTimeout);
-    final responseBody =
-        await response.stream.bytesToString().timeout(_responseTimeout);
-
-    if (response.statusCode != 200) {
-      return 'ERROR: Stability AI returned ${response.statusCode} — $responseBody';
-    }
-
-    final data = jsonDecode(responseBody);
-    final base64Image = data['image'];
-    if (base64Image != null) {
-      return '[IMAGE_BASE64]$base64Image';
-    }
-
-    return 'ERROR: No image generated.';
   }
 }

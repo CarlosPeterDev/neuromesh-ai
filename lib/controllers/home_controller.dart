@@ -8,6 +8,31 @@ import 'model_controller.dart';
 
 class HomeController extends GetxController {
   final currentTab = 0.obs;
+  final modelScroll = ScrollController();
+  final _tabHistory = <int>[];
+
+  void modelsToTop() {
+    if (modelScroll.hasClients) {
+      modelScroll.jumpTo(modelScroll.position.minScrollExtent);
+    }
+  }
+
+  bool goBack() {
+    if (scaffoldKey.currentState?.isDrawerOpen == true) {
+      closeSidebar();
+      return true;
+    }
+    if (_tabHistory.isEmpty) return false;
+    currentTab.value = _tabHistory.removeLast();
+    if (currentTab.value == 1) modelsToTop();
+    return true;
+  }
+
+  @override
+  void onClose() {
+    modelScroll.dispose();
+    super.onClose();
+  }
 
   /// Root scaffold key — the chat sidebar hangs off the root so it slides
   /// over the bottom navigation bar instead of under it.
@@ -22,7 +47,8 @@ class HomeController extends GetxController {
         final hive = Get.find<HiveService>();
         final mc = Get.find<ModelController>();
         final inf = Get.find<InferenceService>();
-        if (hive.getSetting<bool>('auto_load_last', defaultValue: false) == true &&
+        if (hive.getSetting<bool>('auto_load_last', defaultValue: false) ==
+                true &&
             mc.canLoadLastModel &&
             !inf.isModelLoaded.value &&
             !inf.isLoadingModel.value) {
@@ -40,6 +66,12 @@ class HomeController extends GetxController {
   }
 
   void changeTab(int index) {
+    if (currentTab.value == index) {
+      if (index == 1) modelsToTop();
+      return;
+    }
+    _tabHistory.remove(index);
+    _tabHistory.add(currentTab.value);
     currentTab.value = index;
   }
 

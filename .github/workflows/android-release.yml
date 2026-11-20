@@ -30,6 +30,7 @@ jobs:
     outputs:
       version: ${{ steps.ver.outputs.name }}
       production_signed: ${{ steps.sign.outputs.production }}
+      standalone_channel: ${{ steps.standalone_sign.outputs.channel }}
       aab_mb: ${{ steps.play_size.outputs.aab_mb }}
       split_mb: ${{ steps.play_size.outputs.split_mb }}
     steps:
@@ -194,47 +195,69 @@ jobs:
           fi
           if [ "$SIZE" -gt 170000000 ]; then echo "::warning::Download size is close to the Play limit"; fi
 
+      - name: Configure persistent GitHub APK signer
+        id: standalone_sign
+        if: github.event_name != 'pull_request'
+        env:
+          UPDATE_KEYSTORE: ${{ secrets.ANDROID_UPDATE_KEYSTORE_BASE64 }}
+          UPDATE_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEYSTORE_PASSWORD }}
+          UPDATE_ALIAS: ${{ secrets.ANDROID_UPDATE_KEY_ALIAS }}
+          UPDATE_KEY_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEY_PASSWORD }}
+          UPDATE_CERT: ${{ vars.ANDROID_UPDATE_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          if [ -n "$UPDATE_KEYSTORE$UPDATE_PASSWORD$UPDATE_ALIAS$UPDATE_KEY_PASSWORD$UPDATE_CERT" ]; then
+            if [[ -z "$UPDATE_KEYSTORE" || -z "$UPDATE_PASSWORD" || -z "$UPDATE_ALIAS" || -z "$UPDATE_KEY_PASSWORD" || ! "$UPDATE_CERT" =~ ^[a-fA-F0-9]{64}$ ]]; then
+              echo "::error::Configure the complete persistent Android update signer and its certificate pin."
+              exit 1
+            fi
+            printf '%s' "$UPDATE_KEYSTORE" | base64 -d > android/github-release.jks
+            {
+              printf 'storePassword=%s\n' "$UPDATE_PASSWORD"
+              printf 'keyPassword=%s\n' "$UPDATE_KEY_PASSWORD"
+              printf 'keyAlias=%s\n' "$UPDATE_ALIAS"
+              printf 'storeFile=%s\n' "$GITHUB_WORKSPACE/android/github-release.jks"
+            } > android/key.properties
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+          elif [ '${{ steps.sign.outputs.production }}' = 'true' ]; then
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=preview" >> "$GITHUB_OUTPUT"
+            echo "::warning::This preview uses a temporary signer. Configure the persistent GitHub APK signer for future in-place updates."
+          fi
+
       - name: Standalone APKs from the normal release configuration
         if: github.event_name != 'pull_request'
         env:
-          NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.sign.outputs.production == 'true' && 'false' || 'true' }}
-          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          NEUROMESH_ARM64_APK_ONLY: "true"
+          NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.standalone_sign.outputs.channel == 'preview' && 'true' || 'false' }}
+          UPDATE_CERT: ${{ vars.ANDROID_UPDATE_CERT_SHA256 }}
         run: |
           set -euo pipefail
-          KS="$GITHUB_WORKSPACE/android/release.jks"
-          ALIAS=androiddebugkey
-          printf '%s' android > "$RUNNER_TEMP/ks-pass"
-          printf '%s' android > "$RUNNER_TEMP/key-pass"
-          if [ '${{ steps.sign.outputs.production }}' = 'true' ]; then
-            KS="$GITHUB_WORKSPACE/android/release.jks"
-            ALIAS="$KEY_ALIAS"
-            printf '%s' "$KS_PASS" > "$RUNNER_TEMP/ks-pass"
-            printf '%s' "$KEY_PASS" > "$RUNNER_TEMP/key-pass"
-          fi
-          java -jar "$RUNNER_TEMP/bundletool.jar" build-apks --bundle=build/app/outputs/bundle/release/app-release.aab --output="$RUNNER_TEMP/universal.apks" --mode=universal --ks="$KS" --ks-key-alias="$ALIAS" --ks-pass="file:$RUNNER_TEMP/ks-pass" --key-pass="file:$RUNNER_TEMP/key-pass" --overwrite
-          unzip -p "$RUNNER_TEMP/universal.apks" universal.apk > "$RUNNER_TEMP/universal.apk"
-          # Small ARM64 standalone APK with the same Dart flags, manifest and signer.
-          flutter build apk --release --target-platform android-arm64 --dart-define=PLAY_BUILD=true "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json" --build-name=${{ steps.ver.outputs.name }} --build-number=${{ steps.ver.outputs.code }}
+          git show HEAD:android/app/src/main/AndroidManifest.xml > android/app/src/main/AndroidManifest.xml
+          V=(--build-name='${{ steps.ver.outputs.name }}' --build-number='${{ steps.ver.outputs.code }}')
+          NEUROMESH_ARM64_APK_ONLY=true flutter build apk --release --target-platform android-arm64 "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json" --dart-define=PLAY_BUILD=false "${V[@]}"
+          cp build/app/outputs/flutter-apk/app-release.apk "$RUNNER_TEMP/arm64.apk"
+          flutter build apk --release "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json" --dart-define=PLAY_BUILD=false "${V[@]}"
+          cp build/app/outputs/flutter-apk/app-release.apk "$RUNNER_TEMP/universal.apk"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
           "$APKSIGNER" verify --verbose --print-certs "$RUNNER_TEMP/universal.apk" > "$RUNNER_TEMP/universal-signature.txt"
-          "$APKSIGNER" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk > "$RUNNER_TEMP/arm64-signature.txt"
+          "$APKSIGNER" verify --verbose --print-certs "$RUNNER_TEMP/arm64.apk" > "$RUNNER_TEMP/arm64-signature.txt"
           sed -n 's/^.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/universal-signature.txt" | sort -u > "$RUNNER_TEMP/universal-cert.txt"
           sed -n 's/^.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/arm64-signature.txt" | sort -u > "$RUNNER_TEMP/arm64-cert.txt"
           test -s "$RUNNER_TEMP/universal-cert.txt"
           test -s "$RUNNER_TEMP/arm64-cert.txt"
           diff "$RUNNER_TEMP/universal-cert.txt" "$RUNNER_TEMP/arm64-cert.txt"
+          if [ -n "$UPDATE_CERT" ]; then
+            printf '%s\n' "${UPDATE_CERT,,}" | diff - "$RUNNER_TEMP/arm64-cert.txt"
+          fi
           AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt | sort -V | tail -1)
-          "$AAPT" dump badging build/app/outputs/flutter-apk/app-release.apk > "$RUNNER_TEMP/arm64-package.txt"
+          "$AAPT" dump badging "$RUNNER_TEMP/arm64.apk" > "$RUNNER_TEMP/arm64-package.txt"
           sed 's/[[:space:]]*$//' "$RUNNER_TEMP/arm64-package.txt" | grep -Fx "native-code: 'arm64-v8a'"
           for library in libproot.so libproot_loader.so libtalloc.so libandroid-shmem.so; do
             unzip -l build/app/outputs/bundle/release/app-release.aab "base/lib/arm64-v8a/$library"
-            unzip -l build/app/outputs/flutter-apk/app-release.apk "lib/arm64-v8a/$library"
+            unzip -l "$RUNNER_TEMP/arm64.apk" "lib/arm64-v8a/$library"
             unzip -l "$RUNNER_TEMP/universal.apk" "lib/arm64-v8a/$library"
           done
-          rm -f "$RUNNER_TEMP/ks-pass" "$RUNNER_TEMP/key-pass"
           # The compiler is no longer needed; leave room for the emulator image.
           rm -rf "$RUNNER_TEMP/vksdk"
 
@@ -245,7 +268,8 @@ jobs:
           V='${{ steps.ver.outputs.name }}'
           SUF=""; [ '${{ steps.sign.outputs.production }}' = 'true' ] || SUF="-dev"
           mkdir -p dist
-          cp build/app/outputs/flutter-apk/app-release.apk "dist/NeuroMesh-AI-v${V}-arm64${SUF}.apk"
+          cp "$RUNNER_TEMP/arm64-cert.txt" dist/android-apk-signer.txt
+          cp "$RUNNER_TEMP/arm64.apk" "dist/NeuroMesh-AI-v${V}-arm64${SUF}.apk"
           cp "$RUNNER_TEMP/universal.apk" "dist/NeuroMesh-AI-v${V}-universal${SUF}.apk"
           cp build/app/outputs/bundle/release/app-release.aab "dist/NeuroMesh-AI-v${V}${SUF}.aab"
           for f in dist/*; do test -s "$f" || { echo "empty artifact $f"; exit 1; }; done
@@ -449,6 +473,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       VERSION: ${{ needs.build.outputs.version }}
       PRODUCTION_SIGNED: ${{ needs.build.outputs.production_signed }}
+      STANDALONE_CHANNEL: ${{ needs.build.outputs.standalone_channel }}
       AAB_MB: ${{ needs.build.outputs.aab_mb }}
       SPLIT_MB: ${{ needs.build.outputs.split_mb }}
     steps:
@@ -484,6 +509,9 @@ jobs:
             fi
             cp "$installer" dist/
           done
+          APK_SIGNER=$(cat "$android/android-apk-signer.txt")
+          [[ "$APK_SIGNER" =~ ^[a-f0-9]{64}$ ]]
+          echo "APK_SIGNER=$APK_SIGNER" >> "$GITHUB_ENV"
           cd dist
           sha256sum -- *.apk *.aab *.exe *.deb *.AppImage > SHA256SUMS.txt
           sha256sum --check SHA256SUMS.txt
@@ -522,6 +550,8 @@ jobs:
           - Build date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
           - Commit: $GITHUB_SHA
           - Android signing: $signing_label
+          - GitHub APK signing channel: $STANDALONE_CHANNEL
+          - Android APK signer SHA-256: $APK_SIGNER
           - Play AAB: $AAB_MB MB file, $SPLIT_MB MB download on an arm64 phone after Play splitting (limit 200 MB)
           - Verify any installer using SHA256SUMS.txt.
           EOF

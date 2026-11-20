@@ -16,6 +16,19 @@ Create a key once with (`keytool -genkey -v -keystore release.jks -keyalg RSA -k
 Without these secrets CI produces *development-signed* builds, published as pre-releases and named accordingly. Do not distribute them as production releases.
 
 
+### Persistent GitHub APK updates
+
+Use a dedicated, backed-up keystore for GitHub APKs. Set these repository Actions secrets as a group:
+
+- `ANDROID_UPDATE_KEYSTORE_BASE64`
+- `ANDROID_UPDATE_KEYSTORE_PASSWORD`
+- `ANDROID_UPDATE_KEY_ALIAS`
+- `ANDROID_UPDATE_KEY_PASSWORD`
+
+Set the repository Actions variable `ANDROID_UPDATE_CERT_SHA256` to the signing certificate's 64-character hexadecimal SHA-256 digest, without separators. CI checks both APKs against it. Keep the same signer for subsequent GitHub APKs. The Play bundle continues to use its own signing settings.
+
+An ephemeral preview certificate only supports reinstalling APKs from the same build. Installations signed with a different certificate must use their original signing channel for in-place updates. Protect the private keystore and passwords. The published digest is public and allows the updater to identify incompatible builds before downloading.
+
 ## Developer diagnostic delivery
 
 The report screen previews the exact diagnostic report before the user sends it.

@@ -53,7 +53,8 @@ class _Phone {
 class ClusterService extends GetxService {
   final HiveService _hive = Get.find<HiveService>();
 
-  static bool get isSupported => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+  static bool get isSupported =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   /// Running a model across workers is Android-only for now; iOS devices
   /// can be workers (their GPU serves a master's layers).
@@ -90,8 +91,10 @@ class ClusterService extends GetxService {
   }
 
   Future<void> setLoadWeights(Map<String, int> values) async {
-    loadWeights.assignAll(values.map((key, value) => MapEntry(key, value.clamp(0, 100))));
-    await _hive.setSetting('cluster_load_weights', Map<String, int>.of(loadWeights));
+    loadWeights.assignAll(
+        values.map((key, value) => MapEntry(key, value.clamp(0, 100))));
+    await _hive.setSetting(
+        'cluster_load_weights', Map<String, int>.of(loadWeights));
     await setLoadProfile(ClusterProfile.manual);
   }
 
@@ -99,6 +102,7 @@ class ClusterService extends GetxService {
 
   /// This phone's worker service.
   final worker = const ClusterWorkerStatus(state: 'stopped').obs;
+  final workerPort = LlamaCluster.defaultPort.obs;
   final _workerRequested = false.obs;
 
   /// The API server is running (other devices, e.g. a PC, use the model).
@@ -125,17 +129,26 @@ class ClusterService extends GetxService {
   String? get splitSummary {
     final total = split.fold<double>(0, (a, s) => a + s.mb);
     if (split.length < 2 || total <= 0) return null;
-    return split.map((s) => '${s.name} ${(s.mb / total * 100).round()}%').join(' · ');
+    return split
+        .map((s) => '${s.name} ${(s.mb / total * 100).round()}%')
+        .join(' · ');
   }
 
   @override
   void onInit() {
     super.onInit();
-    enabled.value = _hive.getSetting<bool>(AppConstants.keyClusterEnabled) ?? false;
-    final saved = _hive.getSetting<List>(AppConstants.keyClusterWorkers) ?? const [];
-    workers.assignAll(saved.whereType<Map>().map(ClusterWorker.fromMap).where(_validWorker));
+    workerPort.value = (_hive.getSetting<int>('cluster_worker_port') ??
+            LlamaCluster.defaultPort)
+        .clamp(1024, 65535);
+    enabled.value =
+        _hive.getSetting<bool>(AppConstants.keyClusterEnabled) ?? false;
+    final saved =
+        _hive.getSetting<List>(AppConstants.keyClusterWorkers) ?? const [];
+    workers.assignAll(
+        saved.whereType<Map>().map(ClusterWorker.fromMap).where(_validWorker));
     final savedProfile = _hive.getSetting<String>('cluster_load_profile');
-    profile.value = ClusterProfile.values.firstWhere((value) => value.name == savedProfile,
+    profile.value = ClusterProfile.values.firstWhere(
+        (value) => value.name == savedProfile,
         orElse: () => ClusterProfile.automatic);
     final weights = _hive.getSetting<Map>('cluster_load_weights') ?? {};
     loadWeights.assignAll({
@@ -181,10 +194,12 @@ class ClusterService extends GetxService {
     _watchdog = Timer.periodic(const Duration(seconds: 12), (_) async {
       if (_reloading || !enabled.value || role != ClusterRole.master) return;
       if (split.length < 2) return;
-      if (DateTime.now().difference(_lastReload) < const Duration(seconds: 90)) return;
+      if (DateTime.now().difference(_lastReload) < const Duration(seconds: 90))
+        return;
       if (!Get.isRegistered<ModelController>()) return;
       final inference = Get.find<InferenceService>();
-      if (inference.isLoadingModel.value || inference.isGenerating.value) return;
+      if (inference.isLoadingModel.value || inference.isGenerating.value)
+        return;
       List<ClusterWorker> lost;
       try {
         lost = await relocateWorkers();
@@ -199,10 +214,12 @@ class ClusterService extends GetxService {
       try {
         showToast('Phone cluster',
             '${lost.map((w) => w.model ?? w.name).join(', ')} left. Reloading the model without it…');
-        Get.find<AppLogService>().info('Phone cluster: worker lost, reloading $file');
+        Get.find<AppLogService>()
+            .info('Phone cluster: worker lost, reloading $file');
         await Get.find<ModelController>().loadModel(file);
       } catch (e) {
-        Get.find<AppLogService>().error('Cluster auto-reload failed', details: e);
+        Get.find<AppLogService>()
+            .error('Cluster auto-reload failed', details: e);
       } finally {
         _reloading = false;
       }
@@ -225,7 +242,8 @@ class ClusterService extends GetxService {
     if (next == role) return;
     if (next != ClusterRole.worker && role == ClusterRole.worker) {
       if (workerStopsWithApp) {
-        showToast('Still sharing', 'Close NeuroMesh AI to stop sharing this device.');
+        showToast(
+            'Still sharing', 'Close NeuroMesh AI to stop sharing this device.');
         return;
       }
       await stopWorker();
@@ -244,7 +262,7 @@ class ClusterService extends GetxService {
     if (host == null || !status.running) return null;
     return Uri(scheme: _qrScheme, host: 'worker', queryParameters: {
       'host': host,
-      'port': '${LlamaCluster.defaultPort}',
+      'port': '${workerPort.value}',
       if (localAddresses.length > 1)
         'alt': localAddresses
             .where((entry) => entry.address != host)
@@ -262,13 +280,24 @@ class ClusterService extends GetxService {
     _workerRequested.value = true;
     worker.value = const ClusterWorkerStatus(state: 'starting');
     try {
-      await LlamaCluster.startWorker();
+      await LlamaCluster.startWorker(port: workerPort.value);
       _watchWorker();
     } on PlatformException catch (error) {
       _statusTimer?.cancel();
-      worker.value = ClusterWorkerStatus(state: 'error',
+      worker.value = ClusterWorkerStatus(
+          state: 'error',
           error: error.message ?? 'Could not start the worker service.');
     }
+  }
+
+  Future<void> setWorkerPort(int port) async {
+    if (port < 1024 || port > 65535 || port == workerPort.value) return;
+    if (workerStopsWithApp && worker.value.running) return;
+    final wasRunning = _workerRequested.value || worker.value.running;
+    if (wasRunning) await stopWorker();
+    await _hive.setSetting('cluster_worker_port', port);
+    workerPort.value = port;
+    if (wasRunning) await startWorker();
   }
 
   Future<void> stopWorker() async {
@@ -304,7 +333,8 @@ class ClusterService extends GetxService {
     try {
       worker.value = await LlamaCluster.workerStatus();
     } catch (e) {
-      Get.find<AppLogService>().error('Cluster worker status failed', details: e);
+      Get.find<AppLogService>()
+          .error('Cluster worker status failed', details: e);
     }
   }
 
@@ -324,7 +354,9 @@ class ClusterService extends GetxService {
   }
 
   static bool _validWorker(ClusterWorker worker) =>
-      isPrivateLanAddress(worker.host) && worker.port > 0 && worker.port <= 65535;
+      isPrivateLanAddress(worker.host) &&
+      worker.port > 0 &&
+      worker.port <= 65535;
 
   // ── Master: workers ────────────────────────────────────────────────────
 
@@ -335,18 +367,24 @@ class ClusterService extends GetxService {
     final params = uri?.queryParameters ?? const {};
     final host = params['host'];
     final port = int.tryParse(params['port'] ?? '');
-    if (uri == null || uri.scheme != _qrScheme || uri.host != 'worker' || host == null || port == null) {
+    if (uri == null ||
+        uri.scheme != _qrScheme ||
+        uri.host != 'worker' ||
+        host == null ||
+        port == null) {
       return 'That isn\'t a NeuroMesh AI worker code';
     }
-    return _add(ClusterWorker(
-      name: params['name'] ?? host,
-      host: host,
-      port: port,
-      ramMb: int.tryParse(params['ram'] ?? ''),
-      bandwidth: double.tryParse(params['bw'] ?? ''),
-      model: params['name'],
-      id: params['id'],
-    ), alternateHosts: (params['alt'] ?? '').split(',').take(2));
+    return _add(
+        ClusterWorker(
+          name: params['name'] ?? host,
+          host: host,
+          port: port,
+          ramMb: int.tryParse(params['ram'] ?? ''),
+          bandwidth: double.tryParse(params['bw'] ?? ''),
+          model: params['name'],
+          id: params['id'],
+        ),
+        alternateHosts: (params['alt'] ?? '').split(',').take(2));
   }
 
   /// Adds a worker by IP ("192.168.1.20" or "192.168.1.20:50052"). Returns
@@ -354,7 +392,8 @@ class ClusterService extends GetxService {
   Future<String?> addManual(String input) async {
     final text = input.trim();
     if (text.isEmpty) return 'Enter the worker phone\'s IP address';
-    final host = text.contains(':') ? text.substring(0, text.lastIndexOf(':')) : text;
+    final host =
+        text.contains(':') ? text.substring(0, text.lastIndexOf(':')) : text;
     final port = text.contains(':')
         ? int.tryParse(text.substring(text.lastIndexOf(':') + 1))
         : LlamaCluster.defaultPort;
@@ -401,7 +440,9 @@ class ClusterService extends GetxService {
     for (final w in missing) {
       final match = seen.firstWhereOrNull((s) => w.id != null && s.id == w.id);
       final i = workers.indexWhere((x) => x.endpoint == w.endpoint);
-      if (match == null || match.endpoint == w.endpoint || i < 0 ||
+      if (match == null ||
+          match.endpoint == w.endpoint ||
+          i < 0 ||
           !await _probeWorker(match)) {
         unreachable.add(w);
         continue;
@@ -414,7 +455,8 @@ class ClusterService extends GetxService {
     }
     if (moved > 0) {
       await _save();
-      Get.find<AppLogService>().info('Phone cluster: found $moved worker(s) at a new address');
+      Get.find<AppLogService>()
+          .info('Phone cluster: found $moved worker(s) at a new address');
     }
     return unreachable;
   }
@@ -453,9 +495,8 @@ class ClusterService extends GetxService {
       return 'This address belongs to this device. Use the code from the worker device.';
     }
 
-    final choices = hosts
-        .map((host) => candidate.movedTo(host, candidate.port))
-        .toList();
+    final choices =
+        hosts.map((host) => candidate.movedTo(host, candidate.port)).toList();
     final replies = await Future.wait(choices.map(_probeWorker));
     ClusterWorker? worker;
     for (var i = 0; i < replies.length; i++) {
@@ -474,13 +515,23 @@ class ClusterService extends GetxService {
       if (await _probeWorker(choices.single)) worker = choices.single;
     }
     if (worker == null) {
-      return 'No worker answered at ${candidate.endpoint}. '
-          'Open Phone cluster on the other device, wait for Ready, then scan '
-          'its current code. If both devices are already on the same Wi-Fi, '
-          'try joining the worker’s hotspot.';
+      final reason = await LlamaCluster.probeDiagnostic(candidate.endpoint)
+          .timeout(const Duration(seconds: 3), onTimeout: () => null);
+      final detail = switch (reason) {
+        'refused' =>
+          'The device answered, but no worker is listening on that port. Check Worker mode and scan its current code.',
+        'no_route' =>
+          'Android has no route to the worker. Try connecting the master directly to the worker’s hotspot.',
+        'timeout' =>
+          'The connection timed out. Try a direct hotspot or change the port on the worker and scan its new code.',
+        _ =>
+          'Wait for Ready on the worker and scan its current code. Try a direct hotspot if your Wi-Fi blocks connections between devices.',
+      };
+      return 'Couldn’t reach ${candidate.endpoint}. $detail';
     }
     final paired = worker;
-    workers.removeWhere((item) => item.endpoint == paired.endpoint ||
+    workers.removeWhere((item) =>
+        item.endpoint == paired.endpoint ||
         (paired.id != null && item.id == paired.id));
     workers.add(paired);
     lastWorkerReply[paired.endpoint] = DateTime.now();
@@ -565,9 +616,12 @@ class ClusterService extends GetxService {
 
     final activeProfile = profile.value;
     final offline = await relocateWorkers();
-    final available = workers.where((w) =>
-        !offline.any((o) => o.endpoint == w.endpoint) &&
-        (activeProfile != ClusterProfile.manual || weightFor(workerKey(w)) > 0)).toList();
+    final available = workers
+        .where((w) =>
+            !offline.any((o) => o.endpoint == w.endpoint) &&
+            (activeProfile != ClusterProfile.manual ||
+                weightFor(workerKey(w)) > 0))
+        .toList();
     if (offline.isNotEmpty) {
       final names = offline.map((w) => w.model ?? w.name).join(', ');
       showToast('Phone cluster', 'Not reachable, loading without: $names');
@@ -575,8 +629,10 @@ class ClusterService extends GetxService {
 
     final masterWeight = weightFor(localDeviceKey);
     if (activeProfile == ClusterProfile.manual &&
-        available.isEmpty && masterWeight == 0) {
-      throw StateError('No enabled devices are reachable. Increase a device’s cluster weight.');
+        available.isEmpty &&
+        masterWeight == 0) {
+      throw StateError(
+          'No enabled devices are reachable. Increase a device’s cluster weight.');
     }
 
     const bytesPerMb = 1024 * 1024;
@@ -584,18 +640,22 @@ class ClusterService extends GetxService {
     final metadata = await readGgufInfo(modelPath);
     final masterCapacity = await LlamaCluster.localFreeRamMb() * 0.7;
     if (masterCapacity <= 0) {
-      throw StateError('Could not measure free memory on the master. Retry after checking the cluster.');
+      throw StateError(
+          'Could not measure free memory on the master. Retry after checking the cluster.');
     }
-    final mayEstimate = metadata != null && metadata.trainedContext >= 512 &&
+    final mayEstimate = metadata != null &&
+        metadata.trainedContext >= 512 &&
         metadata.kvCacheBytes(512) > 0;
     final estimatedOverheadMb = !mayEstimate
         ? modelMb * 0.1
         : (metadata.estimateBytes(512) - metadata.fileBytes) / bytesPerMb;
     // The master always owns the output weights and runs the session, even
     // when the user assigns every transformer layer to workers.
-    final reserveMb = math.min(estimatedOverheadMb, 256.0 + math.min(modelMb * 0.08, 512.0));
+    final reserveMb =
+        math.min(estimatedOverheadMb, 256.0 + math.min(modelMb * 0.08, 512.0));
     if (masterCapacity <= reserveMb) {
-      throw StateError('The master needs more free memory for the output and session buffers.');
+      throw StateError(
+          'The master needs more free memory for the output and session buffers.');
     }
     _localSpeed ??= await LlamaCluster.benchmark();
     final master = _Phone(null, masterCapacity - reserveMb, _localSpeed!);
@@ -606,7 +666,8 @@ class ClusterService extends GetxService {
             roundTripMs: _workerRoundTripMs[w.endpoint] ?? 5),
     ];
     final capacity = phones.fold<double>(reserveMb, (total, phone) {
-      if (activeProfile == ClusterProfile.manual && phone.worker == null &&
+      if (activeProfile == ClusterProfile.manual &&
+          phone.worker == null &&
           masterWeight == 0) return total;
       return total + phone.capacityMb;
     });
@@ -629,11 +690,13 @@ class ClusterService extends GetxService {
     if (mayEstimate) {
       tokens = math.min(tokens, metadata.trainedContext);
       if (autoContext || activeProfile == ClusterProfile.context) {
-        final fitting = metadata.maxContextFitting((capacity * bytesPerMb).floor());
+        final fitting =
+            metadata.maxContextFitting((capacity * bytesPerMb).floor());
         if (fitting != null) tokens = math.min(tokens, fitting);
       }
     }
-    final needMb = mayEstimate ? metadata.estimateBytes(tokens) / bytesPerMb
+    final needMb = mayEstimate
+        ? metadata.estimateBytes(tokens) / bytesPerMb
         : modelMb * 1.1;
     if (needMb > capacity) {
       throw Exception('About ${_gb(needMb)} is needed at $tokens tokens. '
@@ -669,21 +732,27 @@ class ClusterService extends GetxService {
             capacity: phone.capacityMb,
             weight: switch (activeProfile) {
               ClusterProfile.manual => weightFor(phone.worker == null
-                  ? localDeviceKey : workerKey(phone.worker!)).toDouble(),
-              ClusterProfile.context || ClusterProfile.capacity => phone.capacityMb,
+                      ? localDeviceKey
+                      : workerKey(phone.worker!))
+                  .toDouble(),
+              ClusterProfile.context ||
+              ClusterProfile.capacity =>
+                phone.capacityMb,
               _ => phone.speed,
             },
           )
       ], layerMemoryMb);
       if (shares == null) {
-        throw StateError('The selected devices do not have enough available memory.');
+        throw StateError(
+            'The selected devices do not have enough available memory.');
       }
       for (var i = 0; i < phones.length; i++) {
         phones[i].assignedMb = shares[i];
       }
     }
 
-    final used = phones.where((p) => p.worker != null && p.assignedMb > 0).toList();
+    final used =
+        phones.where((p) => p.worker != null && p.assignedMb > 0).toList();
     if (used.isEmpty) return local(tokens);
     try {
       await LlamaCluster.setCluster(
@@ -705,11 +774,13 @@ class ClusterService extends GetxService {
   /// alone. True to go ahead.
   Future<bool> confirmLiteRtRunsHere(String model) async {
     final context = Get.context;
-    if (role != ClusterRole.master || workers.isEmpty || context == null) return true;
+    if (role != ClusterRole.master || workers.isEmpty || context == null)
+      return true;
     final go = await showAppSheet<bool>(
       context,
       title: 'This model can\'t use your workers',
-      subtitle: '${model.replaceAll(RegExp(r'\.(litertlm|task)$'), '')} is a LiteRT '
+      subtitle:
+          '${model.replaceAll(RegExp(r'\.(litertlm|task)$'), '')} is a LiteRT '
           'model, and only GGUF models can be shared across phones. It will run '
           'on this phone only. To use your workers, load a GGUF model instead.',
       builder: (ctx) => Column(
@@ -721,7 +792,8 @@ class ClusterService extends GetxService {
             onPressed: () => Navigator.pop(ctx, true),
           ),
           const SizedBox(height: 10),
-          TonalButton.neutral(ctx, label: 'Cancel', onTap: () => Navigator.pop(ctx, false)),
+          TonalButton.neutral(ctx,
+              label: 'Cancel', onTap: () => Navigator.pop(ctx, false)),
         ],
       ),
     );
@@ -739,14 +811,17 @@ class ClusterService extends GetxService {
       final open = b.name.indexOf('[');
       if (open < 0) continue;
       final endpoint = b.name.substring(open + 1, b.name.lastIndexOf(']'));
-      final name = workers.firstWhereOrNull((w) => w.endpoint == endpoint)?.model ?? endpoint;
+      final name =
+          workers.firstWhereOrNull((w) => w.endpoint == endpoint)?.model ??
+              endpoint;
       remote[name] = (remote[name] ?? 0) + b.mb;
     }
     final fileMb = await File(modelPath).length() / (1024 * 1024);
     final remoteMb = remote.values.fold<double>(0, (a, b) => a + b);
     split.assignAll([
       ClusterShare(deviceName.isEmpty ? 'This phone' : deviceName,
-          math.max(0, fileMb - remoteMb), isThisPhone: true),
+          math.max(0, fileMb - remoteMb),
+          isThisPhone: true),
       for (final e in remote.entries) ClusterShare(e.key, e.value),
     ]);
   }

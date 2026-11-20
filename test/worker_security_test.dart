@@ -134,6 +134,32 @@ void main() {
 
   });
 
+  test('a refused cluster connection tells the master the port is closed',
+      () async {
+    final dir = await Directory.systemTemp.createTemp('cluster_refused');
+    Hive.init(dir.path);
+    Get.put(await HiveService().init());
+    final cluster = ClusterService();
+    const channel = MethodChannel('llama_flutter_android/cluster');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'probe') return false;
+      if (call.method == 'probeDiagnostic') return 'refused';
+      throw MissingPluginException();
+    });
+    addTearDown(() async {
+      messenger.setMockMethodCallHandler(channel, null);
+      Get.reset();
+      await Hive.close();
+      await dir.delete(recursive: true);
+    });
+
+    expect(await cluster.addManual('192.168.236.10:50052'),
+        contains('no worker is listening on that port'));
+    expect(cluster.workers, isEmpty);
+  });
+
   test('workloads can be assigned to different authenticated LAN phones',
       () async {
     final dir = await Directory.systemTemp.createTemp('worker_placement');
