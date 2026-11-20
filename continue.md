@@ -9,7 +9,7 @@ Read this file, check the current branch and working tree, and review the latest
 ## NeuroMesh 2.0 desktop OpenCode milestone
 
 - **Agents** discovers installed OpenCode and shows whether the local terminal preview is available. On Linux with OpenCode v1.19.6 and a supported terminal, it links the loaded model over a dedicated authenticated loopback endpoint. Provider configuration and CLI history are scoped to a temporary profile. [Setup, architecture, and upstream and distribution audit](docs/OPENCODE.md)
-- Local verification passed 217 Flutter tests and all three build-config tests. Four optional checks were skipped in the standard suite. The separate Linux smoke test passed with Xfce Terminal, real OpenCode and Artemis GGUF in a loopback-only network namespace.
+- Local verification passed 217 Flutter tests and all three build-config tests. Four optional checks were skipped in the standard suite. The separate Linux smoke test passed with Xfce Terminal, real OpenCode and Artemis GGUF in a loopback-only network namespace. [Implementation and checks](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/54/checks)
 - The preview exposes text completions. Next is the agent session API and native Chat UI, followed by structured tool support and approval tests. Windows and macOS launch, physical cluster operation through the bridge, Android runtime distribution, and a release from this branch remain pending.
 - The v1.0.139 AAB was 324,350,971 bytes. Meeting the 200 MB raw AAB requirement needs an Android packaging pass and a separate raw artifact check. The existing preview assets are pre-releases.
 
