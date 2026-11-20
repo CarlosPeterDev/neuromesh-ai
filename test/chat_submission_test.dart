@@ -30,6 +30,7 @@ void main() {
   late ChatController chat;
   late _WorkspaceAgent agent;
   late _TestCloud cloud;
+  late _TestNarrationInference local;
 
   setUp(() async {
     dir = await Directory.systemTemp.createTemp('chat_submission');
@@ -37,7 +38,8 @@ void main() {
     hive = Get.put(await HiveService().init());
     await hive.setSetting(AppConstants.keyInferenceMode, 'cloud');
     Get.put(SettingsController());
-    Get.put(InferenceService());
+    local = _TestNarrationInference();
+    Get.put<InferenceService>(local);
     Get.put(AppLogService());
     Get.put(ImageGenerationNotificationService());
     Get.put(LocalImageService());
@@ -69,6 +71,28 @@ void main() {
     expect(agent.imageCall?.arguments['prompt'], 'Create an image of a fox');
     expect(agent.directImageRequest, isTrue);
     expect(chat.messages.last.content, contains('Generated online'));
+    expect(cloud.calls, 0);
+  });
+
+  test('local writing goes directly to TTS without creating a text file',
+      () async {
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    agent.mode.value = AgentChatMode.always;
+    local.answer = 'Playing sports builds fitness and teaches teamwork.';
+    for (final request in [
+      'Write a paragraph about the importance of sports then use the tts tool to convert it to audio file',
+      'A paragraph you write about sports and be in audio file',
+    ]) {
+      chat.textController.text = request;
+      await chat.sendMessage();
+      expect(local.lastPrompt, contains('Return only the finished text'));
+      expect(local.lastPrompt, isNot(contains('audio file')));
+      expect(local.lastSystem, isNot(contains('<tool_call>')));
+      expect(agent.narration?.arguments['text'], local.answer);
+      expect(chat.messages.last.content, contains('nmfile:research.wav'));
+      expect(chat.messages.last.content, isNot(contains('notes.txt')));
+    }
+    expect(local.calls, 2);
     expect(cloud.calls, 0);
   });
 
@@ -289,6 +313,32 @@ class _WorkspaceAgent extends AgentService {
   Future<String> importToWorkspace(String sourcePath, String name) {
     imports++;
     return imported.future;
+  }
+}
+
+class _TestNarrationInference extends InferenceService {
+  String answer = '';
+  String? lastPrompt;
+  String? lastSystem;
+  int calls = 0;
+
+  @override
+  Future<String> generate({
+    required String prompt,
+    String? systemPrompt,
+    List<Map<String, String>>? conversationHistory,
+    String source = 'chat',
+    String? imagePath,
+    String? audioPath,
+    int? maxTokens,
+    List<String> stopSequences = const [],
+    void Function(String token)? onToken,
+  }) async {
+    calls++;
+    lastPrompt = prompt;
+    lastSystem = systemPrompt;
+    onToken?.call(answer);
+    return answer;
   }
 }
 

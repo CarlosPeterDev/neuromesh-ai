@@ -35,6 +35,29 @@ String? literalSpeechText(String request) {
   return text.isEmpty ? null : text;
 }
 
+final _writingRequest = RegExp(
+  r'^\s*(?:(?:ok(?:ay)?|now|please|can you|could you|would you)[,.!]?\s+)*(?:write|draft|compose|summari[sz]e|explain|describe|search|look up|(?:(?:make|create|generate|tell|give me)\s+)?(?:an?\s+)?(?:paragraph|summary|story|poem|essay|script))\b',
+  caseSensitive: false,
+);
+
+final _narrationInstruction = RegExp(
+  r'\b(?:(?:then|and)\s+(?:(?:use|call)\s+(?:the\s+)?(?:tts|text.to.speech)\b|(?:create|crete|make|generate|convert|save|record|produce|turn|put|be)\b.{0,65}\b(?:audio?|wav|speech|voice)\s+files?\b)|as\s+an?\s+(?:audio|wav|speech|voice)\s+file\b)',
+  caseSensitive: false,
+  dotAll: true,
+);
+
+/// Returns the text-writing portion of an explicit write-then-narrate request.
+String? narrationDraftRequest(String request) {
+  if (!_writingRequest.hasMatch(request) || literalSpeechText(request) != null) {
+    return null;
+  }
+  final match = _narrationInstruction.firstMatch(request);
+  if (match == null) return null;
+  final draft = request.substring(0, match.start).trimRight()
+      .replaceFirst(RegExp(r'[,;:.]+$'), '').trim();
+  return draft.isEmpty ? null : draft;
+}
+
 final _namedWorkspaceFile = RegExp(
   r'^\s*(?:please\s+)?(?:create|make)\s+(?:an?\s+)?(?:empty\s+)?(?:text\s+)?file\s+'
   r'(?:(?:in\s+(?:the\s+)?workspace)\s+)(?:named|called)\s+([\w-]+\.txt)[.!]?\s*$',
