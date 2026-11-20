@@ -127,6 +127,39 @@ void main() {
         isFalse);
   });
 
+  test('composite projectors match the finished model, excluding components',
+      () {
+    AiModel lookup(String filename,
+            {String url = '', ModelArtifact? artifact}) =>
+        AiModel.fromMap({'filename': filename, 'url': url})
+            .copyWith(artifact: artifact);
+    final target = lookup('SmolVLM-256M-Instruct-Q8_0.gguf');
+    final otherSize = lookup('SmolVLM-500M-Instruct-Q8_0.gguf',
+        artifact:
+            const ModelArtifact(names: {'SmolVLM 500M Instruct', 'SmolVLM'}));
+    final textComponent = lookup('SmolLM2-135M-Instruct.gguf',
+        url: 'https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct');
+    final projector = lookup('local-projection.gguf',
+        artifact: const ModelArtifact(
+          role: ModelFileRole.projector,
+          names: {'SmolVLM 256M Instruct', 'SmolVLM'},
+          baseNames: {'SmolLM2 135M Instruct', 'Siglip Base Patch16 512'},
+          baseRepositories: {
+            'HuggingFaceTB/SmolLM2-135M-Instruct',
+            'google/siglip-base-patch16-512',
+          },
+        ));
+    expect(ModelHelperService.searchQuery(projector), 'SmolVLM-256M-Instruct');
+    expect(ModelHelperService.companionRepository(projector), isNull);
+    expect(ModelHelperService.suggestsPair(target, projector), isTrue);
+    expect(ModelHelperService.suggestsPair(otherSize, projector), isFalse);
+    expect(ModelHelperService.suggestsPair(textComponent, projector), isFalse);
+    expect(
+        ModelHelperService.matchesBaseMetadata(
+            textComponent, projector.artifact),
+        isFalse);
+  });
+
   test('matches renamed files against repository checksums with a size gate',
       () async {
     final model = AiModel.fromMap({'filename': 'mmproj-F16 (1).gguf'});

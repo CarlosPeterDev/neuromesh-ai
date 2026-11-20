@@ -84,6 +84,10 @@ void main() {
     final g = _GgufBuilder()
       ..string('general.architecture', 'clip')
       ..string('clip.projector_type', 'qwen2vl')
+      ..string('general.basename', 'Example')
+      ..string('general.name', 'Example Vision 3B')
+      ..string('general.dataset.0.repo_url',
+          'https://huggingface.co/datasets/training')
       ..string('general.base_model.0.name', 'Example Vision 3B')
       ..string('general.base_model.0.repo_url',
           'https://huggingface.co/example/vision');
@@ -91,6 +95,8 @@ void main() {
     expect(await readGgufInfo(path), isNull);
     final info = await ModelArtifactReader().read(path);
     expect(info?.role, ModelFileRole.projector);
+    expect(info?.names.toList(), ['Example Vision 3B', 'Example']);
+    expect(info?.repositories, isEmpty);
     expect(info?.baseNames, {'Example Vision 3B'});
     expect(info?.baseRepositories, {'example/vision'});
   });

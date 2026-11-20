@@ -13,16 +13,24 @@ import 'installed_vision_helper.dart';
 class ModelHelperService {
   static String searchQuery(AiModel model) {
     final artifact = model.artifact;
-    final name = model.fileRole.isHelper
-        ? artifact?.baseNames.firstOrNull
-        : artifact?.names.firstOrNull;
+    final name = model.fileRole == ModelFileRole.projector
+        ? _projectName(artifact) ?? _unambiguousBaseName(artifact)
+        : model.fileRole.isHelper
+            ? _unambiguousBaseName(artifact)
+            : artifact?.names.firstOrNull;
     if (model.fileRole.isHelper && name != null && _family(name).isNotEmpty) {
-      return _familyName(name);
+      return _familyName(name).replaceAll(RegExp(r'\s+'), '-');
     }
     final family = _familyName(model.filename);
     if (_family(family).isNotEmpty) return family;
     return name == null ? '' : _familyName(name);
   }
+
+  static String? _projectName(ModelArtifact? artifact) =>
+      artifact?.names.where((name) => _family(name).isNotEmpty).firstOrNull;
+
+  static String? _unambiguousBaseName(ModelArtifact? artifact) =>
+      artifact?.baseNames.singleOrNull;
 
   static String _familyName(String filename) => filename
       .replaceFirst(
@@ -74,10 +82,20 @@ class ModelHelperService {
 
   static bool matchesBaseMetadata(AiModel model, ModelArtifact? helper) {
     if (helper == null) return false;
+    final family = _families([
+      model.filename,
+      if (model.artifact?.names.firstOrNull case final String name) name,
+    ]);
+    if (helper.role == ModelFileRole.projector) {
+      final project = _projectName(helper);
+      if (project != null) return family.contains(_family(project));
+      if (helper.baseNames.length > 1 || helper.baseRepositories.length > 1) {
+        return false;
+      }
+    }
     if (_repositories(model).intersection(helper.baseRepositories).isNotEmpty) {
       return true;
     }
-    final family = _families([model.filename, ...?model.artifact?.names]);
     return family.intersection(_families(helper.baseNames)).isNotEmpty;
   }
 
@@ -96,9 +114,14 @@ class ModelHelperService {
     if (_repositories(model).intersection(_repositories(helper)).isNotEmpty) {
       return true;
     }
-    final possibleMain = _families([model.filename, ...?model.artifact?.names]);
-    final possibleHelper =
-        _families([helper.filename, ...?helper.artifact?.names]);
+    final possibleMain = _families([
+      model.filename,
+      if (model.artifact?.names.firstOrNull case final String name) name,
+    ]);
+    final possibleHelper = _families([
+      helper.filename,
+      if (helper.artifact?.names.firstOrNull case final String name) name,
+    ]);
     return possibleMain.intersection(possibleHelper).isNotEmpty;
   }
 
@@ -136,7 +159,9 @@ class ModelHelperService {
   static String? companionRepository(AiModel model) =>
       huggingFaceRepository(model.url) ??
       model.artifact?.repositories.singleOrNull ??
-      (model.fileRole.isHelper
+      (model.fileRole.isHelper &&
+              (model.fileRole != ModelFileRole.projector ||
+                  _projectName(model.artifact) == null)
           ? model.artifact?.baseRepositories.singleOrNull
           : null) ??
       huggingFaceRepository(model.mmprojUrl);
