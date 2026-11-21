@@ -223,10 +223,11 @@ jobs:
           EOF2
           java -jar "$RUNNER_TEMP/bundletool.jar" build-apks --bundle="$AAB" --output="$RUNNER_TEMP/out.apks" --device-spec="$RUNNER_TEMP/spec.json" --overwrite
           SIZE=$(java -jar "$RUNNER_TEMP/bundletool.jar" get-size total --apks="$RUNNER_TEMP/out.apks" --device-spec="$RUNNER_TEMP/spec.json" | tail -1 | awk -F, '{print $2}' | tr -dc 0-9)
-          AABSZ=$(stat -c%s "$AAB")
+          AABSZ=$(stat -Lc%s "$AAB")
           test -n "$SIZE"
           echo "Download size on an arm64 phone after Play splitting: $SIZE bytes"
-          awk -v raw="$AABSZ" -v split="$SIZE" 'BEGIN {printf "aab_mb=%.2f\nsplit_mb=%.2f\n", raw/1e6, split/1e6}' >> "$GITHUB_OUTPUT"
+          LC_ALL=C awk -v raw_bytes="$AABSZ" -v split_bytes="$SIZE" \
+            'BEGIN {printf "aab_mb=%.2f\nsplit_mb=%.2f\n", raw_bytes/1e6, split_bytes/1e6}' >> "$GITHUB_OUTPUT"
           if [ "$SIZE" -gt 198000000 ]; then
             echo "::error::Over the Play 200 MB limit"; exit 1
           fi
