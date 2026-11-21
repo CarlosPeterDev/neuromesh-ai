@@ -222,6 +222,7 @@ class FakeInference extends GetxService implements InferenceService {
     int? maxTokens,
     List<String> stopSequences = const [],
     void Function(String token)? onToken,
+    void Function(String)? onPreview,
   }) async {
     lastMaxTokens = maxTokens;
     lastStop = stopSequences;

@@ -1079,7 +1079,8 @@ class ChatController extends GetxController {
         // LiteRT models can consume image/audio attachments. GGUF currently
         // returns a clear unsupported message from the inference layer.
         Future<String> generateOnce(String prompt,
-            List<Map<String, String>> hist, void Function(String) onTok) {
+            List<Map<String, String>> hist, void Function(String) onTok,
+            {void Function(String)? onPreview}) {
           final tools = useTools && prompt != AgentService.finalAnswerPrompt;
           final nativeSchemas = tools && nativeToolMode
               ? agent.nativeSchemasForTurn(contextSize)
@@ -1118,6 +1119,7 @@ class ChatController extends GetxController {
             audioPath: fileType == 'audio' ? filePath : null,
             stopSequences: stops,
             nativeTools: nativeSchemas,
+            onPreview: onPreview,
             onToken: nativeSchemas.isEmpty ? onTok : (_) {},
           );
         }
@@ -1167,6 +1169,8 @@ class ChatController extends GetxController {
 
           Future<ToolLoopResult> runAgentLoop() => agent.runToolLoop(
                 generate: generateOnce,
+                generateWithPreview: (prompt, hist, token, preview) =>
+                    generateOnce(prompt, hist, token, onPreview: preview),
                 prompt: finalPrompt,
                 history: history,
                 confirm: confirmToolCall,
@@ -1199,7 +1203,8 @@ class ChatController extends GetxController {
         final agent = Get.find<AgentService>();
         final useTools = agent.wantsTools(visibleText);
         Future<String> cloudTurn(String prompt, List<Map<String, String>> hist,
-                void Function(String) onToken) =>
+                void Function(String) onToken,
+                {void Function(String)? onPreview}) =>
             cloud.sendAgentMessage(
               messages: [
                 {
@@ -1210,15 +1215,18 @@ class ChatController extends GetxController {
                 },
                 ...hist,
               ],
-              tools: useTools ? agent.registry.schemas : const [],
+              tools: useTools ? agent.nativeSchemasForTurn(8192) : const [],
               imageBase64: imgBase64,
               onToken: onToken,
+              onPreview: onPreview,
             );
         if (useTools) {
           final result = await agent.inProject(
               project,
               () => agent.runToolLoop(
                     generate: cloudTurn,
+                    generateWithPreview: (prompt, hist, token, preview) =>
+                        cloudTurn(prompt, hist, token, onPreview: preview),
                     prompt: finalPrompt,
                     history: history,
                     confirm: confirmToolCall,

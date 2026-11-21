@@ -1,3 +1,4 @@
+import '../utils/output_links.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -103,7 +104,7 @@ void registerExtraTools(AgentService agent) {
         } finally {
           await sink.close();
         }
-        return 'Saved ${nameOf(f)} (${size(n)}). Show it with [📎 ${nameOf(f)}](nmfile:${nameOf(f)}).';
+        return 'Saved ${nameOf(f)} (${size(n)}). Show it with [📎 ${nameOf(f)}](${outputFileUri(nameOf(f))}).';
       } catch (e) {
         return 'Error: download failed: $e';
       } finally {
@@ -249,7 +250,7 @@ void registerExtraTools(AgentService agent) {
         await dst.delete();
         return 'Error: none of those files exist. Use list_files.';
       }
-      return 'Created ${nameOf(dst)} with $n file(s) (${size(dst.lengthSync())}). Show it with [📎 ${nameOf(dst)}](nmfile:${nameOf(dst)}).';
+      return 'Created ${nameOf(dst)} with $n file(s) (${size(dst.lengthSync())}). Show it with [📎 ${nameOf(dst)}](${outputFileUri(nameOf(dst))}).';
     },
   ));
 

@@ -60,3 +60,21 @@ inline std::string neuromesh_normalize_native(const std::string& output, const c
     }
     return thought+"<tool_call>"+common_json({{"calls",calls}}).dump()+"</tool_call>";
 }
+
+// Preview only readable model content. Native tool names/argument fragments are
+// parsed on the partial path and are never sent to the message composer.
+inline std::string neuromesh_preview_native(const std::string& output, const common_chat_params& params) {
+    common_chat_parser_params parser(params);
+    if(!params.parser.empty())parser.parser.load(params.parser);
+    parser.reasoning_format=COMMON_REASONING_FORMAT_AUTO;
+    auto message=common_chat_parse(output,true,parser);
+    std::string visible;
+    if(!message.reasoning_content.empty()) {
+        bool closed=!message.content.empty() || !message.tool_calls.empty();
+        for(const auto& tag:params.thinking_end_tags) {
+            if(!tag.empty() && output.find(tag)!=std::string::npos)closed=true;
+        }
+        visible="<think>"+message.reasoning_content+(closed ? "</think>\n" : "");
+    }
+    return visible+message.content;
+}

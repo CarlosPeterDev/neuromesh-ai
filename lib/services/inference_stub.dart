@@ -65,6 +65,7 @@ class InferenceEngine {
     List<Map<String, dynamic>> nativeTools = const [],
     bool normalThinking = false,
     void Function(String token)? onToken,
+    void Function(String visible)? onPreview,
   }) async {
     return 'ERROR: Local inference is not available on this platform. Use Cloud mode.';
   }

@@ -1,3 +1,4 @@
+import '../utils/output_links.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -28,6 +29,7 @@ import '../services/hive_service.dart';
 import '../services/model_transfer_service.dart';
 import 'model_transfer_view.dart';
 import '../widgets/agent_steps.dart';
+import '../widgets/image_viewer.dart';
 import '../widgets/chat_bubble.dart';
 import '../widgets/tool_confirm.dart';
 import '../services/inference_service.dart';
@@ -1044,8 +1046,9 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       Future<String> gen(
         String prompt,
         List<Map<String, String>> hist,
-        void Function(String) onTok,
-      ) {
+        void Function(String) onTok, {
+        void Function(String)? onPreview,
+      }) {
         final nativeSchemas = useTools && nativeToolMode
             ? agent.nativeSchemasForTurn(contextSize)
             : <Map<String, dynamic>>[];
@@ -1077,6 +1080,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
           imagePath: shot,
           maxTokens: useTools ? 500 : 160,
           nativeTools: nativeSchemas,
+          onPreview: onPreview,
           onToken: nativeSchemas.isEmpty ? onTok : (_) {},
         );
       }
@@ -1093,6 +1097,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       } else {
         Future<ToolLoopResult> runAgentLoop() => agent.runToolLoop(
               generate: gen,
+              generateWithPreview: (prompt, hist, token, preview) =>
+                  gen(prompt, hist, token, onPreview: preview),
               prompt: message,
               history: List.of(_history),
               confirm: confirmToolCall,
@@ -1119,10 +1125,16 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         for (final m in RegExp(
           r'!\[[^\]]*\]\(nmfile:([^)]+)\)',
         ).allMatches(finalText)) {
-          final f =
-              await agent.inProject(project, () => agentFile(m.group(1)!));
+          final f = await agent.inProject(
+              project, () => agentFile(outputFileName(m.group(1)!)));
           if (f != null && mounted) setState(() => _shots.add(f));
         }
+      }
+      if (finalText.trim().isNotEmpty) {
+        await _chat.saveVoiceMessage(sessionId, 'assistant', finalText,
+            workspaceProject: project);
+        _history
+            .add({'role': 'assistant', 'content': stripToolTrace(finalText)});
       }
       unawaited(ctl.close());
       await speakingDone.timeout(
@@ -1133,14 +1145,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
           await _voice.stopSpeaking();
         },
       );
-      final clean = (_ended || _interrupted)
-          ? (liveIdx == null ? '' : _lines[liveIdx!].text)
-          : finalText;
-      if (clean.trim().isNotEmpty) {
-        await _chat.saveVoiceMessage(sessionId, 'assistant', clean,
-            workspaceProject: project);
-        _history.add({'role': 'assistant', 'content': stripToolTrace(clean)});
-      }
+      final clean = finalText;
       if (clean.trim().isNotEmpty && mounted) {
         setState(() {
           final line =
@@ -1503,15 +1508,11 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                     Wrap(spacing: 8, runSpacing: 8, children: [
                       for (final f in _shots)
                         GestureDetector(
-                          onTap: () => showDialog(
-                              context: context,
-                              builder: (_) => Dialog(
-                                  child:
-                                      InteractiveViewer(child: Image.file(f)))),
+                          onTap: () => ImageViewer.showFile(context, f),
                           child: ClipRRect(
                               borderRadius: BorderRadius.circular(12),
                               child: Image.file(f,
-                                  height: 160, fit: BoxFit.cover)),
+                                  width: 160, height: 160, fit: BoxFit.cover)),
                         ),
                     ]),
                 ]),

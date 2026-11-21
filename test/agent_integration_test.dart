@@ -326,16 +326,43 @@ void main() {
     expect(await agent.dir.list().length, 0);
   });
 
-  test('small native catalogs expand after model-directed discovery', () async {
+  test('tool elapsed time comes from execution, not a fabricated zero',
+      () async {
+    agent.addTool(
+        AgentTool('timed_probe', 'Measure real elapsed time', '{}', (_) async {
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+      return 'ok';
+    }));
+    final result = await run([call('timed_probe', {}), 'Done']);
+    final step = jsonDecode(
+        result.trace.single.substring(ToolLoopResult.traceMark.length));
+    expect(step['ms'], greaterThanOrEqualTo(20));
+  });
+
+  test('duplicate discovery can recover without re-executing it', () async {
+    final result = await run([
+      call('search_tools', {'query': 'image'}),
+      call('search_tools', {'query': 'image'}),
+      call('generate_image', {'prompt': 'A blue and gray flying car'}),
+      'Here is the generated car.'
+    ]);
+    expect(images.prompts, ['A blue and gray flying car']);
+    expect(result.answer, contains('Here is'));
+    expect(
+        result.trace.join(), contains('duplicate discovery was not executed'));
+  });
+
+  test('core native tools are direct and other schemas expand after discovery',
+      () async {
     final before = agent.nativeSchemasForTurn(2048);
     expect(before.map((s) => s['function']['name']), contains('search_tools'));
-    expect(before.map((s) => s['function']['name']),
-        isNot(contains('generate_image')));
+    expect(
+        before.map((s) => s['function']['name']), contains('generate_image'));
     await agent.executeTool(
-        const ParsedToolCall('search_tools', {'query': 'generate_image'}, ''),
+        const ParsedToolCall('search_tools', {'query': 'calculator'}, ''),
         (_, __, ___) async => true);
     final after = agent.nativeSchemasForTurn(2048);
-    expect(after.map((s) => s['function']['name']), contains('generate_image'));
+    expect(after.map((s) => s['function']['name']), contains('calculator'));
   });
 
   test(

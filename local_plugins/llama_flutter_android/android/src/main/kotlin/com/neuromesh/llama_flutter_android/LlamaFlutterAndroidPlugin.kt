@@ -44,7 +44,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
             channel.setMethodCallHandler { call, result ->
                 scope.launch {
                     try {
-                        generationJob?.join()
+                        if (call.method != "preview") generationJob?.join()
                         val value = when (call.method) {
                             "configure" -> {
                                 val schemas = call.arguments as? String ?: "[]"
@@ -54,6 +54,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
                                 null
                             }
                             "normalize" -> nativeNormalizeTools(call.arguments as String)
+                            "preview" -> nativePreviewTools(call.arguments as String)
                             else -> throw IllegalArgumentException("Unknown tool transport method")
                         }
                         withContext(Dispatchers.Main) { result.success(value) }
@@ -594,6 +595,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
     private external fun nativeFormatChat(roles: Array<String>, contents: Array<String>, thinking: Boolean, schemas: String): String?
     private external fun nativeChatCapabilities(): Long
     private external fun nativeNormalizeTools(response: String): String
+    private external fun nativePreviewTools(response: String): String
     private external fun nativeStop()
     private external fun nativeFreeModel()
     private external fun nativeGetTokensUsed(): Int

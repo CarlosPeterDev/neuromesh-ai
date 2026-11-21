@@ -49,6 +49,11 @@ jobs:
           curl -fL --retry 3 https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf -o "$RUNNER_TEMP/qwen.gguf"
           echo "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031  $RUNNER_TEMP/qwen.gguf" | sha256sum -c -
           scripts/check_model_thinking.sh "$RUNNER_TEMP/qwen.gguf"
+      - name: Verify Artemis streaming and compound native tool selection on the host
+        run: |
+          curl -fL --retry 3 https://huggingface.co/turintech/Qwen3.5-0.8B-Artemis-GGUF/resolve/main/Qwen3.5-0.8B-Artemis-Q4_K_M.gguf -o "$RUNNER_TEMP/artemis.gguf"
+          echo "01e0651f0fc5d0f9a3d1a68166fbdf12ab4d3bb135b3d725d694f42becfaa5a4  $RUNNER_TEMP/artemis.gguf" | sha256sum -c -
+          scripts/check_agent_stream.sh "$RUNNER_TEMP/artemis.gguf"
 
   build:
     if: ${{ !inputs.publish_preview_run }}

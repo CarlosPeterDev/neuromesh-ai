@@ -348,6 +348,7 @@ class InferenceService extends GetxService {
     int? maxTokens,
     List<String> stopSequences = const [],
     void Function(String token)? onToken,
+    void Function(String visible)? onPreview,
   }) async {
     final engine = _engine;
     if (!supportsLocalInference || engine == null || !isModelLoaded.value) {
@@ -427,6 +428,7 @@ class InferenceService extends GetxService {
           conversationHistory: conversationHistory,
           source: source,
           nativeTools: nativeTools,
+          onPreview: onPreview,
           imagePath: imagePath,
           audioPath: audioPath,
           maxTokens: maxTokens,
@@ -491,6 +493,12 @@ class InferenceService extends GetxService {
         normalThinking: source == 'chat' &&
             (_hive.getSetting<bool>('local_normal_thinking') ?? false),
         nativeTools: nativeTools,
+        onPreview: (visible) {
+          if (!isCurrent()) return;
+          firstVisibleTokenAt ??= DateTime.now();
+          streamingText.value = visible;
+          onPreview?.call(visible);
+        },
         onToken: (rawToken) {
           if (!isCurrent()) return;
           var token = rawToken;
@@ -508,7 +516,7 @@ class InferenceService extends GetxService {
           }
           firstVisibleTokenAt ??= DateTime.now();
           tokenCount.value++;
-          streamingText.value += token;
+          if (nativeTools.isEmpty) streamingText.value += token;
           final speedStart = firstVisibleTokenAt ?? startTime;
           final elapsedSeconds =
               DateTime.now().difference(speedStart).inMilliseconds / 1000.0;

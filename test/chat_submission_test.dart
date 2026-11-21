@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
@@ -58,6 +60,34 @@ void main() {
     chat.selectedFileType.value = 'text';
     chat.textController.text = 'Read this';
   }
+
+  test('chat shows native cloud deltas while the request is still running',
+      () async {
+    await hive.setSetting(AppConstants.keyCloudProvider, 'openai');
+    await hive.setSetting(AppConstants.keyOpenaiKey, 'test-only');
+    final source = StreamController<List<int>>();
+    final requested = Completer<void>();
+    await Get.delete<CloudService>(force: true);
+    Get.put<CloudService>(CloudService(
+        agentClientFactory: () => _StreamingClient(source.stream, requested)));
+    chat.textController.text = 'Hello';
+    var done = false;
+    final request = chat.sendMessage()..then((_) => done = true);
+    await requested.future;
+    source.add(utf8.encode(
+        'data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}\n\n'));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(chat.streamingResponse.value, 'Hello');
+    expect(chat.isStreaming.value, isTrue);
+    expect(done, isFalse);
+    source.add(utf8.encode(
+        'data: {"choices":[{"delta":{"content":" there."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'));
+    await source.close();
+    await request;
+    expect(chat.messages.last.content, 'Hello there.');
+    expect(chat.messages.last.content,
+        isNot(contains('Understanding the request')));
+  });
 
   test('image words reach the model without executing an image tool', () async {
     cloud.answer = 'Which style would you prefer?';
@@ -208,14 +238,17 @@ void main() {
       fileName: 'notes.txt',
     );
     chat.createNewChat();
-    await chat.saveVoiceMessage(voiceChat, 'assistant', 'Summary');
+    const result = 'Here is your image.\n\n![Moon](nmfile:moon.jpg)';
+    await chat.saveVoiceMessage(voiceChat, 'assistant', result,
+        workspaceProject: 'voice-project');
     expect(chat.messages, isEmpty);
 
     chat.openChat(voiceChat);
     expect(chat.messages.map((m) => m.role), ['user', 'assistant']);
     expect(chat.messages.first.visibleUserText, 'Read this');
     expect(chat.messages.first.fileName, 'notes.txt');
-    expect(chat.messages.last.content, 'Summary');
+    expect(chat.messages.last.content, result);
+    expect(chat.messages.last.workspaceProject, 'voice-project');
   });
 
   test('project workspaces isolate files and restore snapshots', () async {
@@ -313,6 +346,7 @@ class _TestNarrationInference extends InferenceService {
     int? maxTokens,
     List<String> stopSequences = const [],
     void Function(String token)? onToken,
+    void Function(String)? onPreview,
   }) async {
     calls++;
     lastPrompt = prompt;
@@ -332,7 +366,8 @@ class _TestCloud extends CloudService {
           {required List<Map<String, String>> messages,
           required List<Map<String, dynamic>> tools,
           String? imageBase64,
-          void Function(String)? onToken}) =>
+          void Function(String)? onToken,
+          void Function(String)? onPreview}) =>
       sendMessage(
           messages: messages, imageBase64: imageBase64, onToken: onToken);
 
@@ -343,6 +378,7 @@ class _TestCloud extends CloudService {
     double? temperature,
     int? maxTokens,
     void Function(String token)? onToken,
+    void Function(String)? onPreview,
   }) async {
     calls++;
     lastInput = messages.last['content'];
@@ -371,4 +407,19 @@ class _TestPaths extends PathProviderPlatform {
   final String path;
   @override
   Future<String?> getApplicationDocumentsPath() async => path;
+}
+
+class _StreamingClient extends http.BaseClient {
+  _StreamingClient(this.source, this.requested);
+  final Stream<List<int>> source;
+  final Completer<void> requested;
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final body = jsonDecode((request as http.Request).body);
+    expect(body['stream'], isTrue);
+    expect((body['tools'] as List).length, lessThanOrEqualTo(5));
+    requested.complete();
+    return http.StreamedResponse(source, 200,
+        headers: {'content-type': 'text/event-stream'});
+  }
 }

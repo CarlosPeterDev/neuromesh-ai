@@ -1,3 +1,4 @@
+import '../utils/output_links.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -597,7 +598,7 @@ class AgentService extends GetxService {
         if (decodeWav(wav)?.samples.isNotEmpty != true)
           throw StateError('TTS returned no valid PCM audio.');
         await _writeVerified(f, wav);
-        return 'Saved ${f.path.split('/').last} (${wav.length ~/ 1024} KB). Show it with [📎 ${f.path.split('/').last}](nmfile:${f.path.split('/').last}).';
+        return 'Saved ${f.path.split('/').last} (${wav.length ~/ 1024} KB). Show it with [📎 ${f.path.split('/').last}](${outputFileUri(f.path.split('/').last)}).';
       },
     ),
     AgentTool(
@@ -1044,16 +1045,17 @@ class AgentService extends GetxService {
 
   Future<File> newWorkspaceFile(String name) => _safeFile(name);
 
-  /// Native templates receive real schemas. Small contexts start with
-  /// discovery schemas and expand only after model-directed discovery.
+  /// Native templates receive real schemas. Core available actions are shown directly; the rest expand only after
+  /// model-directed discovery. This avoids sending the entire catalog for greetings.
   List<Map<String, dynamic>> nativeSchemasForTurn(int contextSize) {
     final budget = (contextSize ~/ 4).clamp(120, 4000);
-    final all = registry.schemas;
-    if (contextTokens(jsonEncode(all)) <= budget) return all;
     final selected = <Map<String, dynamic>>[];
     final ids = [
       'search_tools',
       ..._discoveredForTurn.toList().reversed,
+      'generate_image',
+      'text_to_speech',
+      'write_file',
       'tool_help'
     ];
     for (final id in ids.toSet()) {
@@ -1396,6 +1398,23 @@ class AgentService extends GetxService {
     return s.length > max ? '${s.substring(0, max)}…' : s;
   }
 
+  String capabilityPrompt() {
+    final available = _allBuiltIns.map((tool) => tool.name).toSet();
+    final actions = <String>[
+      if (available.contains('generate_image'))
+        'generate_image creates and saves images online',
+      if (available.contains('text_to_speech'))
+        'text_to_speech creates real audio files',
+      if (available.contains('write_file')) 'write_file saves text files',
+    ];
+    return 'The app executes your tool calls; you are not limited to producing text. '
+        '${actions.isEmpty ? '' : 'Available: ${actions.join('; ')}. '}'
+        'Use an available tool to perform a requested action instead of claiming a text model cannot do it. '
+        'If a needed action is not listed, discover it with search_tools before claiming it is unavailable. '
+        'If a capability is unavailable, report that and still complete independent available parts. '
+        'For ordinary conversation answer briefly without tools.';
+  }
+
   /// Tool instructions appended to the chat's system prompt. Kept short on
   /// purpose: every character is read by the model before each answer.
   String toolPrompt(
@@ -1418,6 +1437,8 @@ class AgentService extends GetxService {
       }
       final priority = [
         if (withFiles) ...['read_context', 'read_file', 'search_in_file'],
+        'generate_image',
+        'text_to_speech',
         'write_file',
         'tool_help',
         'read_file',
@@ -1627,7 +1648,9 @@ class AgentService extends GetxService {
       int contextSize = 8192}) {
     final b = StringBuffer(base)
       ..write(
-          '\n\nAnswer the user’s task directly. Use only available evidence for claims about files and current facts.\n$safetyRules');
+          '\n\nAnswer simple conversation briefly and directly. Use tools only when needed; plan only tasks that need multiple actions. Do not narrate internal request analysis. Use only available evidence for claims about files and current facts.\n$safetyRules');
+    if (wantsTools(request, hasFile: withFiles))
+      b.write('\n\n${capabilityPrompt()}');
     final mem = memoryBlock(request: request, maxTokens: contextSize ~/ 10);
     if (mem.isNotEmpty) b.write('\n\n$mem');
     if (withTools)
@@ -1655,6 +1678,9 @@ class AgentService extends GetxService {
     required Future<String> Function(String prompt,
             List<Map<String, String>> history, void Function(String) onToken)
         generate,
+    Future<String> Function(String prompt, List<Map<String, String>> history,
+            void Function(String) onToken, void Function(String) onPreview)?
+        generateWithPreview,
     required String prompt,
     required List<Map<String, String>> history,
     required ToolConfirm confirm,
@@ -1681,6 +1707,7 @@ class AgentService extends GetxService {
     var current = prompt;
     var callsUsed = 0;
     var protocolErrors = 0;
+    var discoveryRepairs = 0;
     bool stopped() => _cancel || cancelled() || runId != _runSerial;
     final limits = executionLimits;
     try {
@@ -1693,10 +1720,9 @@ class AgentService extends GetxService {
               trace,
               false);
         await refreshCapabilities();
-        onStatus('Understanding the request…');
         final buffer = StringBuffer();
         final remaining = limits.totalTimeout - clock.elapsed;
-        final response = await generate(current, hist, (token) {
+        void token(String token) {
           if (stopped()) return;
           buffer.write(token);
           final text = buffer.toString();
@@ -1708,7 +1734,14 @@ class AgentService extends GetxService {
                       '<tool_call>'.startsWith(text.substring(partial))
                   ? text.substring(0, partial)
                   : text);
-        }).timeout(
+        }
+
+        final generation = generateWithPreview == null
+            ? generate(current, hist, token)
+            : generateWithPreview(current, hist, token, (snapshot) {
+                if (!stopped()) onVisible(snapshot);
+              });
+        final response = await generation.timeout(
             remaining < limits.modelTimeout ? remaining : limits.modelTimeout);
         if (stopped()) continue;
         List<ModelToolCall> calls;
@@ -1766,12 +1799,34 @@ class AgentService extends GetxService {
             ..sort((a, b) => a.key.compareTo(b.key)));
           final fingerprint = '${call.name}:${jsonEncode(sorted)}';
           if (!seen.add(fingerprint)) {
-            return finish(
-                _autoLinkFiles(
-                    'Stopped a repeated tool call. The request remains incomplete.',
-                    trace),
-                trace,
-                true);
+            final discovery =
+                const {'search_tools', 'tool_help'}.contains(call.name);
+            if (!discovery || discoveryRepairs++ >= 2) {
+              return finish(
+                  _autoLinkFiles(
+                      'Stopped a repeated tool call. The request remains incomplete.',
+                      trace),
+                  trace,
+                  true);
+            }
+            callsUsed++;
+            final id = call.id.isEmpty ? 'step_$callsUsed' : call.id;
+            final names = nativeSchemasForTurn(8192)
+                .map((s) => s['function']['name'])
+                .join(', ');
+            final error =
+                'Error: duplicate discovery was not executed. Use a different available tool or answer from the existing results. Available schemas now: $names';
+            receipts[id] = false;
+            trace.add(stepLine(call.name, call.arguments,
+                'Blocked repeated discovery', error));
+            onTrace?.call(List.of(trace));
+            results.add({
+              'id': id,
+              'name': call.name,
+              'status': 'error',
+              'content': error
+            });
+            continue;
           }
           callsUsed++;
           final id = call.id.isEmpty ? 'step_$callsUsed' : call.id;
@@ -1875,53 +1930,49 @@ class AgentService extends GetxService {
   /// Files the agent wrote or spoke are linked in the answer even when the
   /// model forgot to mention them.
   String _autoLinkFiles(String answer, List<String> trace) {
-    final extra = <String>[];
+    answer = normalizeOutputLinks(answer);
+    final mentioned = outputFileNames(answer);
+    final shownImages = outputFileNames(answer, imagesOnly: true);
+    final extra = <String, bool>{};
     for (final line in trace) {
       if (!line.startsWith(ToolLoopResult.traceMark)) continue;
       try {
         final m =
             jsonDecode(line.substring(ToolLoopResult.traceMark.length)) as Map;
-        final n = m['n'];
-        final res = '${m['r'] ?? ''}';
-        final success = switch (n) {
-          'write_file' => res.startsWith('Wrote '),
-          'text_to_speech' => res.startsWith('Saved '),
+        final tool = m['n'];
+        final result = '${m['r'] ?? ''}';
+        final image = tool == 'generate_image' || tool == 'edit_image';
+        final success = switch (tool) {
+          'write_file' => result.startsWith('Wrote '),
+          'text_to_speech' => result.startsWith('Saved '),
           'generate_image' ||
           'edit_image' =>
-            res.startsWith('Generated ') || res.startsWith('Edited '),
-          'append_file' => res.startsWith('Appended to '),
-          'edit_file' => res.startsWith('Edited '),
+            result.startsWith('Generated ') || result.startsWith('Edited '),
+          'append_file' => result.startsWith('Appended to '),
+          'edit_file' => result.startsWith('Edited '),
           _ => false,
         };
-        if (success) {
-          final a = m['a'];
-          var name = a is Map ? '${a['name'] ?? ''}' : '';
-          if (n == 'text_to_speech' &&
+        if (!success) continue;
+        final links = outputFileNames(result);
+        if (links.isEmpty) {
+          final args = m['a'];
+          var name = args is Map ? '${args['name'] ?? ''}' : '';
+          if (tool == 'text_to_speech' &&
               name.isNotEmpty &&
-              !name.toLowerCase().endsWith('.wav')) {
-            name = '$name.wav';
-          }
-          final links = RegExp(r'\(nmfile:([^)]+)\)')
-              .allMatches(res)
-              .map((m) => m.group(1)!)
-              .toSet();
-          if (links.isNotEmpty) {
-            for (final link in links) {
-              if (!answer.contains('nmfile:$link') && !extra.contains(link))
-                extra.add(link);
-            }
-            continue;
-          }
-          if (name.isNotEmpty &&
-              !answer.contains('nmfile:$name') &&
-              !extra.contains(name)) {
-            extra.add(name);
+              !name.toLowerCase().endsWith('.wav')) name = '$name.wav';
+          if (name.isNotEmpty) links.add(name);
+        }
+        for (final name in links) {
+          if (image ? !shownImages.contains(name) : !mentioned.contains(name)) {
+            extra[name] = image;
+            mentioned.add(name);
+            if (image) shownImages.add(name);
           }
         }
       } catch (_) {}
     }
     if (extra.isEmpty) return answer;
-    return '${answer.trimRight()}\n\n${extra.map((n) => '[📎 $n](nmfile:$n)').join('\n')}';
+    return '${answer.trimRight()}\n\n${extra.entries.map((entry) => entry.value ? '![Generated image](${outputFileUri(entry.key)})' : '[📎 ${outputLabel(entry.key)}](${outputFileUri(entry.key)})').join('\n')}';
   }
 
   /// Human wording for what a tool call is doing right now.
@@ -2074,7 +2125,7 @@ class AgentService extends GetxService {
     await _writeVerified(file, image.bytes);
     final filename = file.uri.pathSegments.last;
     return '${edited ? 'Edited' : 'Generated'} online with Pollinations (${image.model}).'
-        '\n\n![${edited ? 'Edited' : 'Generated'} image](nmfile:$filename)';
+        '\n\n![${edited ? 'Edited' : 'Generated'} image](${outputFileUri(filename)})';
   }
 
   /// Runs one tool call (asking the user first when required).

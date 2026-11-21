@@ -400,6 +400,7 @@ class InferenceEngine {
     List<Map<String, dynamic>> nativeTools = const [],
     bool normalThinking = false,
     void Function(String token)? onToken,
+    void Function(String visible)? onPreview,
   }) async {
     if (_desk != null) {
       return _desk.generate(
@@ -439,12 +440,49 @@ class InferenceEngine {
     final buffer = StringBuffer();
     bool completed = false;
     final controller = _controller;
+    Timer? previewTimer;
+    var previewBusy = false;
+    var lastPreview = '';
+    void schedulePreview() {
+      if (onPreview == null ||
+          nativeTools.isEmpty ||
+          !Platform.isAndroid ||
+          completed ||
+          previewBusy ||
+          previewTimer != null) return;
+      previewTimer = Timer(const Duration(milliseconds: 70), () async {
+        previewTimer = null;
+        if (completed || _disposed) return;
+        previewBusy = true;
+        final raw = buffer.toString();
+        try {
+          final visible =
+              await const MethodChannel('com.neuromesh.ai/llama_tools')
+                  .invokeMethod<String>('preview', raw);
+          if (!completed &&
+              !_disposed &&
+              visible != null &&
+              visible.isNotEmpty &&
+              visible != lastPreview) {
+            lastPreview = visible;
+            onPreview(visible);
+          }
+        } catch (_) {
+          // Older native bindings may lack preview parsing. Never expose raw
+          // tool arguments as a fallback; the final parser remains authoritative.
+        } finally {
+          previewBusy = false;
+          if (!completed && buffer.length != raw.length) schedulePreview();
+        }
+      });
+    }
 
     // Timeouts and stop must halt the native engine too; cancelling the Dart
     // subscription alone leaves llama.cpp generating in the background.
     void finish(String result, {bool stopNative = true}) {
       if (!completed && !_disposed) {
         completed = true;
+        previewTimer?.cancel();
         _idleTimer?.cancel();
         _subscription?.cancel();
         _onStop = null;
@@ -527,6 +565,7 @@ class InferenceEngine {
             nativeTools.isEmpty ? _sanitizeGemmaGarbage(token) : token;
         if (clean.isEmpty) return;
         buffer.write(clean);
+        schedulePreview();
         tokenCount++;
         onToken?.call(clean);
       },

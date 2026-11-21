@@ -1,3 +1,4 @@
+import 'native_agent_stream.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:get/get.dart';
@@ -185,6 +186,7 @@ class CloudService extends GetxService {
     required List<Map<String, dynamic>> tools,
     String? imageBase64,
     void Function(String)? onToken,
+    void Function(String)? onPreview,
   }) async {
     if (tools.isEmpty || !supportsNativeTools) {
       return sendMessage(
@@ -254,28 +256,29 @@ class CloudService extends GetxService {
     _activeStreamClient = client;
     try {
       if (_provider == 'google' || _provider == 'anthropic') {
-        return await _sendNativeOther(native, tools, client, onToken);
+        return await _sendNativeOther(
+            native, tools, client, onToken, onPreview);
       }
-      final response = await client
-          .post(
-            Uri.parse(_openAICompatibleEndpoint),
-            headers: {
-              'Authorization': 'Bearer $_apiKey',
-              'Content-Type': 'application/json',
-              ..._openAICompatibleExtraHeaders
-            },
-            body: jsonEncode({
-              'model': _model,
-              'messages': native,
-              'tools': tools,
-              'tool_choice': 'auto',
-              'stream': false
-            }),
-          )
-          .timeout(_responseTimeout);
+      final request = http.Request('POST', Uri.parse(_openAICompatibleEndpoint))
+        ..headers.addAll({
+          'Authorization': 'Bearer $_apiKey',
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+          ..._openAICompatibleExtraHeaders
+        })
+        ..body = jsonEncode({
+          'model': _model,
+          'messages': native,
+          'tools': tools,
+          'tool_choice': 'auto',
+          'stream': true
+        });
+      final response = await client.send(request).timeout(_connectTimeout);
       if (response.statusCode != 200)
         return 'ERROR: Native tool request returned HTTP ${response.statusCode}. No further actions were executed.';
-      final data = jsonDecode(response.body);
+      final parsed =
+          await _readNativeReply(response, _provider, onToken, onPreview);
+      final data = parsed.data;
       final message = data['choices'][0]['message'] as Map;
       final calls = message['tool_calls'];
       if (calls is List && calls.isNotEmpty) {
@@ -289,8 +292,16 @@ class CloudService extends GetxService {
         }).toList());
       }
       final answer = message['content'] as String? ?? '';
-      onToken?.call(answer);
+      if (!parsed.streamed) {
+        if (onPreview != null)
+          onPreview(answer);
+        else
+          onToken?.call(answer);
+      }
       return encodeModelAnswer(answer);
+    } on NativeAgentStreamError catch (e) {
+      return encodeModelAnswer(
+          '${e.partialText}\n\n⚠️ ${e.message}. No pending tools were executed.');
     } catch (e) {
       return 'ERROR: Cloud tool response failed: $e';
     } finally {
@@ -303,7 +314,8 @@ class CloudService extends GetxService {
       List<Map<String, dynamic>> messages,
       List<Map<String, dynamic>> tools,
       http.Client client,
-      void Function(String)? onToken) async {
+      void Function(String)? onToken,
+      void Function(String)? onPreview) async {
     final system = messages
         .where((m) => m['role'] == 'system')
         .map((m) => m['content'])
@@ -408,7 +420,8 @@ class CloudService extends GetxService {
           parts);
     }
     final url = _provider == 'google'
-        ? Uri.parse('${AppConstants.googleEndpoint}/$_model:generateContent')
+        ? Uri.parse(
+            '${AppConstants.googleEndpoint}/$_model:streamGenerateContent?alt=sse')
         : Uri.parse(AppConstants.anthropicEndpoint);
     final body = _provider == 'google'
         ? {
@@ -433,6 +446,7 @@ class CloudService extends GetxService {
           }
         : {
             'model': _model,
+            'stream': true,
             'system': system,
             'messages': converted,
             'max_tokens': AppConstants.defaultMaxTokens,
@@ -445,21 +459,23 @@ class CloudService extends GetxService {
                 }
             ],
           };
-    final response = await client
-        .post(url,
-            headers: {
-              'Content-Type': 'application/json',
-              if (_provider == 'google') 'x-goog-api-key': _apiKey,
-              if (_provider == 'anthropic') ...{
-                'x-api-key': _apiKey,
-                'anthropic-version': '2023-06-01'
-              },
-            },
-            body: jsonEncode(body))
-        .timeout(_responseTimeout);
+    final request = http.Request('POST', url)
+      ..headers.addAll({
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+        if (_provider == 'google') 'x-goog-api-key': _apiKey,
+        if (_provider == 'anthropic') ...{
+          'x-api-key': _apiKey,
+          'anthropic-version': '2023-06-01'
+        }
+      })
+      ..body = jsonEncode(body);
+    final response = await client.send(request).timeout(_connectTimeout);
     if (response.statusCode != 200)
       return 'ERROR: Native $_provider tool request returned HTTP ${response.statusCode}. No further actions were executed.';
-    final data = jsonDecode(response.body);
+    final parsed =
+        await _readNativeReply(response, _provider, onToken, onPreview);
+    final data = parsed.data;
     final parts = (_provider == 'google'
         ? data['candidates'][0]['content']['parts']
         : data['content']) as List;
@@ -486,8 +502,29 @@ class CloudService extends GetxService {
     if (calls.isNotEmpty) return encodeModelCalls(calls);
     _googleToolParts.clear();
     final answer = text.toString();
-    onToken?.call(answer);
+    if (!parsed.streamed) {
+      if (onPreview != null)
+        onPreview(answer);
+      else
+        onToken?.call(answer);
+    }
     return encodeModelAnswer(answer);
+  }
+
+  Future<({Map<String, dynamic> data, bool streamed})> _readNativeReply(
+      http.StreamedResponse response,
+      String provider,
+      void Function(String)? onToken,
+      void Function(String)? onPreview) {
+    final text = StringBuffer();
+    return readNativeAgentResponse(response,
+        provider: provider, idleTimeout: streamIdleTimeout, onText: (delta) {
+      text.write(delta);
+      if (onPreview != null)
+        onPreview(text.toString());
+      else
+        onToken?.call(delta);
+    });
   }
 
   bool get _supportsStreaming =>
