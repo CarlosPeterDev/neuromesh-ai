@@ -24,6 +24,8 @@ The UI and model changes at `cadb454` passed all 235 Flutter tests together with
 
 Image requests such as “create or generate image” and requests for a new subject immediately after a successful image response now go directly through the existing image route. Audio, text files and unrelated tasks stay in normal chat. The agent ranks available tools by the user’s task and retries discovery if it misses an actionable request. The searchable catalog lists permitted available tools and can insert a selected tool into a draft for review. A live public Pollinations request returned a JPEG. The screenshot flows and fallback are covered by the local chat and agent tests.
 
+The image and discovery changes at `40ba02d` passed all 238 Flutter tests together. The v2.0.174 package run includes the Android OpenCode client, chat and camera UI, model quiz, author search, and these fixes. The earlier UI-only build continues separately so its Android smoke results remain available. [v2.0.174 preview build](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/44906489813)
+
 ## Combined OpenCode and Android preview
 
 Build `8554a20` combines the OpenCode terminal preview and the smaller Play AAB. All 221 Flutter tests and three build-configuration tests passed locally. The entire Flutter suite ran in a network namespace with only loopback available. It used the published Artemis GGUF and BF16 projector and the Kitten Nano and Kokoro voice models. OpenCode streamed from the local GGUF in Xfce Terminal, the genuine projector was recognized, and both voice models generated WAV audio.
