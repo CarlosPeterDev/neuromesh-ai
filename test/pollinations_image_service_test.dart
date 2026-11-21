@@ -9,11 +9,15 @@ import 'package:image/image.dart' as img;
 import 'package:neuromesh_ai/services/pollinations_image_service.dart';
 
 void main() {
-  test('decode an explicitly supplied live-provider response artifact', () async {
-    final bytes = await File(Platform.environment['POLLINATIONS_LIVE_ARTIFACT']!).readAsBytes();
+  test('decode an explicitly supplied live-provider response artifact',
+      () async {
+    final bytes =
+        await File(Platform.environment['POLLINATIONS_LIVE_ARTIFACT']!)
+            .readAsBytes();
     final image = img.decodeImage(bytes);
     expect(image, isNotNull);
-    expect(image!.width, 768); expect(image.height, 768);
+    expect(image!.width, 768);
+    expect(image.height, 768);
   }, skip: !Platform.environment.containsKey('POLLINATIONS_LIVE_ARTIFACT'));
 
   const freeEditor = 'community/test/flux-edit-free';
@@ -121,9 +125,44 @@ void main() {
     final client = MockClient((_) async =>
         http.Response('Free limit', 402, headers: {'retry-after': '45'}));
     await expectLater(
-        PollinationsImageService().generate('Cat', client: client),
+        PollinationsImageService(maxRateLimitRetries: 0)
+            .generate('Cat', client: client),
         throwsA(isA<FormatException>().having(
             (error) => error.message, 'message', contains('in 45 seconds'))));
+  });
+
+  test('retries an explicit short anonymous rate limit once', () async {
+    var requests = 0;
+    final data = img.encodeJpg(img.Image(width: 2, height: 2));
+    final client = MockClient((_) async => requests++ == 0
+        ? http.Response('Wait', 429, headers: {'retry-after': '0'})
+        : http.Response.bytes(data, 200));
+    expect(await PollinationsImageService().generate('Moon', client: client),
+        data);
+    expect(requests, 2);
+  });
+
+  test('rate-limit retries are bounded and waiting can be cancelled', () async {
+    var requests = 0;
+    final client = MockClient((_) async {
+      requests++;
+      return http.Response('Wait', 429, headers: {'retry-after': '0'});
+    });
+    await expectLater(
+        PollinationsImageService().generate('Moon', client: client),
+        throwsA(isA<FormatException>()));
+    expect(requests, 2);
+    final service = PollinationsImageService();
+    final waiting = service.generate('Saturn',
+        client: MockClient((_) async =>
+            http.Response('Wait', 429, headers: {'retry-after': '45'})));
+    final checked = expectLater(
+        waiting,
+        throwsA(isA<FormatException>()
+            .having((e) => e.message, 'message', contains('cancelled'))));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    service.cancel();
+    await checked;
   });
 
   test('surfaces access and format errors', () async {

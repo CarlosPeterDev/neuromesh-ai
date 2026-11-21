@@ -8,9 +8,27 @@ import 'package:image/image.dart' as img;
 typedef PollinationsImage = ({Uint8List bytes, String model, String extension});
 
 /// Sana is available anonymously through Pollinations' public image endpoint.
+class _AnonymousRateLimit extends FormatException {
+  _AnonymousRateLimit(this.retryAfter)
+      : super(
+            'Pollinations is rate-limiting anonymous requests. Try again ${retryAfter == null ? 'later' : 'in $retryAfter seconds'}.');
+  final int? retryAfter;
+}
+
 class PollinationsImageService {
+  PollinationsImageService({this.maxRateLimitRetries = 1});
+  final int maxRateLimitRetries;
+  final _pendingWaits = <Completer<void>, Timer>{};
+  int _cancelEpoch = 0;
   final _activeClients = <http.Client>{};
   void cancel() {
+    _cancelEpoch++;
+    for (final entry in _pendingWaits.entries.toList()) {
+      entry.value.cancel();
+      entry.key.completeError(
+          const FormatException('Image generation was cancelled.'));
+    }
+    _pendingWaits.clear();
     for (final client in _activeClients.toList()) {
       client.close();
     }
@@ -47,8 +65,36 @@ class PollinationsImageService {
     final transport = client ?? http.Client();
     _activeClients.add(transport);
     try {
-      return await _request(transport, uri).timeout(_timeout);
+      final epoch = _cancelEpoch;
+      Future<Uint8List> boundedRequest() async {
+        for (var attempt = 0;; attempt++) {
+          if (epoch != _cancelEpoch)
+            throw const FormatException('Image generation was cancelled.');
+          try {
+            return await _request(transport, uri);
+          } on _AnonymousRateLimit catch (error) {
+            final seconds = error.retryAfter;
+            if (attempt >= maxRateLimitRetries.clamp(0, 2) ||
+                seconds == null ||
+                seconds < 0 ||
+                seconds > 45) rethrow;
+            final pending = Completer<void>();
+            final timer =
+                Timer(Duration(seconds: seconds), () => pending.complete());
+            _pendingWaits[pending] = timer;
+            try {
+              await pending.future;
+            } finally {
+              timer.cancel();
+              _pendingWaits.remove(pending);
+            }
+          }
+        }
+      }
+
+      return await boundedRequest().timeout(_timeout);
     } on TimeoutException {
+      cancel();
       throw const FormatException(
           'Pollinations took too long to generate the image.');
     } on http.ClientException {
@@ -261,9 +307,9 @@ class PollinationsImageService {
     final retryAfter = int.tryParse(response.headers['retry-after'] ?? '');
     if (response.statusCode == 429 ||
         (response.statusCode == 402 && retryAfter != null)) {
-      final wait = retryAfter == null ? 'later' : 'in $retryAfter seconds';
-      throw FormatException(
-          'Pollinations is rate-limiting anonymous requests. Try again $wait.');
+      // Consume the small error body before reusing the connection.
+      await response.stream.take(1).drain<void>();
+      throw _AnonymousRateLimit(retryAfter);
     }
     if (response.statusCode == 401 ||
         response.statusCode == 402 ||
