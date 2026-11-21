@@ -1078,7 +1078,8 @@ class ChatController extends GetxController {
             List<Map<String, String>> hist, void Function(String) onTok) {
           final tools = useTools && prompt != AgentService.finalAnswerPrompt;
           final turn = AgentService.fitTurn(
-            baseSystem: _effectiveSystemPrompt,
+            baseSystem:
+                '$_effectiveSystemPrompt\n\n${AgentService.safetyRules}',
             system: buildSystem(
                 latestContext: hist.lastOrNull?['content'] ?? '', tools: tools),
             prompt: prompt,

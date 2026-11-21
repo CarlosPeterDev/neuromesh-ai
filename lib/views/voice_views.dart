@@ -1041,7 +1041,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         void Function(String) onTok,
       ) {
         final turn = AgentService.fitTurn(
-          baseSystem: voiceSystem,
+          baseSystem: '$voiceSystem\n\n${AgentService.safetyRules}',
           system: buildSystem(hist.lastOrNull?['content'] ?? ''),
           prompt: prompt,
           history: hist,
