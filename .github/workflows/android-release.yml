@@ -215,6 +215,8 @@ jobs:
             done
           done
           java -jar "$RUNNER_TEMP/bundletool.jar" validate --bundle="$AAB" > "$RUNNER_TEMP/bundle-validation.txt"
+          package_id=$(java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle="$AAB" --xpath='/manifest/@package')
+          test "$package_id" = com.neuromesh.ai
           # 1) The merged manifest must not contain restricted permissions.
           java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle="$AAB" > "$RUNNER_TEMP/manifest.xml"
           if grep -E 'MANAGE_EXTERNAL_STORAGE|REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|SYSTEM_ALERT_WINDOW|READ_SMS|READ_CALL_LOG|QUERY_ALL_PACKAGES|ACCESS_BACKGROUND_LOCATION' "$RUNNER_TEMP/manifest.xml"; then
@@ -264,15 +266,25 @@ jobs:
           elif [ '${{ steps.sign.outputs.production }}' = 'true' ]; then
             echo "channel=stable" >> "$GITHUB_OUTPUT"
           else
-            echo "channel=preview" >> "$GITHUB_OUTPUT"
-            echo "::warning::This preview uses a temporary signer. Configure the persistent GitHub APK signer for future in-place updates."
+            test_keystore="$RUNNER_TEMP/neuromesh-test-signing.p12"
+            fingerprint=$(bash scripts/create_public_test_keystore.sh "$test_keystore")
+            {
+              echo 'storePassword=android'
+              echo 'keyPassword=android'
+              echo 'keyAlias=neuromesh-test'
+              printf 'storeFile=%s\n' "$test_keystore"
+            } > android/key.properties
+            echo "channel=public-test" >> "$GITHUB_OUTPUT"
+            echo "test_cert=$fingerprint" >> "$GITHUB_OUTPUT"
+            echo "::notice::Signing the isolated NeuroMesh AI Test APKs with a reusable public test certificate."
           fi
 
       - name: Standalone APKs from the normal release configuration
         if: github.event_name != 'pull_request' && !inputs.play_bundle_only
         env:
-          NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.standalone_sign.outputs.channel == 'preview' && 'true' || 'false' }}
+          NEUROMESH_PUBLIC_TEST_APK: ${{ steps.standalone_sign.outputs.channel == 'public-test' && 'true' || 'false' }}
           UPDATE_CERT: ${{ !inputs.preview_only && vars.ANDROID_UPDATE_CERT_SHA256 || '' }}
+          TEST_CERT: ${{ steps.standalone_sign.outputs.test_cert }}
         run: |
           set -euo pipefail
           git show HEAD:android/app/src/main/AndroidManifest.xml > android/app/src/main/AndroidManifest.xml
@@ -292,8 +304,16 @@ jobs:
           if [ -n "$UPDATE_CERT" ]; then
             printf '%s\n' "${UPDATE_CERT,,}" | diff - "$RUNNER_TEMP/arm64-cert.txt"
           fi
+          package_id=com.neuromesh.ai
+          if [[ "$NEUROMESH_PUBLIC_TEST_APK" == 'true' ]]; then
+            package_id+=.test
+            printf '%s\n' "$TEST_CERT" | diff - "$RUNNER_TEMP/arm64-cert.txt"
+          fi
           AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt | sort -V | tail -1)
           "$AAPT" dump badging "$RUNNER_TEMP/arm64.apk" > "$RUNNER_TEMP/arm64-package.txt"
+          "$AAPT" dump badging "$RUNNER_TEMP/universal.apk" > "$RUNNER_TEMP/universal-package.txt"
+          grep -F "package: name='$package_id' " "$RUNNER_TEMP/arm64-package.txt"
+          grep -F "package: name='$package_id' " "$RUNNER_TEMP/universal-package.txt"
           sed 's/[[:space:]]*$//' "$RUNNER_TEMP/arm64-package.txt" | grep -Fx "native-code: 'arm64-v8a'"
           for library in libproot.so libproot_loader.so libtalloc.so libandroid-shmem.so; do
             unzip -l build/app/outputs/bundle/release/app-release.aab "base/lib/arm64-v8a/$library"
@@ -326,7 +346,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Android 12 clean install and upgrade smoke test
-        if: github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
+        if: github.event_name != 'pull_request' && !inputs.play_bundle_only && steps.standalone_sign.outputs.channel == 'stable'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 31
@@ -339,8 +359,10 @@ jobs:
             adb shell pm path com.neuromesh.ai | grep -F 'package:'
             adb install -r "$RUNNER_TEMP/universal.apk"
 
-      - name: Android preview launch and Play split smoke test
-        if: inputs.preview_only && !inputs.play_bundle_only
+      - name: Android test APK upgrade and Play split coexistence
+        if: github.event_name != 'pull_request' && !inputs.play_bundle_only && steps.standalone_sign.outputs.channel == 'public-test'
+        env:
+          ANDROID_BUILD_NUMBER: ${{ steps.ver.outputs.code }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 31
