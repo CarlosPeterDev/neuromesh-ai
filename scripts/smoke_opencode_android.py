@@ -19,10 +19,22 @@ def screen():
 
 def find(root, label):
     for node in root.iter("node"):
-        if (label in (node.get("text"), node.get("content-desc"), node.get("resource-id"))
-                or node.get("resource-id", "").endswith("/" + label)):
+        if label == "Server password" and node.get("password") == "true":
             return node
+        if node.get("resource-id", "").endswith("/" + label):
+            return node
+        for value in (node.get("text"), node.get("content-desc"), node.get("resource-id")):
+            if label in (value or "").splitlines():
+                return node
     return None
+
+
+def visible_labels():
+    return [
+        label for node in screen().iter("node")
+        if node.get("password") != "true"
+        if (label := node.get("content-desc") or node.get("text") or node.get("resource-id"))
+    ][:25]
 
 
 def tap(node):
@@ -49,6 +61,7 @@ def wait_for(label, *, can_scroll=False):
         except (ElementTree.ParseError, subprocess.SubprocessError):
             pass
         time.sleep(1)
+    print("Visible Agent Hub labels:", visible_labels())
     raise RuntimeError(f"Android Agent Hub label did not appear: {label}")
 
 
@@ -75,12 +88,7 @@ def open_agents():
         except (ElementTree.ParseError, subprocess.SubprocessError):
             pass
         time.sleep(1)
-    labels = [
-        node.get("content-desc") or node.get("text") or node.get("resource-id")
-        for node in screen().iter("node")
-        if node.get("password") != "true"
-    ]
-    print("Visible setup labels:", [label for label in labels if label][:25])
+    print("Visible setup labels:", visible_labels())
     raise RuntimeError("Unable to open Android Agent Hub after first-run setup")
 
 
@@ -96,4 +104,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        from pathlib import Path
+        from os import environ
+        filename = Path(environ.get("RUNNER_TEMP", "/tmp")) / "neuromesh-android-smoke.png"
+        with filename.open("wb") as screenshot:
+            subprocess.run(("adb", "exec-out", "screencap", "-p"), stdout=screenshot, timeout=10, check=False)
+        raise
