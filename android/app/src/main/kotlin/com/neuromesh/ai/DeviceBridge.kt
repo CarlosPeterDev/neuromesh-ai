@@ -69,6 +69,11 @@ class DeviceBridge(private val context: Context) {
                         call.argument<Int>("maxBytes") ?: MAX_READ
                     )
                 }
+                "persistedFolders" -> background(result) {
+                    context.contentResolver.persistedUriPermissions.map {
+                        mapOf("uri" to it.uri.toString(), "read" to it.isReadPermission, "write" to it.isWritePermission)
+                    }
+                }
                 "sharedFileUri" -> background(result) {
                     val file = resolve(call.argument<String>("uri")!!, call.argument<String>("path")!!)
                         ?: throw IllegalArgumentException("File not found")

@@ -242,6 +242,31 @@ void main() {
     expect(dependentCalls, 0);
   });
 
+  test(
+      'revoked and read-only SAF grants change registry availability (mock Android)',
+      () async {
+    final files = Get.put(UserFilesService());
+    files.folders.addAll(const [
+      GrantedFolder('content://docs/revoked', 'Revoked'),
+      GrantedFolder('content://docs/read', 'Read only')
+    ]);
+    const channel = MethodChannel('com.neuromesh.ai/device');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      expect(call.method, 'persistedFolders');
+      return [
+        {'uri': 'content://docs/read', 'read': true, 'write': false}
+      ];
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await files.refreshGrants();
+    expect(files.availableFolders.map((f) => f.name), ['Read only']);
+    expect(agent.registry.find('read_user_file'), isNotNull);
+    expect(agent.registry.find('write_user_file'), isNull);
+    expect(agent.registry.find('export_file'), isNull);
+  });
+
   test('all advertised built-ins have valid schemas', () {
     for (final tool in agent.registry.available) {
       expect(tool.inputSchema['type'], 'object', reason: tool.id);

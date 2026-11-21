@@ -392,7 +392,8 @@ class AgentService extends GetxService {
       ? Get.find<UserFilesService>()
       : null;
 
-  bool get _hasFolders => _user != null && _user!.folders.isNotEmpty;
+  bool get _hasFolders => _user != null && _user!.availableFolders.isNotEmpty;
+  bool get _hasWritableFolders => _user?.hasWritableFolder == true;
 
   Future<String> _mutateSharedFile(
       String action, Map<String, dynamic> args) async {
@@ -827,7 +828,7 @@ class AgentService extends GetxService {
         return 'Edited $path ($n replacement${n == 1 ? '' : 's'}).';
       },
       needsConfirm: true,
-      available: () => _hasFolders,
+      available: () => _hasWritableFolders,
     ),
     AgentTool(
       'search_tools',
@@ -865,7 +866,7 @@ class AgentService extends GetxService {
         return 'Exported and verified ${args['path']}: $uri';
       },
       needsConfirm: true,
-      available: () => _hasFolders,
+      available: () => _hasWritableFolders,
     ),
     AgentTool(
       'share_file',
@@ -883,7 +884,10 @@ class AgentService extends GetxService {
       'list_shared_folders',
       'List the device folders the user granted access to. Use a listed name in shared folder tools.',
       '{}',
-      (_) => _user!.folders.map((folder) => folder.name).join('\n'),
+      (_) => jsonEncode([
+        for (final f in _user!.availableFolders)
+          {'name': f.name, 'read': true, 'write': _user!.canWrite(f)}
+      ]),
       available: () => _hasFolders,
     ),
     AgentTool(
@@ -934,7 +938,7 @@ class AgentService extends GetxService {
         return 'Wrote and verified ${args['path']}: ${await u.fileUri(f, args['path'] as String)}';
       },
       needsConfirm: true,
-      available: () => _hasFolders,
+      available: () => _hasWritableFolders,
     ),
     AgentTool(
       'append_user_file',
@@ -942,7 +946,7 @@ class AgentService extends GetxService {
       '{"folder":"shared folder name","path":"file path","content":"text to append"}',
       (args) => _mutateSharedFile('append', args),
       needsConfirm: true,
-      available: () => _hasFolders,
+      available: () => _hasWritableFolders,
     ),
     AgentTool(
       'rename_user_file',
@@ -950,7 +954,7 @@ class AgentService extends GetxService {
       '{"folder":"shared folder name","path":"file path","name":"new file name"}',
       (args) => _mutateSharedFile('rename', args),
       needsConfirm: true,
-      available: () => _hasFolders,
+      available: () => _hasWritableFolders,
     ),
     AgentTool(
       'delete_user_file',
@@ -958,7 +962,7 @@ class AgentService extends GetxService {
       '{"folder":"shared folder name","path":"file path"}',
       (args) => _mutateSharedFile('delete', args),
       needsConfirm: true,
-      available: () => _hasFolders,
+      available: () => _hasWritableFolders,
     ),
     AgentTool(
       'create_user_folder',
@@ -966,7 +970,7 @@ class AgentService extends GetxService {
       '{"folder":"shared folder name","path":"new subfolder path"}',
       (args) => _mutateSharedFile('mkdir', args),
       needsConfirm: true,
-      available: () => _hasFolders,
+      available: () => _hasWritableFolders,
     ),
     AgentTool(
       'web_search',
@@ -1041,10 +1045,24 @@ class AgentService extends GetxService {
                     'ask'
                 ? ['user_approval']
                 : [],
-            dependencies:
-                tool.name.contains('image') || tool.name == 'web_search'
-                    ? ['internet']
-                    : [],
+            dependencies: [
+              if (const {
+                'generate_image',
+                'edit_image',
+                'web_search',
+                'fetch_url',
+                'http_request',
+                'download_file'
+              }.contains(tool.name))
+                'internet',
+              if (tool.name == 'text_to_speech') 'tts_engine_or_model',
+              if (tool.name == 'transcribe_audio') 'speech_recognition_model',
+              if (tool.name.contains('user_file') ||
+                  tool.name == 'export_file' ||
+                  tool.name == 'list_folder' ||
+                  tool.name == 'create_user_folder')
+                'persisted_shared_folder_grant',
+            ],
             execute: (args) => executeTool(ParsedToolCall(tool.name, args, ''),
                 (_, __, ___) async => false),
           ),
@@ -1722,6 +1740,7 @@ class AgentService extends GetxService {
   }
 
   Future<void> refreshCapabilities() async {
+    if (Platform.isAndroid && _user != null) await _user!.refreshGrants();
     if (Get.isRegistered<VoiceService>())
       await Get.find<VoiceService>().detectSystemFileTts();
     if (Platform.isAndroid && Get.isRegistered<DeviceBridge>()) {

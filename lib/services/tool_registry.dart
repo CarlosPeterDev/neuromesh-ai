@@ -233,6 +233,7 @@ String encodeModelCalls(List<ModelToolCall> calls,
 
 /// A model-authored plan is progress metadata and never executable code.
 List<String> decodeModelPlan(String response) {
+  if (decodeModelCalls(response).isEmpty) return [];
   final start = response.indexOf('<tool_call>');
   final end = response.lastIndexOf('</tool_call>');
   if (start < 0 || end < start) return [];

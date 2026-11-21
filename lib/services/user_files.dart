@@ -30,6 +30,21 @@ class UserFilesService extends GetxService {
 
   final folders = <GrantedFolder>[].obs;
 
+  Map<String, bool>? _readGrants, _writeGrants;
+  Iterable<GrantedFolder> get availableFolders =>
+      folders.where((f) => _readGrants == null || _readGrants![f.uri] == true);
+  bool canWrite(GrantedFolder f) =>
+      _writeGrants == null || _writeGrants![f.uri] == true;
+  bool get hasWritableFolder => availableFolders.any(canWrite);
+
+  /// Persisted picker entries are preferences, not proof that Android still
+  /// grants access. Recheck before advertising shared-file tools.
+  Future<void> refreshGrants() async {
+    final grants = await _ch.invokeListMethod<Map>('persistedFolders') ?? [];
+    _readGrants = {for (final g in grants) '${g['uri']}': g['read'] == true};
+    _writeGrants = {for (final g in grants) '${g['uri']}': g['write'] == true};
+  }
+
   @override
   void onInit() {
     super.onInit();
