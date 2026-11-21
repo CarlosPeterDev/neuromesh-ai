@@ -3,71 +3,38 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
 
 typedef PollinationsImage = ({Uint8List bytes, String model, String extension});
 
-enum ImageAction { create, edit }
-
-class ImageRequest {
-  const ImageRequest(this.action, this.description);
-  final ImageAction action;
-  final String description;
-
-  static ImageRequest? parse(String value, {bool hasImage = false}) {
-    final text = value.trim();
-    final instruction = text.replaceFirst(
-        RegExp(r'^\s*(?:(?:ok|please|can you|could you|would you)\b[ ,.!]+)+',
-            caseSensitive: false),
-        '');
-    final edit = RegExp(
-            r'^(?:retouch|restyle)\b|^(?:edit|remove|replace|change|add|crop|brighten|fix|turn)\b.*\b(?:image|picture|photo|background)\b',
-            caseSensitive: false,
-            dotAll: true)
-        .hasMatch(instruction);
-    final explicitCreation =
-        PollinationsImageService.explicitPrompt(text) != null;
-    final editExisting = RegExp(r'^(?:make|turn)\s+(?:this|the|my|attached)\b',
-            caseSensitive: false)
-        .hasMatch(instruction);
-    if (explicitCreation && !edit && !editExisting) {
-      return ImageRequest(ImageAction.create, text);
-    }
-    if (edit ||
-        (hasImage &&
-            RegExp(r'^(?:edit|remove|replace|change|add|make|crop|brighten|fix|turn)\b',
-                    caseSensitive: false)
-                .hasMatch(instruction))) {
-      final bare = RegExp(
-              r'^(?:edit|retouch|restyle)(?:\s+(?:this|the|my|an?)\s+(?:image|photo|picture))?[.!?]*$',
-              caseSensitive: false)
-          .hasMatch(instruction);
-      return ImageRequest(ImageAction.edit, bare ? '' : text);
-    }
-    if (RegExp(
-            r'^(?:draw|paint)\s+(?!(?:me\s+)?(?:an?\s+)?(?:image|picture|photo|illustration|portrait)\b)\S',
-            caseSensitive: false)
-        .hasMatch(instruction)) {
-      return ImageRequest(ImageAction.create, text);
-    }
-    final match = RegExp(
-      r'^(?:generate|create|make|render|design)\s+(?:me\s+)?(?:an?\s+)?(?:image|picture|photo|illustration|portrait|logo|poster|icon|banner|wallpaper)(?:\s+(.+))?[.!?]*$',
-      caseSensitive: false,
-      dotAll: true,
-    ).firstMatch(instruction);
-    if (match == null) return null;
-    final subject = match.group(1)?.trim() ?? '';
-    return ImageRequest(
-        ImageAction.create,
-        RegExp(r'^(?:please|for me|something|anything|nice)?[.!?]*$',
-                    caseSensitive: false)
-                .hasMatch(subject)
-            ? ''
-            : text);
-  }
+/// Sana is available anonymously through Pollinations' public image endpoint.
+class _AnonymousRateLimit extends FormatException {
+  _AnonymousRateLimit(this.retryAfter)
+      : super(
+            'Pollinations is rate-limiting anonymous requests. Try again ${retryAfter == null ? 'later' : 'in $retryAfter seconds'}.');
+  final int? retryAfter;
 }
 
-/// Sana is available anonymously through Pollinations' public image endpoint.
 class PollinationsImageService {
+  PollinationsImageService({this.maxRateLimitRetries = 1});
+  final int maxRateLimitRetries;
+  final _pendingWaits = <Completer<void>, Timer>{};
+  int _cancelEpoch = 0;
+  final _activeClients = <http.Client>{};
+  void cancel() {
+    _cancelEpoch++;
+    for (final entry in _pendingWaits.entries.toList()) {
+      entry.value.cancel();
+      entry.key.completeError(
+          const FormatException('Image generation was cancelled.'));
+    }
+    _pendingWaits.clear();
+    for (final client in _activeClients.toList()) {
+      client.close();
+    }
+    _activeClients.clear();
+  }
+
   static const attribution = 'Generated online with Pollinations (Sana).';
   static const _maxBytes = 12 * 1024 * 1024;
   static const _timeout = Duration(seconds: 75);
@@ -77,62 +44,63 @@ class PollinationsImageService {
       'Pollinations requires a key for image editing. Add one under Models → Images. The app selects models listed as free.';
   static const _modernHost = 'gen.pollinations.ai';
 
-  static String? explicitPrompt(String text) {
-    final request = RegExp(
-      r'^\s*(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:please\s+)?(?:generate|create|make|draw|render|paint)\s+(?:(?:an?|the|me an?)\s+)?(?:(?:ai[- ]generated|realistic|photorealistic)\s+)?(?:image|picture|photo|illustration|portrait)(?:\s+(?:of|showing|depicting|with)\b|\s*:\s*|\s+)(.+)$',
-      caseSensitive: false,
-      dotAll: true,
-    ).firstMatch(text);
-    final subject = request?.group(1)?.trim();
-    if (subject == null ||
-        subject.isEmpty ||
-        RegExp(r'^(?:from|based on|using)\s+(?:this|the|my|our)\b|@(?:file|skill):',
-                caseSensitive: false)
-            .hasMatch(subject)) return null;
-    return text.trim();
-  }
-
   Future<Uint8List> generate(String prompt, {http.Client? client}) async {
     final text = prompt.trim();
     if (text.isEmpty || text.length > 1000) {
       throw const FormatException(
           'Use an image description of 1 to 1,000 characters.');
     }
-    final shape = text.toLowerCase();
-    final wide = RegExp(r'\b(widescreen|landscape orientation|wide banner)\b')
-        .hasMatch(shape);
-    final tall =
-        RegExp(r'\b(portrait orientation|vertical poster|phone wallpaper)\b')
-            .hasMatch(shape);
     final uri = Uri(
       scheme: 'https',
       host: 'image.pollinations.ai',
       pathSegments: ['prompt', text],
       queryParameters: {
         'model': 'sana',
-        'width': wide
-            ? '1024'
-            : tall
-                ? '576'
-                : '768',
-        'height': wide
-            ? '576'
-            : tall
-                ? '1024'
-                : '768',
+        'width': '768',
+        'height': '768',
         'nologo': 'true',
         'nofeed': 'true',
       },
     );
     final transport = client ?? http.Client();
+    _activeClients.add(transport);
     try {
-      return await _request(transport, uri).timeout(_timeout);
+      final epoch = _cancelEpoch;
+      Future<Uint8List> boundedRequest() async {
+        for (var attempt = 0;; attempt++) {
+          if (epoch != _cancelEpoch)
+            throw const FormatException('Image generation was cancelled.');
+          try {
+            return await _request(transport, uri);
+          } on _AnonymousRateLimit catch (error) {
+            final seconds = error.retryAfter;
+            if (attempt >= maxRateLimitRetries.clamp(0, 2) ||
+                seconds == null ||
+                seconds < 0 ||
+                seconds > 45) rethrow;
+            final pending = Completer<void>();
+            final timer =
+                Timer(Duration(seconds: seconds), () => pending.complete());
+            _pendingWaits[pending] = timer;
+            try {
+              await pending.future;
+            } finally {
+              timer.cancel();
+              _pendingWaits.remove(pending);
+            }
+          }
+        }
+      }
+
+      return await boundedRequest().timeout(_timeout);
     } on TimeoutException {
+      cancel();
       throw const FormatException(
           'Pollinations took too long to generate the image.');
     } on http.ClientException {
       throw const FormatException('Couldn’t connect to Pollinations.');
     } finally {
+      _activeClients.remove(transport);
       if (client == null) transport.close();
     }
   }
@@ -220,6 +188,7 @@ class PollinationsImageService {
           'Use an image description of 1 to 1,000 characters.');
     }
     final transport = client ?? http.Client();
+    _activeClients.add(transport);
     try {
       final catalog = await transport
           .send(http.Request('GET', Uri.https(_modernHost, '/image/models'))
@@ -284,7 +253,9 @@ class PollinationsImageService {
       }
       final bytes = base64Decode(value);
       final extension = _imageExtension(bytes);
-      if (extension == null || bytes.length > _maxBytes) {
+      if (extension == null ||
+          bytes.length > _maxBytes ||
+          img.decodeImage(bytes) == null) {
         throw const FormatException(
             'Pollinations returned an invalid or oversized image.');
       }
@@ -299,6 +270,7 @@ class PollinationsImageService {
     } on http.ClientException {
       throw const FormatException('Couldn’t connect to Pollinations.');
     } finally {
+      _activeClients.remove(transport);
       if (client == null) transport.close();
     }
   }
@@ -335,9 +307,9 @@ class PollinationsImageService {
     final retryAfter = int.tryParse(response.headers['retry-after'] ?? '');
     if (response.statusCode == 429 ||
         (response.statusCode == 402 && retryAfter != null)) {
-      final wait = retryAfter == null ? 'later' : 'in $retryAfter seconds';
-      throw FormatException(
-          'Pollinations is rate-limiting anonymous requests. Try again $wait.');
+      // Consume the small error body before reusing the connection.
+      await response.stream.take(1).drain<void>();
+      throw _AnonymousRateLimit(retryAfter);
     }
     if (response.statusCode == 401 ||
         response.statusCode == 402 ||
@@ -371,6 +343,9 @@ class PollinationsImageService {
       throw const FormatException(
           'Pollinations returned an invalid JPEG image.');
     }
+    if (img.decodeImage(image) == null)
+      throw const FormatException(
+          'Pollinations returned an invalid JPEG image.');
     return image;
   }
 }

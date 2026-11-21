@@ -133,6 +133,13 @@ set_target_properties(${TARGET} PROPERTIES
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
+# Android bindings link this shared C++ API. The plugin's global
+# -fvisibility=hidden flag otherwise hides every common/chat symbol from JNI.
+if(ANDROID)
+    target_compile_options(${TARGET} PRIVATE -fvisibility=default)
+    target_link_libraries(${TARGET} PRIVATE c++_shared)
+endif()
+
 target_include_directories(${TARGET} PUBLIC .)
 target_link_libraries     (${TARGET} PUBLIC vendor::nlohmann vendor::sheredom)
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)

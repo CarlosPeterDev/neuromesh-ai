@@ -10,6 +10,7 @@ import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import kotlinx.coroutines.*
+import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.atomic.AtomicBoolean
 
 class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
@@ -22,6 +23,8 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
     private var currentModelPath: String? = null
     private var nativeLoadError: Throwable? = null
     private var clusterChannel: ClusterChannel? = null
+    private var toolChannel: MethodChannel? = null
+    private var toolSchemas = "[]"
 
     companion object {
         private const val TAG = "LlamaFlutterPlugin"
@@ -37,9 +40,33 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
         flutterApi = LlamaFlutterApi(binding.binaryMessenger)
         LlamaHostApi.setUp(binding.binaryMessenger, this)
         clusterChannel = ClusterChannel(context, binding.binaryMessenger, scope)
+        toolChannel = MethodChannel(binding.binaryMessenger, "com.neuromesh.ai/llama_tools").also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                scope.launch {
+                    try {
+                        if (call.method != "preview") generationJob?.join()
+                        val value = when (call.method) {
+                            "configure" -> {
+                                val schemas = call.arguments as? String ?: "[]"
+                                require(schemas.length <= 262144) { "Tool schemas exceed the transport limit" }
+                                org.json.JSONArray(schemas)
+                                toolSchemas = schemas
+                                null
+                            }
+                            "normalize" -> nativeNormalizeTools(call.arguments as String)
+                            "preview" -> nativePreviewTools(call.arguments as String)
+                            else -> throw IllegalArgumentException("Unknown tool transport method")
+                        }
+                        withContext(Dispatchers.Main) { result.success(value) }
+                    } catch(e: Exception) { withContext(Dispatchers.Main) { result.error("tool_transport",e.message,null) } }
+                }
+            }
+        }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        toolChannel?.setMethodCallHandler(null)
+        toolChannel = null
         clusterChannel?.dispose()
         clusterChannel = null
         scope.cancel()
@@ -256,6 +283,8 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
                 }
                 return@launch
             }
+            val activeToolSchemas = toolSchemas
+            toolSchemas = "[]"
             isStopping.set(false)
             try {
                 // Only the newest image is sent (earlier ones stay as text).
@@ -264,15 +293,21 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
                 val imageIndex = request.messages.indexOfLast { !it.imagePath.isNullOrBlank() }
                 val imagePath = if (imageIndex >= 0) request.messages[imageIndex].imagePath else null
 
-                // Format the chat messages using the template manager
-                val formattedPrompt = ChatTemplateManager.formatMessages(
-                    request.messages.mapIndexed { i, msg ->
-                        val content = if (i == imageIndex) "$MEDIA_MARKER\n${msg.content}" else msg.content
-                        TemplateChatMessage(msg.role, content)
-                    },
-                    request.template,
-                    currentModelPath
-                )
+                val chatMessages = request.messages.mapIndexed { i, msg ->
+                    val content = if (i == imageIndex) "$MEDIA_MARKER\n${msg.content}" else msg.content
+                    TemplateChatMessage(msg.role, content)
+                }
+                val metadataMode = request.template?.startsWith("metadata-") == true
+                val formattedPrompt = if (metadataMode) {
+                    nativeFormatChat(chatMessages.map { it.role }.toTypedArray(),
+                        chatMessages.map { it.content }.toTypedArray(), request.template == "metadata-think", activeToolSchemas)
+                        ?: ChatTemplateManager.formatMessages(chatMessages, null, currentModelPath)
+                } else ChatTemplateManager.formatMessages(chatMessages, request.template, currentModelPath)
+                // A template may prefill the opening delimiter. Surface that
+                // delimiter so the parser can distinguish actual generated reasoning.
+                if (metadataMode && activeToolSchemas == "[]" && formattedPrompt.trimEnd().endsWith("<think>")) {
+                    withContext(Dispatchers.Main) { flutterApi.onToken("<think>\n") { } }
+                }
 
                 if (imagePath != null) {
                     android.util.Log.i(TAG, "Image turn: message $imageIndex of ${request.messages.size}, " +
@@ -324,7 +359,13 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
     }
 
     override fun getSupportedTemplates(): List<String> {
-        return ChatTemplateManager.getSupportedTemplates()
+        val caps = if (isModelLoaded.get()) nativeChatCapabilities() else 0L
+        return ChatTemplateManager.getSupportedTemplates() + buildList {
+            if (caps and 1L != 0L) add("metadata-thinking-supported")
+            if (caps and 2L != 0L) add("metadata-tools-supported")
+            if (caps and 4L != 0L) add("metadata-chat-supported")
+            if (caps and 8L != 0L) add("metadata-reasoning-always-on")
+        }
     }
 
     override fun isModelLoaded(): Boolean {
@@ -552,6 +593,10 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
 
     /** Returns null on success, otherwise why the vision file didn't load. */
     private external fun nativeLoadMmproj(path: String, nThreads: Long): String?
+    private external fun nativeFormatChat(roles: Array<String>, contents: Array<String>, thinking: Boolean, schemas: String): String?
+    private external fun nativeChatCapabilities(): Long
+    private external fun nativeNormalizeTools(response: String): String
+    private external fun nativePreviewTools(response: String): String
     private external fun nativeStop()
     private external fun nativeFreeModel()
     private external fun nativeGetTokensUsed(): Int

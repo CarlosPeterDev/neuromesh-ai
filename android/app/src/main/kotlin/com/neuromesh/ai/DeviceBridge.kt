@@ -31,10 +31,14 @@ class DeviceBridge(private val context: Context) {
     private var pendingShare: String? = null
     private var pendingNewChat = false
     private var pendingPick: MethodChannel.Result? = null
+    private var pendingSave: MethodChannel.Result? = null
+    private var saveSource: File? = null
+    private var saveDigest: String? = null
     private val main = Handler(Looper.getMainLooper())
 
     companion object {
         const val TREE_REQUEST = 7311
+        private const val SAVE_REQUEST = 7312
         private const val MAX_READ = 4 * 1024 * 1024
     }
 
@@ -58,6 +62,10 @@ class DeviceBridge(private val context: Context) {
                 "decodeAudio" -> background(result) {
                     decodeAudio(call.argument<String>("path")!!, call.argument<Int>("rate") ?: 16000)
                 }
+                "saveOutputFile" -> saveOutputFile(
+                    call.argument<String>("path") ?: "",
+                    call.argument<String>("name") ?: "output.bin",
+                    call.argument<String>("sha256") ?: "", result)
                 "pickFolder" -> pickFolder(result)
                 "listFolder" -> background(result) {
                     listFolder(call.argument<String>("uri")!!, call.argument<String>("path") ?: "")
@@ -68,6 +76,17 @@ class DeviceBridge(private val context: Context) {
                         call.argument<String>("path") ?: "",
                         call.argument<Int>("maxBytes") ?: MAX_READ
                     )
+                }
+                "persistedFolders" -> background(result) {
+                    context.contentResolver.persistedUriPermissions.map {
+                        mapOf("uri" to it.uri.toString(), "read" to it.isReadPermission, "write" to it.isWritePermission)
+                    }
+                }
+                "sharedFileUri" -> background(result) {
+                    val file = resolve(call.argument<String>("uri")!!, call.argument<String>("path")!!)
+                        ?: throw IllegalArgumentException("File not found")
+                    check(file.exists()) { "File does not exist" }
+                    file.uri.toString()
                 }
                 "writeFile" -> background(result) {
                     writeFile(
@@ -193,6 +212,31 @@ class DeviceBridge(private val context: Context) {
         }.start()
     }
 
+    private fun saveOutputFile(path: String, name: String, digest: String, result: MethodChannel.Result) {
+        val activity = context as? Activity
+        if (activity == null) { result.error("NO_ACTIVITY", "No save screen available", null); return }
+        if (pendingSave != null) { result.error("SAVE_BUSY", "A save dialog is already open", null); return }
+        try {
+            val source = File(path).canonicalFile
+            val privateRoot = context.dataDir.canonicalFile.path + File.separator
+            require(source.path.startsWith(privateRoot) && source.isFile) { "Only app-owned output files can be saved" }
+            require(source.length() in 1L..(200L * 1024 * 1024)) { "Invalid output size" }
+            require(digest.matches(Regex("[a-f0-9]{64}"))) { "Missing output checksum" }
+            val extension = source.extension.lowercase()
+            val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
+            pendingSave = result; saveSource = source; saveDigest = digest
+            activity.startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = mime
+                putExtra(Intent.EXTRA_TITLE, File(name).name)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            }, SAVE_REQUEST)
+        } catch (error: Exception) {
+            pendingSave = null; saveSource = null; saveDigest = null
+            result.error("SAVE_FAILED", error.message, null)
+        }
+    }
+
     private fun pickFolder(result: MethodChannel.Result) {
         val activity = context as? Activity
         if (activity == null) {
@@ -213,6 +257,57 @@ class DeviceBridge(private val context: Context) {
 
     /** Returns true when the result belonged to the folder picker. */
     fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
+        if (requestCode == SAVE_REQUEST) {
+            val cb = pendingSave
+            val source = saveSource
+            val expected = saveDigest
+            pendingSave = null; saveSource = null; saveDigest = null
+            val uri = data?.data
+            if (cb == null) return true
+            if (resultCode != Activity.RESULT_OK || uri == null || source == null || expected == null) {
+                cb.success(null)
+            } else background(cb) {
+                check(uri.scheme == "content") { "The save destination is not a document provider" }
+                val copied = java.security.MessageDigest.getInstance("SHA-256")
+                var count = 0L
+                val output = context.contentResolver.openOutputStream(uri, "wt")
+                    ?: throw java.io.IOException("Cannot open the save destination")
+                output.use { destination ->
+                    source.inputStream().use { input ->
+                        val buffer = ByteArray(65536)
+                        while (true) {
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            count += n
+                            check(count <= 200L * 1024 * 1024) { "Output grew beyond the save limit" }
+                            destination.write(buffer, 0, n); copied.update(buffer, 0, n)
+                        }
+                    }
+                    destination.flush()
+                }
+                val copiedHash = copied.digest().joinToString("") { "%02x".format(it) }
+                check(copiedHash == expected) { "The source changed; the save is not verified" }
+                val actual = java.security.MessageDigest.getInstance("SHA-256")
+                var readCount = 0L
+                val input = context.contentResolver.openInputStream(uri)
+                    ?: throw java.io.IOException("Cannot verify the saved document")
+                input.use {
+                    val buffer = ByteArray(65536)
+                    while (true) {
+                        val n = it.read(buffer)
+                        if (n < 0) break
+                        readCount += n
+                        check(readCount <= count) { "Saved document returned unexpected extra data" }
+                        actual.update(buffer, 0, n)
+                    }
+                }
+                val actualHash = actual.digest().joinToString("") { "%02x".format(it) }
+                check(readCount == count && actualHash == expected) { "Saved bytes did not match; the save is not verified" }
+                check(DocumentFile.fromSingleUri(context, uri)?.exists() == true) { "Saved document does not exist" }
+                mapOf("uri" to uri.toString(), "bytes" to count, "sha256" to actualHash, "verified" to true)
+            }
+            return true
+        }
         if (requestCode != TREE_REQUEST) return false
         val cb = pendingPick
         pendingPick = null
@@ -240,12 +335,15 @@ class DeviceBridge(private val context: Context) {
     }
 
     private fun resolve(treeUri: String, path: String, create: Boolean = false): DocumentFile? {
+        if (context.contentResolver.persistedUriPermissions.none {
+                it.uri == Uri.parse(treeUri) && it.isReadPermission
+            }) throw SecurityException("Folder access was revoked. Select it again in Shared Folder.")
         var cur = DocumentFile.fromTreeUri(context, Uri.parse(treeUri)) ?: return null
         val parts = path.split('/').filter { it.isNotEmpty() && it != "." }
         for ((i, part) in parts.withIndex()) {
             if (part == "..") throw IllegalArgumentException("'..' is not allowed")
             var next = cur.findFile(part)
-            if (next == null && create && i < parts.size - 1) next = cur.createDirectory(part)
+            if (next == null && create) next = cur.createDirectory(part)
             cur = next ?: return null
         }
         return cur
@@ -287,7 +385,7 @@ class DeviceBridge(private val context: Context) {
     private fun writeFile(uri: String, path: String, bytes: ByteArray, append: Boolean = false): Boolean {
         requireWriteGrant(uri)
         val clean = mutationPath(path)
-        val existing = resolve(uri, path, create = true)
+        val existing = resolve(uri, path)
         if (existing != null && !existing.isFile) {
             throw IllegalArgumentException("Not a file: $path")
         }
@@ -301,10 +399,27 @@ class DeviceBridge(private val context: Context) {
             val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
             parent.createFile(mime, name) ?: throw IllegalStateException("Could not create $name")
         }
+        val expected = java.security.MessageDigest.getInstance("SHA-256")
+        if (append) context.contentResolver.openInputStream(target.uri).use { input ->
+            checkNotNull(input) { "Cannot verify the existing file" }
+            val chunk = ByteArray(16384)
+            while (true) { val n = input.read(chunk); if (n < 0) break; expected.update(chunk, 0, n) }
+        }
+        expected.update(bytes)
         val mode = if (append) "wa" else "wt"
         context.contentResolver.openOutputStream(target.uri, mode).use { out ->
             if (out == null) throw IllegalStateException("Cannot write ${target.name}")
             out.write(bytes)
+            out.flush()
+        }
+        val actual = java.security.MessageDigest.getInstance("SHA-256")
+        context.contentResolver.openInputStream(target.uri).use { input ->
+            checkNotNull(input) { "The written file could not be reopened" }
+            val chunk = ByteArray(16384)
+            while (true) { val n = input.read(chunk); if (n < 0) break; actual.update(chunk, 0, n) }
+        }
+        check(target.exists() && expected.digest().contentEquals(actual.digest())) {
+            "The provider did not persist the expected file contents. The write may be partial."
         }
         return true
     }
@@ -342,6 +457,7 @@ class DeviceBridge(private val context: Context) {
             require(existing == null) { "That folder or file already exists." }
             val created = parent.createDirectory(parts.last())
                 ?: throw IllegalStateException("The provider could not create the folder.")
+            check(created.exists() && created.isDirectory) { "Folder creation could not be verified" }
             return parts.dropLast(1).plus(created.name ?: parts.last()).joinToString("/")
         }
         require(existing?.isFile == true) { "No file found at $path." }

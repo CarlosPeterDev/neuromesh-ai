@@ -10,11 +10,9 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../controllers/chat_controller.dart';
 import '../controllers/settings_controller.dart';
 import '../core/redact.dart';
-import '../ffi/sd_ffi_bindings.dart';
 import 'app_log_service.dart';
 import 'device_info_service.dart';
 import 'inference_service.dart';
-import 'local_image_service.dart';
 
 class CrashReportingService extends GetxService {
   bool _enabled = false;
@@ -105,7 +103,6 @@ class CrashReportingService extends GetxService {
       ..._deviceKeys(),
       ..._settingsKeys(),
       ..._textModelKeys(),
-      ..._imageModelKeys(),
       ..._generationKeys(),
       ...extra,
     };
@@ -166,13 +163,6 @@ class CrashReportingService extends GetxService {
     final settings = Get.find<SettingsController>();
     return {
       'inference_mode': settings.inferenceMode.value,
-      'image_steps': settings.imageSteps.value,
-      'image_size_setting': settings.imageGenSize.value == 0
-          ? 'auto'
-          : settings.imageGenSize.value,
-      'image_backend_setting': settings.imageGenBackend.value.displayName,
-      'image_force_cpu': settings.imageGenForceCpu.value,
-      'image_gpu_safety_mb': settings.imageGenGpuGuardMb.value,
       'litert_performance_mode': settings.liteRtPerformanceMode.value,
     };
   }
@@ -193,33 +183,12 @@ class CrashReportingService extends GetxService {
     };
   }
 
-  Map<String, Object?> _imageModelKeys() {
-    if (!Get.isRegistered<LocalImageService>()) return {};
-    final image = Get.find<LocalImageService>();
-    return {
-      'image_model_loaded': image.isModelLoaded.value,
-      'image_model_name': _safeName(image.loadedModelName.value),
-      'image_backend_actual': image.currentBackend.value.displayName,
-      'image_backend_is_gpu': image.currentBackend.value != Backend.cpu,
-      'image_gpu_vendor': image.gpuVendor.value,
-      'image_generation_running': image.isGenerating.value,
-      'image_latest_log': _trim(image.latestLog.value, 200),
-    };
-  }
-
   Map<String, Object?> _generationKeys() {
     if (!Get.isRegistered<ChatController>()) return {};
     final chat = Get.find<ChatController>();
-    final start = chat.imageGenStartTime.value;
     return {
       'chat_is_loading': chat.isLoading.value,
       'chat_is_streaming': chat.isStreaming.value,
-      'image_gen_step': chat.imageGenStep.value,
-      'image_gen_total': chat.imageGenTotal.value,
-      'image_gen_eta_secs': chat.imageGenEstimatedSecs.value,
-      'image_gen_decoding': chat.imageGenDecoding.value,
-      'image_gen_elapsed_secs':
-          start == null ? 0 : DateTime.now().difference(start).inSeconds,
     };
   }
 

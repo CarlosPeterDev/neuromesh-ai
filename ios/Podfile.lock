@@ -16,8 +16,6 @@ PODS:
   - OrderedSet (6.0.3)
   - permission_handler_apple (9.3.0):
     - Flutter
-  - sd_flutter_android (0.0.1):
-    - Flutter
 
 DEPENDENCIES:
   - Flutter (from `Flutter`)
@@ -26,7 +24,6 @@ DEPENDENCIES:
   - flutter_local_notifications (from `.symlinks/plugins/flutter_local_notifications/ios`)
   - llama_flutter_android (from `.symlinks/plugins/llama_flutter_android/ios`)
   - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
-  - sd_flutter_android (from `.symlinks/plugins/sd_flutter_android/ios`)
 
 SPEC REPOS:
   trunk:
@@ -45,8 +42,6 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/llama_flutter_android/ios"
   permission_handler_apple:
     :path: ".symlinks/plugins/permission_handler_apple/ios"
-  sd_flutter_android:
-    :path: ".symlinks/plugins/sd_flutter_android/ios"
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
@@ -56,7 +51,6 @@ SPEC CHECKSUMS:
   llama_flutter_android: 83a6a7b330b02e4e5fb0f1dafabc680f660c8077
   OrderedSet: e539b66b644ff081c73a262d24ad552a69be3a94
   permission_handler_apple: 4ed2196e43d0651e8ff7ca3483a069d469701f2d
-  sd_flutter_android: a94cf728500b3e06a4314d397c0a761751f9add2
 
 PODFILE CHECKSUM: 9592145ce5b374c075c7b77e39e6c66eba38834d
 

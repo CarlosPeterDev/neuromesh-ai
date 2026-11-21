@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import '../controllers/server_controller.dart';
 import 'hive_service.dart';
 import 'relay_worker_script.dart';
+import 'relay_background_service.dart';
 
 /// Reach this phone from anywhere through a free Cloudflare Worker.
 /// The phone connects OUT to the Worker; web chat and the API are served at
@@ -30,7 +31,8 @@ class RelayService extends GetxService {
   // Stored settings
   String get cfToken => _hive.getSetting<String>('relay_cf_token') ?? '';
   String get cfAccount => _hive.getSetting<String>('relay_cf_account') ?? '';
-  String get workerName => _hive.getSetting<String>('relay_worker') ?? 'neuromesh-relay';
+  String get workerName =>
+      _hive.getSetting<String>('relay_worker') ?? 'neuromesh-relay';
   String get password => _hive.getSetting<String>('relay_password') ?? '';
   String get apiKey => _hive.getSetting<String>('relay_api_key') ?? '';
 
@@ -49,7 +51,9 @@ class RelayService extends GetxService {
     super.onInit();
     url.value = _hive.getSetting<String>('relay_url') ?? '';
     // Persistent until turned off: resume after an app restart.
-    if (!kIsWeb && (_hive.getSetting<bool>('relay_on') ?? false) && url.value.isNotEmpty) {
+    if (!kIsWeb &&
+        (_hive.getSetting<bool>('relay_on') ?? false) &&
+        url.value.isNotEmpty) {
       unawaited(Future<void>.delayed(const Duration(seconds: 4), () async {
         try {
           await start();
@@ -69,7 +73,8 @@ class RelayService extends GetxService {
     String? keyMode,
   }) async {
     if (token != null) await _hive.setSetting('relay_cf_token', token.trim());
-    if (account != null) await _hive.setSetting('relay_cf_account', account.trim());
+    if (account != null)
+      await _hive.setSetting('relay_cf_account', account.trim());
     if (name != null && name.trim().isNotEmpty) {
       await _hive.setSetting('relay_worker', name.trim().toLowerCase());
     }
@@ -96,9 +101,12 @@ class RelayService extends GetxService {
     }
     if (body != null) req.bodyBytes = body;
     if (headers != null) req.headers.addAll(headers);
-    final res = await req.send().then(http.Response.fromStream)
+    final res = await req
+        .send()
+        .then(http.Response.fromStream)
         .timeout(const Duration(seconds: 45), onTimeout: () {
-      throw Exception('Cloudflare did not respond. Check your connection and retry.');
+      throw Exception(
+          'Cloudflare did not respond. Check your connection and retry.');
     });
     Map<String, dynamic> j;
     try {
@@ -107,7 +115,10 @@ class RelayService extends GetxService {
       throw Exception('Cloudflare replied ${res.statusCode}.');
     }
     if (j['success'] != true) {
-      final errs = (j['errors'] as List?)?.map((e) => '${(e as Map)['message']}').join('; ') ?? 'unknown error';
+      final errs = (j['errors'] as List?)
+              ?.map((e) => '${(e as Map)['message']}')
+              .join('; ') ??
+          'unknown error';
       throw Exception(errs);
     }
     return j;
@@ -115,7 +126,8 @@ class RelayService extends GetxService {
 
   /// Uploads the Worker, turns on its workers.dev address and returns the URL.
   Future<String> deploy() async {
-    if (cfToken.isEmpty) throw Exception('Paste your Cloudflare API token first.');
+    if (cfToken.isEmpty)
+      throw Exception('Paste your Cloudflare API token first.');
     deploying.value = true;
     try {
       status.value = 'Finding your Cloudflare account…';
@@ -123,19 +135,27 @@ class RelayService extends GetxService {
       if (account.isEmpty) {
         final r = await _api('GET', '/accounts');
         final list = (r['result'] as List?) ?? const [];
-        if (list.isEmpty) throw Exception('No account found for this token. Enter the Account ID by hand.');
+        if (list.isEmpty)
+          throw Exception(
+              'No account found for this token. Enter the Account ID by hand.');
         account = '${(list.first as Map)['id']}';
         await saveSettings(account: account);
       }
 
-      if (relayToken.isEmpty) await _hive.setSetting('relay_token', randomSecret());
+      if (relayToken.isEmpty)
+        await _hive.setSetting('relay_token', randomSecret());
 
       status.value = 'Uploading the relay…';
       final bindings = <Map<String, String>>[
-        {'type': 'durable_object_namespace', 'name': 'RELAY', 'class_name': 'Relay'},
+        {
+          'type': 'durable_object_namespace',
+          'name': 'RELAY',
+          'class_name': 'Relay'
+        },
         {'type': 'secret_text', 'name': 'RELAY_TOKEN', 'text': relayToken},
         {'type': 'plain_text', 'name': 'KEY_MODE', 'text': keyMode},
-        if (password.isNotEmpty) {'type': 'secret_text', 'name': 'PASSWORD', 'text': password},
+        if (password.isNotEmpty)
+          {'type': 'secret_text', 'name': 'PASSWORD', 'text': password},
         if (apiKey.isNotEmpty && keyMode == 'cloud')
           {'type': 'secret_text', 'name': 'API_KEY', 'text': apiKey},
       ];
@@ -144,23 +164,32 @@ class RelayService extends GetxService {
           'main_module': 'worker.js',
           'compatibility_date': '2025-01-01',
           'bindings': bindings,
-          if (withMigration) 'migrations': {'new_tag': 'v1', 'new_sqlite_classes': ['Relay']},
+          if (withMigration)
+            'migrations': {
+              'new_tag': 'v1',
+              'new_sqlite_classes': ['Relay']
+            },
         };
         final boundary = 'nm${randomSecret(16)}';
         final b = BytesBuilder();
-        void part(String name, String type, String content, {String? filename}) {
-          b.add(utf8.encode('--$boundary\r\nContent-Disposition: form-data; name="$name"'
+        void part(String name, String type, String content,
+            {String? filename}) {
+          b.add(utf8.encode(
+              '--$boundary\r\nContent-Disposition: form-data; name="$name"'
               '${filename != null ? '; filename="$filename"' : ''}\r\nContent-Type: $type\r\n\r\n'));
           b.add(utf8.encode(content));
           b.add(utf8.encode('\r\n'));
         }
 
         part('metadata', 'application/json', jsonEncode(meta));
-        part('worker.js', 'application/javascript+module', kRelayWorkerScript, filename: 'worker.js');
+        part('worker.js', 'application/javascript+module', kRelayWorkerScript,
+            filename: 'worker.js');
         b.add(utf8.encode('--$boundary--\r\n'));
         await _api('PUT', '/accounts/$account/workers/scripts/$workerName',
             body: b.takeBytes(),
-            headers: {'Content-Type': 'multipart/form-data; boundary=$boundary'});
+            headers: {
+              'Content-Type': 'multipart/form-data; boundary=$boundary'
+            });
       }
 
       final migrated = _hive.getSetting<bool>('relay_migrated') ?? false;
@@ -186,9 +215,11 @@ class RelayService extends GetxService {
       } catch (_) {}
       if (sub.isEmpty) {
         sub = 'nm-${randomSecret(8).toLowerCase()}';
-        await _api('PUT', '/accounts/$account/workers/subdomain', json: {'subdomain': sub});
+        await _api('PUT', '/accounts/$account/workers/subdomain',
+            json: {'subdomain': sub});
       }
-      await _api('POST', '/accounts/$account/workers/scripts/$workerName/subdomain',
+      await _api(
+          'POST', '/accounts/$account/workers/scripts/$workerName/subdomain',
           json: {'enabled': true});
       final address = 'https://$workerName.$sub.workers.dev';
       url.value = address;
@@ -221,7 +252,8 @@ class RelayService extends GetxService {
         await sc.startServer().timeout(const Duration(seconds: 10));
       }
       if (generation != _generation) return;
-      if (!sc.isRunning.value) throw StateError('The local API could not start.');
+      if (!sc.isRunning.value)
+        throw StateError('The local API could not start.');
       unawaited(_keepProcessAlive(true));
       unawaited(_loop(generation));
     } catch (_) {
@@ -254,7 +286,10 @@ class RelayService extends GetxService {
     try {
       final svc = FlutterBackgroundService();
       if (on) {
-        if (!await svc.isRunning()) await svc.startService();
+        if (!await svc.isRunning()) {
+          await configureRelayBackgroundService();
+          await svc.startService();
+        }
         svc.invoke('keepAlive', {'on': true});
         svc.invoke('progress', {
           'title': 'Remote access is on',
@@ -275,7 +310,8 @@ class RelayService extends GetxService {
         final u = Uri.parse(url.value);
         final pending = WebSocket.connect(
             'wss://${u.host}/_phone?token=${Uri.encodeQueryComponent(relayToken)}');
-        final ws = await pending.timeout(const Duration(seconds: 15), onTimeout: () {
+        final ws =
+            await pending.timeout(const Duration(seconds: 15), onTimeout: () {
           unawaited(pending.then<void>((lateSocket) async {
             await lateSocket.close();
           }).catchError((Object _) {}));
@@ -300,7 +336,8 @@ class RelayService extends GetxService {
         }
       } catch (_) {
         if (generation != _generation) return;
-        status.value = 'Could not reach the relay. Check the Worker address and connection.';
+        status.value =
+            'Could not reach the relay. Check the Worker address and connection.';
       }
       if (generation != _generation) return;
       if (connected.value) status.value = 'Relay disconnected. Reconnecting…';
@@ -345,10 +382,17 @@ class RelayService extends GetxService {
     try {
       final sc = Get.find<ServerController>();
       final port = ServerController.port;
-      final req = await client.openUrl(r.method, Uri.parse('http://127.0.0.1:$port${r.path}'));
+      final req = await client.openUrl(
+          r.method, Uri.parse('http://127.0.0.1:$port${r.path}'));
       r.headers.forEach((k, v) {
         final key = k.toLowerCase();
-        if (['host', 'content-length', 'connection', 'transfer-encoding', 'x-relay-verified'].contains(key)) return;
+        if ([
+          'host',
+          'content-length',
+          'connection',
+          'transfer-encoding',
+          'x-relay-verified'
+        ].contains(key)) return;
         req.headers.set(k, '$v');
       });
       // The Worker already vetted this request: use the phone's own key.
@@ -362,11 +406,17 @@ class RelayService extends GetxService {
       final res = await req.close();
       final headers = <String, String>{};
       res.headers.forEach((k, v) {
-        if (!['transfer-encoding', 'connection', 'content-length'].contains(k.toLowerCase())) {
+        if (!['transfer-encoding', 'connection', 'content-length']
+            .contains(k.toLowerCase())) {
           headers[k] = v.join(', ');
         }
       });
-      _send(ws, {'t': 'head', 'id': id, 'status': res.statusCode, 'headers': headers});
+      _send(ws, {
+        't': 'head',
+        'id': id,
+        'status': res.statusCode,
+        'headers': headers
+      });
       await for (final chunk in res) {
         for (var i = 0; i < chunk.length; i += 98304) {
           _send(ws, {

@@ -1,3 +1,4 @@
+import '../utils/reasoning_support.dart';
 import 'dart:async';
 
 import 'package:flutter/services.dart' show PlatformException;
@@ -50,6 +51,9 @@ class InferenceService extends GetxService {
   int _stopCount = 0;
   final isGpuAccelerated = false.obs;
   final loadedModelRuntime = ''.obs;
+  final supportsThinking = false.obs;
+  final reasoningSupport = ReasoningSupport.unknown.obs;
+  final supportsToolSchema = false.obs;
   final loadedBackend = ''.obs;
 
   /// Whether the current platform supports local inference.
@@ -134,7 +138,9 @@ class InferenceService extends GetxService {
 
       var finalContextSize = safeRetry
           ? contextSize.clamp(512, 1024)
-          : isLiteRt ? contextSize.clamp(512, 4096) : contextSize;
+          : isLiteRt
+              ? contextSize.clamp(512, 4096)
+              : contextSize;
       final autoContext =
           _hive.getSetting<bool>('auto_context', defaultValue: true) == true;
       final lastLoadedContext =
@@ -167,7 +173,9 @@ class InferenceService extends GetxService {
         finalContextSize = plan.context;
       }
       // Single-device auto mode can only shrink the requested window.
-      if (!isLiteRt && clusterWorkers == 0 && autoContext &&
+      if (!isLiteRt &&
+          clusterWorkers == 0 &&
+          autoContext &&
           Get.isRegistered<DeviceInfoService>()) {
         try {
           final dev = Get.find<DeviceInfoService>();
@@ -208,7 +216,8 @@ class InferenceService extends GetxService {
 
       if (!result.success) {
         diagnostics
-          ?..set('engineBackend', result.backend.isEmpty ? 'unknown' : result.backend)
+          ?..set('engineBackend',
+              result.backend.isEmpty ? 'unknown' : result.backend)
           ..set('progressPercent', (modelLoadProgress.value * 100).round());
         await _releaseEngine();
         return result.message;
@@ -219,6 +228,9 @@ class InferenceService extends GetxService {
       _modelRevision++;
       loadedModelName.value = requestedModelName;
       loadedModelRuntime.value = result.runtime;
+      supportsThinking.value = result.supportsThinking;
+      reasoningSupport.value = result.reasoningSupport;
+      supportsToolSchema.value = result.supportsToolSchema;
       if (result.runtime == 'llama' || result.runtime == 'litert') {
         _sessionNativeRuntime = result.runtime;
       }
@@ -302,6 +314,9 @@ class InferenceService extends GetxService {
     _loadedProjector = null;
     loadedModelName.value = '';
     loadedModelRuntime.value = '';
+    supportsThinking.value = false;
+    reasoningSupport.value = ReasoningSupport.unknown;
+    supportsToolSchema.value = false;
     loadedBackend.value = '';
     gpuLayersUsed.value = 0;
     isGpuAccelerated.value = false;
@@ -331,11 +346,13 @@ class InferenceService extends GetxService {
     String? systemPrompt,
     List<Map<String, String>>? conversationHistory,
     String source = 'chat',
+    List<Map<String, dynamic>> nativeTools = const [],
     String? imagePath,
     String? audioPath,
     int? maxTokens,
     List<String> stopSequences = const [],
     void Function(String token)? onToken,
+    void Function(String visible)? onPreview,
   }) async {
     final engine = _engine;
     if (!supportsLocalInference || engine == null || !isModelLoaded.value) {
@@ -385,20 +402,25 @@ class InferenceService extends GetxService {
     var stopSequenceHit = false;
 
     Future<String?> recoverCluster() async {
-      if (Zone.current[_clusterRetry] == true || !isCurrent() || firstVisibleTokenAt != null ||
+      if (Zone.current[_clusterRetry] == true ||
+          !isCurrent() ||
+          firstVisibleTokenAt != null ||
           !Get.isRegistered<ClusterService>()) return null;
       final cluster = Get.find<ClusterService>();
       final path = _hive.getSetting<String>(AppConstants.keyLocalModelPath);
-      if (path == null || !await cluster.activeWorkerDisconnected() || !isCurrent()) {
+      if (path == null ||
+          !await cluster.activeWorkerDisconnected() ||
+          !isCurrent()) {
         return null;
       }
       final name = loadedModelName.value;
       final projector = _loadedProjector;
       // Releasing the current engine invalidates this generation once.
       final expectedStops = stopCount + 1;
-      Get.find<AppLogService>().warning('Cluster worker disconnected; attempting to reload model');
-      final loaded = await loadModel(path, modelName: name, mmprojPath: projector,
-          recoveringCluster: true);
+      Get.find<AppLogService>()
+          .warning('Cluster worker disconnected; attempting to reload model');
+      final loaded = await loadModel(path,
+          modelName: name, mmprojPath: projector, recoveringCluster: true);
       if (loaded.startsWith('ERROR:')) {
         return 'ERROR: A cluster worker disconnected and this model could not be reloaded. $loaded';
       }
@@ -409,6 +431,8 @@ class InferenceService extends GetxService {
           systemPrompt: systemPrompt,
           conversationHistory: conversationHistory,
           source: source,
+          nativeTools: nativeTools,
+          onPreview: onPreview,
           imagePath: imagePath,
           audioPath: audioPath,
           maxTokens: maxTokens,
@@ -472,6 +496,13 @@ class InferenceService extends GetxService {
         source: source,
         normalThinking: source == 'chat' &&
             (_hive.getSetting<bool>('local_normal_thinking') ?? false),
+        nativeTools: nativeTools,
+        onPreview: (visible) {
+          if (!isCurrent()) return;
+          firstVisibleTokenAt ??= DateTime.now();
+          streamingText.value = visible;
+          onPreview?.call(visible);
+        },
         onToken: (rawToken) {
           if (!isCurrent()) return;
           var token = rawToken;
@@ -489,7 +520,7 @@ class InferenceService extends GetxService {
           }
           firstVisibleTokenAt ??= DateTime.now();
           tokenCount.value++;
-          streamingText.value += token;
+          if (nativeTools.isEmpty) streamingText.value += token;
           final speedStart = firstVisibleTokenAt ?? startTime;
           final elapsedSeconds =
               DateTime.now().difference(speedStart).inMilliseconds / 1000.0;
@@ -682,7 +713,8 @@ class InferenceService extends GetxService {
       } catch (error, stack) {
         diagnostics
           ?..set('engineExceptionType', error.runtimeType.toString())
-          ..set('engineDartStack', stack.toString().split('\n').take(16).join('\n'));
+          ..set('engineDartStack',
+              stack.toString().split('\n').take(16).join('\n'));
         if (error is PlatformException) {
           diagnostics?.set('enginePlatformErrorCode', error.code);
         }

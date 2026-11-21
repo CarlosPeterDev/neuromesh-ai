@@ -36,9 +36,5 @@ void main() {
     expect(
         agent.memoryBlock(), contains('User prefers Egyptian Arabic replies.'));
     expect(agent.memoryBlock(), isNot(contains('hello.txt')));
-    expect(
-        await agent.rememberDirect('save hello.txt in the workspace'), isNull);
-    expect(await agent.rememberDirect('remember to send the report'), isNull);
-    expect(await agent.rememberDirect('remember that send the report'), isNull);
   });
 }

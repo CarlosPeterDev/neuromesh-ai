@@ -140,6 +140,10 @@ set(LLAMA_BUILD_SERVER OFF CACHE BOOL "Disable server")
 set(LLAMA_BUILD_MTMD ON CACHE BOOL "Build the mtmd library" FORCE)
 set(MTMD_VIDEO OFF CACHE BOOL "No ffmpeg on Android" FORCE)
 
+# Embedded GGUF Jinja templates and enable_thinking use llama.cpp common/chat.
+set(LLAMA_BUILD_APP OFF CACHE BOOL "No unified CLI in the app" FORCE)
+set(LLAMA_BUILD_COMMON ON CACHE BOOL "Build model chat templates" FORCE)
+set(LLAMA_OPENSSL OFF CACHE BOOL "No network in the inference runtime" FORCE)
 # Add llama.cpp
 add_subdirectory(src/main/cpp/llama.cpp)
 
@@ -165,6 +169,7 @@ add_library(llama_jni SHARED
 
 target_link_libraries(llama_jni
     mtmd
+    llama-common
     llama
     ggml
     c++_shared

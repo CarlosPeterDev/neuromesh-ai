@@ -12,7 +12,6 @@ import '../models/ai_model.dart';
 import '../services/download_service.dart';
 import '../services/download_queue.dart';
 import '../services/inference_service.dart';
-import '../services/local_image_service.dart';
 import 'hf_browser.dart';
 import 'pollinations_view.dart';
 import 'model_helpers_view.dart';
@@ -136,8 +135,7 @@ class ModelView extends GetView<ModelController> {
     return Obx(() {
       final busy = controller.isImporting.value ||
           controller.isPreparingModel.value ||
-          inference.isLoadingModel.value ||
-          Get.find<LocalImageService>().isLoadingModel.value;
+          inference.isLoadingModel.value;
       return PillButton(
         label: 'Import file',
         icon: Icons.file_upload_outlined,
@@ -259,21 +257,14 @@ class ModelView extends GetView<ModelController> {
         );
       }
       final inference = Get.find<InferenceService>();
-      final localImage = Get.find<LocalImageService>();
       final busy = controller.isImporting.value ||
           controller.isPreparingModel.value ||
-          inference.isLoadingModel.value ||
-          localImage.isLoadingModel.value;
+          inference.isLoadingModel.value;
 
       final String name;
       final String meta;
       final IconData icon;
-      if (localImage.isModelLoaded.value) {
-        name = localImage.loadedModelName.value;
-        meta =
-            'Loaded · Image generation · ${localImage.isUsingGpu.value ? 'GPU accelerated' : 'CPU'}';
-        icon = Icons.image_outlined;
-      } else if (inference.isModelLoaded.value) {
+      if (inference.isModelLoaded.value) {
         name = inference.loadedModelName.value;
         final gpu = inference.gpuName.value;
         meta = inference.isGpuAccelerated.value
@@ -314,21 +305,25 @@ class ModelView extends GetView<ModelController> {
       final t = AppTokens.of(context);
 
       ModelFileKind kindFor(String filename) {
-        final name = filename.startsWith('save:') ? filename.substring(5) : filename;
+        final name =
+            filename.startsWith('save:') ? filename.substring(5) : filename;
         if (controller.externalDownloadId.value != null &&
             controller.importFileName.value == name &&
             controller.externalDownloadKind.value != null) {
           return controller.externalDownloadKind.value!;
         }
-        if (controller.availableModels.any((model) => model.mmprojFilename == name)) {
+        if (controller.availableModels
+            .any((model) => model.mmprojFilename == name)) {
           return ModelFileKind.helper;
         }
-        final model = controller.availableModels.firstWhereOrNull((model) => model.filename == name);
+        final model = controller.availableModels
+            .firstWhereOrNull((model) => model.filename == name);
         return model?.fileKind ?? modelFileKind(name);
       }
 
-      final downloads = allDownloads.where((item) =>
-          picked == null || kindFor(item.filename) == picked).toList();
+      final downloads = allDownloads
+          .where((item) => picked == null || kindFor(item.filename) == picked)
+          .toList();
 
       String labelFor(String filename) {
         if (filename.startsWith('save:')) {
@@ -360,7 +355,8 @@ class ModelView extends GetView<ModelController> {
           child: Column(children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-              child: ModelFileFilter(selected: picked, onChanged: (kind) => filter.value = kind),
+              child: ModelFileFilter(
+                  selected: picked, onChanged: (kind) => filter.value = kind),
             ),
             if (downloads.isEmpty)
               const Padding(
@@ -486,17 +482,9 @@ class ModelView extends GetView<ModelController> {
     return Obx(() {
       final t = AppTokens.of(context);
       final inference = Get.find<InferenceService>();
-      final localImage = Get.find<LocalImageService>();
       final textLoading = inference.isLoadingModel.value &&
           inference.loadingModelName.value == model.filename;
-      // Image models report no percentage, so their bar is indeterminate.
-      final unzipped = model.filename.toLowerCase().endsWith('.zip')
-          ? model.filename.substring(0, model.filename.length - 4)
-          : model.filename;
-      final imageLoading = localImage.isLoadingModel.value &&
-          (localImage.loadingModelName.value == model.filename ||
-              localImage.loadingModelName.value == unzipped);
-      if (!textLoading && !imageLoading) return const SizedBox.shrink();
+      if (!textLoading) return const SizedBox.shrink();
       final progress = textLoading ? inference.modelLoadProgress.value : 0.0;
 
       return Column(
@@ -1576,20 +1564,14 @@ class ModelView extends GetView<ModelController> {
 
       final isDownloaded = controller.isDownloaded(model.filename);
       final inference = Get.find<InferenceService>();
-      final localImage = Get.find<LocalImageService>();
-      final isActive = inference.loadedModelName.value == actualFilename ||
-          localImage.loadedModelName.value == actualFilename;
+      final isActive = inference.loadedModelName.value == actualFilename;
       final isCurrentlyDownloading =
           controller.isDownloadingModel(model.filename);
-      final isAnyModelLoading = controller.isPreparingModel.value ||
-          inference.isLoadingModel.value ||
-          localImage.isLoadingModel.value;
+      final isAnyModelLoading =
+          controller.isPreparingModel.value || inference.isLoadingModel.value;
       final isThisTextModelLoading = inference.isLoadingModel.value &&
           inference.loadingModelName.value == actualFilename;
-      final isThisImageModelLoading = localImage.isLoadingModel.value &&
-          localImage.loadingModelName.value == actualFilename;
-      final isThisModelLoading =
-          isThisTextModelLoading || isThisImageModelLoading;
+      final isThisModelLoading = isThisTextModelLoading;
       final disableActions = controller.isImporting.value ||
           isAnyModelLoading ||
           isCurrentlyDownloading;
@@ -1606,7 +1588,8 @@ class ModelView extends GetView<ModelController> {
       // Primary action (right). While downloading: a progress ring with the
       // percentage (cancel lives in the pinned downloads card at the top).
       final optionalHelper = model.hasVisionProjector &&
-          controller.isLlamaModel(model) && !model.fileRole.isHelper;
+          controller.isLlamaModel(model) &&
+          !model.fileRole.isHelper;
       final Widget primaryAction;
       if (isCurrentlyDownloading) {
         primaryAction = _DownloadRing(filename: model.filename);
@@ -1615,9 +1598,7 @@ class ModelView extends GetView<ModelController> {
           primaryAction = AppTag(model.fileRole.label);
         } else if (isThisModelLoading) {
           primaryAction = Text(
-              isThisImageModelLoading || loadPercent == '0'
-                  ? 'Loading…'
-                  : '$loadPercent%',
+              loadPercent == '0' ? 'Loading…' : '$loadPercent%',
               style: t.small.copyWith(
                   color: t.accent,
                   fontWeight: FontWeight.w600,
@@ -1649,9 +1630,10 @@ class ModelView extends GetView<ModelController> {
         );
       }
       final favs = Get.find<FavoritesService>();
-      final VoidCallback? load = isDownloaded && (!isActive || optionalHelper) && !disableActions
-          ? () => controller.loadModel(actualFilename)
-          : null;
+      final VoidCallback? load =
+          isDownloaded && (!isActive || optionalHelper) && !disableActions
+              ? () => controller.loadModel(actualFilename)
+              : null;
 
       // Secondary actions live in the ⋯ sheet.
       final secondary = <(IconData, String, bool, VoidCallback)>[
@@ -1735,7 +1717,8 @@ class ModelView extends GetView<ModelController> {
           context, model, subtitle, secondary, disableActions, primaryAction,
           onLoad: model.fileRole.isHelper ? null : load,
           onLoadTextOnly: optionalHelper && load != null
-              ? () => controller.loadModel(actualFilename, includeHelpers: false)
+              ? () =>
+                  controller.loadModel(actualFilename, includeHelpers: false)
               : null);
       return Material(
         color: Colors.transparent,
@@ -1784,7 +1767,8 @@ class ModelView extends GetView<ModelController> {
                             Obx(() => favs.items.contains(favKey)
                                 ? const Padding(
                                     padding: EdgeInsets.only(left: 6),
-                                    child: Icon(Icons.star_rounded, size: 15, color: Color(0xFFFFB300)),
+                                    child: Icon(Icons.star_rounded,
+                                        size: 15, color: Color(0xFFFFB300)),
                                   )
                                 : const SizedBox.shrink()),
                           ]),
@@ -1800,7 +1784,9 @@ class ModelView extends GetView<ModelController> {
                                           color: t.accent,
                                           fontWeight: FontWeight.w600),
                                     ),
-                                  TextSpan(text: '${model.fileKind.label} · $subtitle'),
+                                  TextSpan(
+                                      text:
+                                          '${model.fileKind.label} · $subtitle'),
                                 ]),
                                 style: t.small.copyWith(fontFeatures: _tabular),
                                 maxLines: 1,
@@ -1838,8 +1824,10 @@ class ModelView extends GetView<ModelController> {
   /// My models: everything on the phone. Tap a row to load it.
   List<Widget> _buildLibrary(BuildContext context) {
     final installed = controller.displayedModels
-        .where((m) => controller.isDownloaded(m.filename) &&
-            (!controller.isImageModel(m) || m.fileKind == ModelFileKind.helper)).toList();
+        .where((m) =>
+            controller.isDownloaded(m.filename) &&
+            (!controller.isImageModel(m) || m.fileKind == ModelFileKind.helper))
+        .toList();
     if (installed.isEmpty) return [_buildEmptyLibrary(context)];
     final filter = controller.libraryKindFilter;
     final picked = filter.value;
@@ -1850,23 +1838,28 @@ class ModelView extends GetView<ModelController> {
             (fit == null || _libraryFit(model) == fit))
         .toList();
     final t = AppTokens.of(context);
-    final helpers = models.where((m) => m.fileKind == ModelFileKind.helper).toList();
-    final mainModels = models.where((m) => m.fileKind == ModelFileKind.model).toList();
-    final unknown = models.where((m) => m.fileKind == ModelFileKind.unknown).toList();
+    final helpers =
+        models.where((m) => m.fileKind == ModelFileKind.helper).toList();
+    final mainModels =
+        models.where((m) => m.fileKind == ModelFileKind.model).toList();
+    final unknown =
+        models.where((m) => m.fileKind == ModelFileKind.unknown).toList();
     final image = mainModels.where(controller.isImageModel).toList();
     final vision = mainModels
         .where(
             (m) => !controller.isImageModel(m) && controller.isVisionModel(m))
         .toList();
-    final chat =
-        mainModels.where((m) => !image.contains(m) && !vision.contains(m)).toList();
+    final chat = mainModels
+        .where((m) => !image.contains(m) && !vision.contains(m))
+        .toList();
     var first = true;
     List<Widget> group(String title, List<AiModel> list) {
       if (list.isEmpty) return const [];
       final favs = Get.find<FavoritesService>();
       list = [
         ...list.where((m) => favs.isFav(FavoritesService.localKey(m.filename))),
-        ...list.where((m) => !favs.isFav(FavoritesService.localKey(m.filename))),
+        ...list
+            .where((m) => !favs.isFav(FavoritesService.localKey(m.filename))),
       ];
       final header = SectionHeader(title,
           padding: EdgeInsets.fromLTRB(4, first ? 14 : 22, 0, 8));
@@ -2038,7 +2031,8 @@ class ModelView extends GetView<ModelController> {
             TextButton.icon(
               icon: const Icon(Icons.extension_outlined),
               label: Text(model.fileRole.isHelper
-                  ? 'Find the matching main model' : 'Find model helpers'),
+                  ? 'Find the matching main model'
+                  : 'Find model helpers'),
               onPressed: () {
                 Navigator.pop(ctx);
                 Get.to(() => ModelHelpersView(model: model));
@@ -2047,7 +2041,9 @@ class ModelView extends GetView<ModelController> {
             if (onLoad != null && !model.fileRole.isHelper) ...[
               const SizedBox(height: 18),
               PrimaryButton(
-                label: onLoadTextOnly == null ? 'Load model' : 'Load with vision helper',
+                label: onLoadTextOnly == null
+                    ? 'Load model'
+                    : 'Load with vision helper',
                 icon: Icons.play_arrow_rounded,
                 onPressed: () {
                   Navigator.pop(ctx);

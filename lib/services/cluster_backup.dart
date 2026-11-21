@@ -60,8 +60,6 @@ class ClusterBackup {
     'voice_sid',
     AppConstants.keyHapticsEnabled,
     AppConstants.keyGlobalSystemPrompt,
-    AppConstants.keyImageSteps,
-    AppConstants.keyImageGenSize,
     AppConstants.keyTemperature,
     AppConstants.keyContextSize,
     AppConstants.keyMaxTokens,
@@ -415,13 +413,9 @@ class ClusterBackup {
                       value is String ||
                   (key == AppConstants.keyMaxTokens ||
                           key == AppConstants.keyContextSize ||
-                          key == AppConstants.keyImageSteps ||
-                          key == AppConstants.keyImageGenSize ||
                           key == 'voice_sid') &&
                       value is int &&
-                      (key == 'voice_sid' || key == AppConstants.keyImageGenSize
-                          ? value >= 0
-                          : value > 0) ||
+                      (key == 'voice_sid' ? value >= 0 : value > 0) ||
                   (key == AppConstants.keyTemperature ||
                           key == 'voice_speed' ||
                           key == AppConstants.keyFontScale) &&

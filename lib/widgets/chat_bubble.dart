@@ -1,3 +1,4 @@
+import '../utils/output_links.dart';
 import 'chat_math.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -522,7 +523,7 @@ class AssistantMarkdown extends StatelessWidget {
   Widget build(BuildContext context) {
     return SelectionArea(
       child: MarkdownBody(
-        data: text,
+        data: normalizeOutputLinks(text),
         extensionSet: md.ExtensionSet.gitHubFlavored,
         inlineSyntaxes: chatMathSyntax(),
         blockSyntaxes: const [ChatMathBlock()],

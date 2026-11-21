@@ -37,6 +37,8 @@ class HfBrowser extends StatefulWidget {
 class _HfBrowserState extends State<HfBrowser> {
   final _hf = HfService();
   final _search = TextEditingController();
+  final _authorSearch = TextEditingController();
+  String _author = '';
   Timer? _debounce;
   List<HfRepo> _repos = const [];
   bool _loading = false;
@@ -74,15 +76,17 @@ class _HfBrowserState extends State<HfBrowser> {
     };
   }
 
-  FavoritesService? get _favs =>
-      Get.isRegistered<FavoritesService>() ? Get.find<FavoritesService>() : null;
+  FavoritesService? get _favs => Get.isRegistered<FavoritesService>()
+      ? Get.find<FavoritesService>()
+      : null;
 
   int get _activeFilters =>
       (_size != 'any' ? 1 : 0) +
       (_task != 'any' ? 1 : 0) +
       (_quant != 'any' ? 1 : 0) +
       (_sort != 'downloads' ? 1 : 0) +
-      (_onlyFav ? 1 : 0);
+      (_onlyFav ? 1 : 0) +
+      (_author.isNotEmpty ? 1 : 0);
 
   void _applyFilters() {
     _limit = 30;
@@ -127,6 +131,7 @@ class _HfBrowserState extends State<HfBrowser> {
     _scrollPos?.removeListener(_onScroll);
     _debounce?.cancel();
     _search.dispose();
+    _authorSearch.dispose();
     _hf.dispose();
     super.dispose();
   }
@@ -150,6 +155,7 @@ class _HfBrowserState extends State<HfBrowser> {
       final repos = await _hf.searchModels(_query,
           limit: (_size != 'any' || _onlyFav) ? _limit * 2 : _limit,
           images: widget.images,
+          author: _author,
           task: _task == 'any' ? null : _task,
           sort: _sort);
       if (!mounted || seq != _seq) return;
@@ -174,11 +180,11 @@ class _HfBrowserState extends State<HfBrowser> {
     if (!widget.images) {
       if (!_showUnsupported) out = out.where((r) => r.supported);
       out = out.where(_sizeOk);
-
     }
     if (_onlyFav) {
       final favs = _favs;
-      out = out.where((r) => favs?.isFav(FavoritesService.hfKey(r.id)) ?? false);
+      out =
+          out.where((r) => favs?.isFav(FavoritesService.hfKey(r.id)) ?? false);
     }
     return out;
   }
@@ -242,28 +248,61 @@ class _HfBrowserState extends State<HfBrowser> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _choices('Sort by', const {
-              'downloads': 'Most downloaded',
-              'likes': 'Most liked',
-              'trendingScore': 'Trending',
-              'lastModified': 'Newest',
-            }, _sort, (v) => change(() => _sort = v)),
+            TextField(
+              controller: _authorSearch,
+              decoration: appInputDecoration(ctx,
+                  hint: 'Author or organization, e.g. Qwen, turintech',
+                  prefix: const Icon(Icons.person_outline)),
+              textInputAction: TextInputAction.search,
+              onSubmitted: (value) {
+                change(() => _author = value.trim());
+                Navigator.pop(ctx);
+              },
+            ),
+            const SizedBox(height: 6),
+            TextButton.icon(
+              onPressed: () {
+                change(() => _author = _authorSearch.text.trim());
+                Navigator.pop(ctx);
+              },
+              icon: const Icon(Icons.search),
+              label: const Text('Search this author'),
+            ),
+            const SizedBox(height: 12),
+            _choices(
+                'Sort by',
+                const {
+                  'downloads': 'Most downloaded',
+                  'likes': 'Most liked',
+                  'trendingScore': 'Trending',
+                  'lastModified': 'Newest',
+                },
+                _sort,
+                (v) => change(() => _sort = v)),
             if (!widget.images) ...[
               _choices('Size', _sizes, _size, (v) => change(() => _size = v)),
-              _choices('Type', const {
-                'any': 'Any',
-                'text': 'Text',
-                'vision': 'Vision',
-                'embedding': 'Embedding',
-              }, _task, (v) => change(() => _task = v)),
-              _choices('Quantisation (applies to files inside a model)', const {
-                'any': 'Any',
-                'Q4': 'Q4',
-                'Q5': 'Q5',
-                'Q6': 'Q6',
-                'Q8': 'Q8',
-                'other': 'Other',
-              }, _quant, (v) => change(() => _quant = v, refetch: false)),
+              _choices(
+                  'Type',
+                  const {
+                    'any': 'Any',
+                    'text': 'Text',
+                    'vision': 'Vision',
+                    'embedding': 'Embedding',
+                  },
+                  _task,
+                  (v) => change(() => _task = v)),
+              _choices(
+                  'Quantisation (applies to files inside a model)',
+                  const {
+                    'any': 'Any',
+                    'Q4': 'Q4',
+                    'Q5': 'Q5',
+                    'Q6': 'Q6',
+                    'Q8': 'Q8',
+                    'other': 'Other',
+                  },
+                  _quant,
+                  (v) => change(() => _quant = v, refetch: false)),
               Wrap(spacing: 8, runSpacing: 6, children: [
                 FilterChip(
                   avatar: const Icon(Icons.star_rounded, size: 16),
@@ -284,6 +323,8 @@ class _HfBrowserState extends State<HfBrowser> {
                   _task = 'any';
                   _quant = 'any';
                   _onlyFav = false;
+                  _author = '';
+                  _authorSearch.clear();
                 });
                 Navigator.pop(ctx);
                 _applyFilters();
@@ -300,8 +341,8 @@ class _HfBrowserState extends State<HfBrowser> {
       context,
       title: repo.name,
       subtitle: repo.id,
-      builder: (ctx) => _RepoFiles(
-          repo: repo, hf: _hf, images: widget.images, quant: _quant),
+      builder: (ctx) =>
+          _RepoFiles(repo: repo, hf: _hf, images: widget.images, quant: _quant),
     );
   }
 
@@ -334,9 +375,17 @@ class _HfBrowserState extends State<HfBrowser> {
           child: ListView(scrollDirection: Axis.horizontal, children: [
             _chip(
                 icon: Icons.tune_rounded,
-                label: _activeFilters > 0 ? 'Filters · $_activeFilters' : 'Filters',
+                label: _activeFilters > 0
+                    ? 'Filters · $_activeFilters'
+                    : 'Filters',
                 selected: _activeFilters > 0,
                 onTap: _openFilters),
+            if (_author.isNotEmpty)
+              _chip(
+                  icon: Icons.person_outline,
+                  label: 'Author: $_author',
+                  selected: true,
+                  onTap: _openFilters),
             if (!widget.images) ...[
               _chip(
                   icon: Icons.star_rounded,
@@ -351,17 +400,19 @@ class _HfBrowserState extends State<HfBrowser> {
                   label: 'Vision',
                   selected: _task == 'vision',
                   onTap: () {
-                    setState(() => _task = _task == 'vision' ? 'any' : 'vision');
+                    setState(
+                        () => _task = _task == 'vision' ? 'any' : 'vision');
                     _applyFilters();
                   }),
-
             ],
           ]),
         ),
         const SizedBox(height: 10),
         Text(
           _query.isEmpty
-              ? (widget.images ? 'Most downloaded image models' : 'Most downloaded GGUF models')
+              ? (widget.images
+                  ? 'Most downloaded image models'
+                  : 'Most downloaded GGUF models')
               : '${widget.images ? 'Image' : 'GGUF'} models matching "$_query"',
           style: t.small,
         ),
@@ -416,7 +467,8 @@ class _HfBrowserState extends State<HfBrowser> {
                 subtitle:
                     '${r.author}${r.paramsB != null ? ' · ${r.paramsB! < 1 ? '${(r.paramsB! * 1000).round()}M' : '${r.paramsB!.toStringAsFixed(r.paramsB! < 10 ? 1 : 0)}B'}' : ''} · ${_compact(r.downloads)} downloads${r.isVision ? ' · vision' : ''}${r.gated ? ' · login required' : ''}${!r.supported ? ' · unsupported (${r.architecture})' : ''}',
                 trailing: Obx(() {
-                  final fav = _favs?.isFav(FavoritesService.hfKey(r.id)) ?? false;
+                  final fav =
+                      _favs?.isFav(FavoritesService.hfKey(r.id)) ?? false;
                   return Row(mainAxisSize: MainAxisSize.min, children: [
                     InkWell(
                       onTap: () => _favs?.toggle(FavoritesService.hfKey(r.id)),
@@ -424,7 +476,9 @@ class _HfBrowserState extends State<HfBrowser> {
                       child: Padding(
                         padding: const EdgeInsets.all(6),
                         child: Icon(
-                            fav ? Icons.star_rounded : Icons.star_border_rounded,
+                            fav
+                                ? Icons.star_rounded
+                                : Icons.star_border_rounded,
                             size: 22,
                             color: fav ? const Color(0xFFE0A800) : null),
                       ),
@@ -461,7 +515,10 @@ class _RepoFiles extends StatefulWidget {
   final bool images;
   final String quant;
   const _RepoFiles(
-      {required this.repo, required this.hf, this.images = false, this.quant = 'any'});
+      {required this.repo,
+      required this.hf,
+      this.images = false,
+      this.quant = 'any'});
 
   @override
   State<_RepoFiles> createState() => _RepoFilesState();
@@ -490,10 +547,12 @@ class _RepoFilesState extends State<_RepoFiles> {
   void _choose(HfGgufFile f) {
     final model = _asModel(f);
     final kind = f.kindInRepository(images: widget.images);
-    final canDownload = HfService.canDownloadSingleFile(f, images: widget.images) ||
-        (kind == ModelFileKind.helper &&
-            modelFileRole(f.filename).isHelper && !f.isSplit &&
-            f.filename.toLowerCase().endsWith('.safetensors'));
+    final canDownload =
+        HfService.canDownloadSingleFile(f, images: widget.images) ||
+            (kind == ModelFileKind.helper &&
+                modelFileRole(f.filename).isHelper &&
+                !f.isSplit &&
+                f.filename.toLowerCase().endsWith('.safetensors'));
     final controller = Get.find<ModelController>();
     showAppSheet<void>(
       context,
@@ -514,7 +573,8 @@ class _RepoFilesState extends State<_RepoFiles> {
               : kind == ModelFileKind.helper && !f.role.isHelper
                   ? 'Use this part with the matching image model.'
                   : f.role.help),
-          ModelCompanionsButton(model: model, kind: kind, repositoryPath: f.path),
+          ModelCompanionsButton(
+              model: model, kind: kind, repositoryPath: f.path),
           const SizedBox(height: 16),
           if (!canDownload)
             OutlinedButton.icon(
@@ -592,41 +652,47 @@ class _RepoFilesState extends State<_RepoFiles> {
         final files = offered.where((file) {
           final kind = file.kindInRepository(images: widget.images);
           return (_kind == null || kind == _kind) &&
-              (kind != ModelFileKind.model || widget.images ||
-                  widget.quant == 'any' || _quantMatches(file.quant, widget.quant));
-        }).toList()..sort((first, second) => first.path.compareTo(second.path));
+              (kind != ModelFileKind.model ||
+                  widget.images ||
+                  widget.quant == 'any' ||
+                  _quantMatches(file.quant, widget.quant));
+        }).toList()
+          ..sort((first, second) => first.path.compareTo(second.path));
         final controller = Get.find<ModelController>();
         return Obx(() => Column(children: [
-            ModelFileFilter(
-              selected: _kind,
-              onChanged: (kind) => setState(() => _kind = kind),
-            ),
-            if (files.isEmpty) const Padding(padding: EdgeInsets.all(12),
-                child: Text('No files match this filter.')),
-            AppGroup(children: [
-              for (final f in files)
-                AppRow(
-                  icon: Icons.insert_drive_file_outlined,
-                  title: f.path,
-                  subtitle: '${f.kindInRepository(images: widget.images).label} · ${DownloadService.formatBytes(f.size)}'
-                      '${f.isSplit ? ' · Split weights' : ''}',
-                  trailing: controller.downloadedFiles.contains(f.filename)
-                      ? Text('On phone', style: t.small)
-                      : controller.isDownloadingModel(f.filename)
-                          ? Text('Downloading', style: t.small)
-                          : null,
-                  chevron: !controller.downloadedFiles.contains(f.filename),
-                  onTap: controller.downloadedFiles.contains(f.filename) ||
-                          controller.isDownloadingModel(f.filename)
-                      ? null
-                      : () => _choose(f),
-                ),
-            ]),
-            if (widget.images && _kind == null) ...[
-              const SizedBox(height: 12),
-              _BundlePicker(repo: widget.repo, hf: widget.hf, compact: true),
-            ],
-          ]));
+              ModelFileFilter(
+                selected: _kind,
+                onChanged: (kind) => setState(() => _kind = kind),
+              ),
+              if (files.isEmpty)
+                const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text('No files match this filter.')),
+              AppGroup(children: [
+                for (final f in files)
+                  AppRow(
+                    icon: Icons.insert_drive_file_outlined,
+                    title: f.path,
+                    subtitle:
+                        '${f.kindInRepository(images: widget.images).label} · ${DownloadService.formatBytes(f.size)}'
+                        '${f.isSplit ? ' · Split weights' : ''}',
+                    trailing: controller.downloadedFiles.contains(f.filename)
+                        ? Text('On phone', style: t.small)
+                        : controller.isDownloadingModel(f.filename)
+                            ? Text('Downloading', style: t.small)
+                            : null,
+                    chevron: !controller.downloadedFiles.contains(f.filename),
+                    onTap: controller.downloadedFiles.contains(f.filename) ||
+                            controller.isDownloadingModel(f.filename)
+                        ? null
+                        : () => _choose(f),
+                  ),
+              ]),
+              if (widget.images && _kind == null) ...[
+                const SizedBox(height: 12),
+                _BundlePicker(repo: widget.repo, hf: widget.hf, compact: true),
+              ],
+            ]));
       },
     );
   }
@@ -647,14 +713,16 @@ class _BundlePicker extends StatefulWidget {
   final HfRepo repo;
   final HfService hf;
   final bool compact;
-  const _BundlePicker({required this.repo, required this.hf, this.compact = false});
+  const _BundlePicker(
+      {required this.repo, required this.hf, this.compact = false});
 
   @override
   State<_BundlePicker> createState() => _BundlePickerState();
 }
 
 class _BundlePickerState extends State<_BundlePicker> {
-  late final Future<List<HfGgufFile>> _parts = widget.hf.listImageParts(widget.repo.id);
+  late final Future<List<HfGgufFile>> _parts =
+      widget.hf.listImageParts(widget.repo.id);
   Set<String>? _selected;
 
   @override
@@ -683,9 +751,12 @@ class _BundlePickerState extends State<_BundlePicker> {
                       'This repository has no .safetensors or .gguf weights the app can use.');
         }
         final sizes = {for (final f in parts) f.path: f.size};
-        _selected ??= recommendBundle(sizes, familyHint: widget.repo.name).toSet();
+        _selected ??=
+            recommendBundle(sizes, familyHint: widget.repo.name).toSet();
         final sel = _selected!;
-        final total = parts.where((f) => sel.contains(f.path)).fold<int>(0, (a, f) => a + f.size);
+        final total = parts
+            .where((f) => sel.contains(f.path))
+            .fold<int>(0, (a, f) => a + f.size);
         final b = resolveBundle(sel.toList(), sizes: sizes);
         final ok = b.isValid;
         parts.sort((a, b) =>
@@ -710,7 +781,8 @@ class _BundlePickerState extends State<_BundlePicker> {
               CheckboxListTile(
                 dense: true,
                 value: sel.contains(f.path),
-                onChanged: (v) => setState(() => v == true ? sel.add(f.path) : sel.remove(f.path)),
+                onChanged: (v) => setState(
+                    () => v == true ? sel.add(f.path) : sel.remove(f.path)),
                 title: Text(f.path, style: const TextStyle(fontSize: 13)),
                 subtitle: Text(
                     '${f.kindInRepository(images: true).label} · ${roleName[roleOfFile(f.path)] ?? ''} · ${DownloadService.formatBytes(f.size)}',
@@ -721,19 +793,27 @@ class _BundlePickerState extends State<_BundlePicker> {
           Text('Total: ${DownloadService.formatBytes(total)}'),
           const SizedBox(height: 8),
           PrimaryButton(
-            label: ok ? 'Download these parts as one model' : 'Select a diffusion or full model file',
+            label: ok
+                ? 'Download these parts as one model'
+                : 'Select a diffusion or full model file',
             onPressed: !ok
                 ? null
                 : () {
-                    final chosen = parts.where((f) => sel.contains(f.path)).toList();
+                    final chosen =
+                        parts.where((f) => sel.contains(f.path)).toList();
                     final used = <String>{};
                     final files = <({String url, String file, int size})>[];
                     for (final f in chosen) {
                       var n = f.filename;
                       if (!used.add(n)) n = '${used.length}_$n';
-                      files.add((url: HfService.downloadUrl(widget.repo.id, f.path), file: n, size: f.size));
+                      files.add((
+                        url: HfService.downloadUrl(widget.repo.id, f.path),
+                        file: n,
+                        size: f.size
+                      ));
                     }
-                    Get.find<ModelController>().downloadImageBundle(widget.repo.name, files);
+                    Get.find<ModelController>()
+                        .downloadImageBundle(widget.repo.name, files);
                     Navigator.of(context).maybePop();
                   },
           ),

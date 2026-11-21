@@ -10,9 +10,6 @@ import '../core/haptics.dart';
 import '../core/ui.dart';
 import '../services/hive_service.dart';
 import '../services/app_log_service.dart';
-import '../services/local_image_service.dart';
-import '../ffi/sd_ffi_bindings.dart';
-import 'package:sd_flutter_android/sd_flutter_android.dart';
 
 class SettingsController extends GetxController {
   final HiveService _hive = Get.find<HiveService>();
@@ -52,12 +49,6 @@ class SettingsController extends GetxController {
   final normalThinking = false.obs;
   final liteRtPerformanceMode = AppConstants.defaultLiteRtPerformanceMode.obs;
 
-  final imageSteps = 1.obs;
-  final imageGenForceCpu = AppConstants.defaultImageGenForceCpu.obs;
-  final imageGenBackend = Backend.cpu.obs;
-  final imageGpuVendor = 'detecting'.obs;
-  final imageGenGpuGuardMb = AppConstants.defaultImageGenGpuGuardMb.obs;
-  final imageGenSize = AppConstants.defaultImageGenSize.obs;
   final fontScale = AppConstants.defaultFontScale.obs;
   final hapticsEnabled = true.obs;
   final appVersion = ''.obs;
@@ -213,31 +204,6 @@ class SettingsController extends GetxController {
           defaultValue: AppConstants.defaultLiteRtPerformanceMode,
         ) ??
         AppConstants.defaultLiteRtPerformanceMode;
-    imageSteps.value = _hive.getSetting(AppConstants.keyImageSteps,
-            defaultValue: AppConstants.defaultImageSteps) ??
-        AppConstants.defaultImageSteps;
-    imageGenForceCpu.value = _hive.getSetting(AppConstants.keyImageGenForceCpu,
-            defaultValue: AppConstants.defaultImageGenForceCpu) ??
-        AppConstants.defaultImageGenForceCpu;
-    imageGenGpuGuardMb.value = _hive.getSetting(
-            AppConstants.keyImageGenGpuGuardMb,
-            defaultValue: AppConstants.defaultImageGenGpuGuardMb) ??
-        AppConstants.defaultImageGenGpuGuardMb;
-    imageGenSize.value = _hive.getSetting(AppConstants.keyImageGenSize,
-            defaultValue: AppConstants.defaultImageGenSize) ??
-        AppConstants.defaultImageGenSize;
-    final savedImageBackend = _hive.getSetting<int>(
-        AppConstants.keyImageGenBackend,
-        defaultValue: Backend.cpu.index);
-    if (savedImageBackend != null &&
-        savedImageBackend >= 0 &&
-        savedImageBackend < Backend.values.length &&
-        !imageGenForceCpu.value) {
-      imageGenBackend.value = Backend.values[savedImageBackend];
-    } else {
-      imageGenBackend.value = Backend.cpu;
-    }
-    _detectImageGpu();
     fontScale.value = _hive.getSetting(AppConstants.keyFontScale,
             defaultValue: AppConstants.defaultFontScale) ??
         AppConstants.defaultFontScale;
@@ -722,78 +688,6 @@ class SettingsController extends GetxController {
     };
     liteRtPerformanceMode.value = normalized;
     await _hive.setSetting(AppConstants.keyLiteRtPerformanceMode, normalized);
-  }
-
-  Future<void> setImageSteps(int value) async {
-    imageSteps.value = value;
-    await _hive.setSetting(AppConstants.keyImageSteps, value);
-  }
-
-  Future<void> setImageGenForceCpu(bool value) async {
-    imageGenForceCpu.value = value;
-    await _hive.setSetting(AppConstants.keyImageGenForceCpu, value);
-  }
-
-  Future<void> setImageGenGpuGuardMb(int value) async {
-    imageGenGpuGuardMb.value = value;
-    await _hive.setSetting(AppConstants.keyImageGenGpuGuardMb, value);
-  }
-
-  Future<void> setImageGenSize(int value) async {
-    final allowed = value == 0 ||
-        value == 256 ||
-        value == 320 ||
-        value == 384 ||
-        value == 512;
-    final normalized = allowed ? value : AppConstants.defaultImageGenSize;
-    imageGenSize.value = normalized;
-    await _hive.setSetting(AppConstants.keyImageGenSize, normalized);
-  }
-
-  Future<void> _detectImageGpu() async {
-    try {
-      imageGpuVendor.value = await SdFlutterAndroid.detectGpuVendor();
-    } catch (_) {
-      imageGpuVendor.value = 'unknown';
-    }
-  }
-
-  Backend recommendedImageGpuBackend() {
-    final vendor = imageGpuVendor.value;
-    final preferred = switch (vendor) {
-      'adreno' => Backend.opencl,
-      'mali' || 'xclipse' || 'powervr' || 'imagination' => Backend.vulkan,
-      _ => Backend.vulkan,
-    };
-    if (preferred.isAvailable) return preferred;
-    if (Backend.opencl.isAvailable) return Backend.opencl;
-    if (Backend.vulkan.isAvailable) return Backend.vulkan;
-    return Backend.cpu;
-  }
-
-  String imageGpuLabel() {
-    final vendor = imageGpuVendor.value;
-    final backend = recommendedImageGpuBackend();
-    final vendorLabel = vendor == 'detecting'
-        ? 'Detecting'
-        : vendor == 'unknown'
-            ? 'Unknown GPU'
-            : vendor.toUpperCase();
-    return backend == Backend.cpu
-        ? '$vendorLabel - GPU unavailable'
-        : '$vendorLabel - ${backend.displayName}';
-  }
-
-  Future<void> setImageBackendMode(bool useGpu) async {
-    final backend = useGpu ? recommendedImageGpuBackend() : Backend.cpu;
-    imageGenBackend.value = backend;
-    imageGenForceCpu.value = !useGpu || backend == Backend.cpu;
-    await _hive.setSetting(AppConstants.keyImageGenBackend, backend.index);
-    await _hive.setSetting(
-        AppConstants.keyImageGenForceCpu, imageGenForceCpu.value);
-    if (Get.isRegistered<LocalImageService>()) {
-      Get.find<LocalImageService>().setBackend(backend);
-    }
   }
 
   Future<void> setHapticsEnabled(bool value) async {

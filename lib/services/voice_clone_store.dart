@@ -29,7 +29,7 @@ class VoiceCloneStore extends GetxService {
 
   Future<void> scan() async {
     final names = (await _dir())
-        .listSync()
+        .listSync(followLinks: false)
         .whereType<File>()
         .where((f) => f.path.endsWith('.wav'))
         .map((f) => f.uri.pathSegments.last.replaceFirst(RegExp(r'\.wav$'), ''))
@@ -54,12 +54,17 @@ class VoiceCloneStore extends GetxService {
   }
 
   Future<({Float32List samples, int rate})?> load(String name) async {
+    if (name.isEmpty || _clean(name) != name)
+      throw ArgumentError('Invalid saved voice name.');
     final f = File('${(await _dir()).path}/$name.wav');
-    if (!await f.exists()) return null;
+    if (await FileSystemEntity.type(f.path, followLinks: false) !=
+        FileSystemEntityType.file) return null;
     return decodeWav(await f.readAsBytes());
   }
 
   Future<void> remove(String name) async {
+    if (name.isEmpty || _clean(name) != name)
+      throw ArgumentError('Invalid saved voice name.');
     final f = File('${(await _dir()).path}/$name.wav');
     if (await f.exists()) await f.delete();
     if (active.value == name) await select('');
@@ -68,11 +73,13 @@ class VoiceCloneStore extends GetxService {
 
   /// Makes [name] the voice used for cloned speech (empty = none).
   Future<void> select(String name) async {
+    final reference = name.isEmpty ? null : await load(name);
+    if (name.isNotEmpty && (reference == null || reference.samples.isEmpty))
+      throw StateError('Saved voice is missing or invalid.');
     active.value = name;
     await Get.find<HiveService>().setSetting(_kActive, name);
-    if (name.isEmpty) return;
-    final v = await load(name);
-    if (v != null) Get.find<VoiceService>().setCloneVoice(v.samples, v.rate);
+    if (reference != null)
+      Get.find<VoiceService>().setCloneVoice(reference.samples, reference.rate);
   }
 
   /// Loads the saved active voice into the speech engine at startup.

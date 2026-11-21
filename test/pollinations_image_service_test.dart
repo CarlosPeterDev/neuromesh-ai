@@ -1,12 +1,25 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:image/image.dart' as img;
 import 'package:neuromesh_ai/services/pollinations_image_service.dart';
 
 void main() {
+  test('decode an explicitly supplied live-provider response artifact',
+      () async {
+    final bytes =
+        await File(Platform.environment['POLLINATIONS_LIVE_ARTIFACT']!)
+            .readAsBytes();
+    final image = img.decodeImage(bytes);
+    expect(image, isNotNull);
+    expect(image!.width, 768);
+    expect(image.height, 768);
+  }, skip: !Platform.environment.containsKey('POLLINATIONS_LIVE_ARTIFACT'));
+
   const freeEditor = 'community/test/flux-edit-free';
   const freePortrait = 'community/test/lucid-origin:free';
   final catalog = [
@@ -30,17 +43,6 @@ void main() {
     },
   ];
 
-  test('distinguishes vague creation, photo edits and ordinary writing', () {
-    expect(ImageRequest.parse('Make an image of a fox')?.action,
-        ImageAction.create);
-    expect(ImageRequest.parse('Create an image')?.description, isEmpty);
-    expect(ImageRequest.parse('Edit this photo')?.description, isEmpty);
-    expect(ImageRequest.parse('Add snow', hasImage: true)?.action,
-        ImageAction.edit);
-    expect(ImageRequest.parse('Edit the introduction'), isNull);
-    expect(ImageRequest.parse('Describe this photo', hasImage: true), isNull);
-  });
-
   test('model routing skips paid and text-only models for edits', () {
     expect(
         PollinationsImageService.chooseFreeModel(catalog,
@@ -60,7 +62,7 @@ void main() {
 
   test('uploads the actual image only to the free editing endpoint', () async {
     final png =
-        Uint8List.fromList([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+        Uint8List.fromList(img.encodePng(img.Image(width: 2, height: 2)));
     var requests = 0;
     final client = MockClient((request) async {
       requests++;
@@ -95,35 +97,17 @@ void main() {
     expect(requests, 2);
   });
 
-  test('only explicit standalone image requests dispatch automatically', () {
-    for (final request in [
-      'Create an image of a fox',
-      'Could you generate a photo of an orange?',
-      'Draw me a picture of a cat',
-    ]) {
-      expect(PollinationsImageService.explicitPrompt(request), request);
-    }
-    for (final question in [
-      'Explain how to make an image of a fox',
-      'Describe this image',
-      'Create an image based on my file',
-      'Create an image using @file:private.txt',
-    ]) {
-      expect(PollinationsImageService.explicitPrompt(question), isNull);
-    }
-  });
-
   test('uses the anonymous URL without redirects, and returns JPEG bytes',
       () async {
-    final data = [0xff, 0xd8, 0xff, 0xff, 0xd9];
+    final data = img.encodeJpg(img.Image(width: 2, height: 2));
     final client = MockClient((request) async {
       expect(request.url.host, 'image.pollinations.ai');
       expect(request.url.scheme, 'https');
       expect(request.url.pathSegments, ['prompt', 'A cat? #1 phone wallpaper']);
       expect(request.url.queryParameters, {
         'model': 'sana',
-        'width': '576',
-        'height': '1024',
+        'width': '768',
+        'height': '768',
         'nologo': 'true',
         'nofeed': 'true',
       });
@@ -141,9 +125,44 @@ void main() {
     final client = MockClient((_) async =>
         http.Response('Free limit', 402, headers: {'retry-after': '45'}));
     await expectLater(
-        PollinationsImageService().generate('Cat', client: client),
+        PollinationsImageService(maxRateLimitRetries: 0)
+            .generate('Cat', client: client),
         throwsA(isA<FormatException>().having(
             (error) => error.message, 'message', contains('in 45 seconds'))));
+  });
+
+  test('retries an explicit short anonymous rate limit once', () async {
+    var requests = 0;
+    final data = img.encodeJpg(img.Image(width: 2, height: 2));
+    final client = MockClient((_) async => requests++ == 0
+        ? http.Response('Wait', 429, headers: {'retry-after': '0'})
+        : http.Response.bytes(data, 200));
+    expect(await PollinationsImageService().generate('Moon', client: client),
+        data);
+    expect(requests, 2);
+  });
+
+  test('rate-limit retries are bounded and waiting can be cancelled', () async {
+    var requests = 0;
+    final client = MockClient((_) async {
+      requests++;
+      return http.Response('Wait', 429, headers: {'retry-after': '0'});
+    });
+    await expectLater(
+        PollinationsImageService().generate('Moon', client: client),
+        throwsA(isA<FormatException>()));
+    expect(requests, 2);
+    final service = PollinationsImageService();
+    final waiting = service.generate('Saturn',
+        client: MockClient((_) async =>
+            http.Response('Wait', 429, headers: {'retry-after': '45'})));
+    final checked = expectLater(
+        waiting,
+        throwsA(isA<FormatException>()
+            .having((e) => e.message, 'message', contains('cancelled'))));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    service.cancel();
+    await checked;
   });
 
   test('surfaces access and format errors', () async {

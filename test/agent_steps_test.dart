@@ -4,6 +4,21 @@ import 'package:get/get.dart';
 import 'package:neuromesh_ai/widgets/agent_steps.dart';
 
 void main() {
+  test(
+      'tool durations retain subsecond precision and missing times stay unknown',
+      () {
+    expect(toolDuration(0), '<1 ms');
+    expect(toolDuration(3), '3 ms');
+    expect(toolDuration(49), '49 ms');
+    expect(toolDuration(999), '999 ms');
+    expect(toolDuration(1234), '1.2 s');
+    final legacy = AgentStep.parse(
+        '> 🔧 {"n":"calculator","l":"Calculate","a":{},"r":"2"}');
+    // Older traces may not contain a duration; they must not gain a fake zero.
+    expect(legacy, isNotNull);
+    expect(legacy!.timingRecorded, isFalse);
+  });
+
   testWidgets('shows live steps and keeps finished details outside the chat',
       (tester) async {
     tester.view.physicalSize = const Size(360, 640);
@@ -43,10 +58,10 @@ void main() {
     await tester.pumpWidget(chat(false));
     await tester.pumpAndSettle();
     expect(find.text('Here is your audio.'), findsOneWidget);
-    expect(find.text('1 step · 1.2s'), findsOneWidget);
+    expect(find.text('1 step · 1.2 s in tools'), findsOneWidget);
     expect(find.text('Creating an audio file'), findsNothing);
 
-    await tester.tap(find.text('1 step · 1.2s'));
+    await tester.tap(find.text('1 step · 1.2 s in tools'));
     await tester.pumpAndSettle();
     expect(find.text('Input'), findsNothing);
     await tester.tap(find.text('Creating an audio file'));

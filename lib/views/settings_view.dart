@@ -18,7 +18,6 @@ import 'diagnostics_view.dart';
 import 'memory_view.dart';
 import 'workload_placement_view.dart';
 import 'model_transfer_view.dart';
-import 'pollinations_view.dart';
 
 const _tabular = [FontFeature.tabularFigures()];
 
@@ -47,7 +46,6 @@ class _SettingsViewState extends State<SettingsView> {
         'thinking reasoning temperature context size max tokens seed stop sequences top p top k',
     'GGUF & LiteRT':
         'performance cpu gpu vulkan threads hardware acceleration ram',
-    'Image generation': 'image size resolution diffusion steps backend',
     'Memory': 'preferences facts remember automatic learning personal',
     'Workload placement':
         'voice tts stt speech audio transcribe image device cluster',
@@ -167,13 +165,6 @@ class _SettingsViewState extends State<SettingsView> {
                 _ => 'Auto fast',
               },
               builder: (ctx) => _buildLiteRtGroup(ctx),
-            ),
-            _navRow(
-              context,
-              icon: Icons.image_outlined,
-              title: 'Image generation',
-              value: 'Pollinations · Online',
-              builder: (ctx) => const PollinationsPanel(),
             ),
           ]),
           const SectionHeader('Connected devices'),

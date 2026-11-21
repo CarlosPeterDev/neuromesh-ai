@@ -1,3 +1,4 @@
+import '../utils/output_links.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -17,9 +18,17 @@ import 'voice_service.dart';
 void registerExtraTools(AgentService agent) {
   String nameOf(File f) => f.path.split('/').last;
 
-  Future<File> newFile(String name) => agent.newWorkspaceFile(name);
+  Future<File> newFile(String name) async {
+    final file = await agent.newWorkspaceFile(name);
+    if (await file.exists()) {
+      throw StateError('The destination already exists. Choose a new name.');
+    }
+    return file;
+  }
 
-  String size(int b) => b > 1048576 ? '${(b / 1048576).toStringAsFixed(1)} MB' : '${(b / 1024).ceil()} KB';
+  String size(int b) => b > 1048576
+      ? '${(b / 1048576).toStringAsFixed(1)} MB'
+      : '${(b / 1024).ceil()} KB';
 
   agent.addTool(AgentTool(
     'models_status',
@@ -30,22 +39,28 @@ void registerExtraTools(AgentService agent) {
       final vs = Get.find<VoiceModelStore>();
       final v = Get.find<VoiceService>();
       final b = StringBuffer();
-      b.writeln('Chat model loaded now: ${mc.lastLoadedModelName.isEmpty ? '(none)' : mc.lastLoadedModelName}');
+      b.writeln(
+          'Chat model loaded now: ${mc.lastLoadedModelName.isEmpty ? '(none)' : mc.lastLoadedModelName}');
       final files = mc.downloadedFiles.toList();
       for (final file in files.take(30)) {
         b.writeln('$file — ${modelFileRole(file).label}');
       }
-      b.writeln('Downloaded models (${files.length}): ${files.isEmpty ? 'none' : files.take(30).join(', ')}');
+      b.writeln(
+          'Downloaded models (${files.length}): ${files.isEmpty ? 'none' : files.take(30).join(', ')}');
       final voiceModels = kVoiceModels
-          .where((m) => !m.clone && vs.installed.contains(m.id)).toList();
+          .where((m) => !m.clone && vs.installed.contains(m.id))
+          .toList();
       for (final (kind, heading, loaded) in [
         (VoiceKind.stt, 'Listening models', v.sttReady),
         (VoiceKind.tts, 'Speaking models', v.ttsReady),
       ]) {
         final entries = voiceModels.where((m) => m.kind == kind).map((m) =>
             '${m.id} — ${m.title} [${m.lang}]${m.speakers.isEmpty ? '' : '; speakers: ${m.speakers.join(', ')}'}');
-        b.writeln('$heading: ${entries.isEmpty ? 'NONE (download in Models → Voice)' : entries.join('\n')}${loaded ? '\nRuntime loaded' : ''}');
+        b.writeln(
+            '$heading: ${entries.isEmpty ? 'NONE (download in Models → Voice)' : entries.join('\n')}${loaded ? '\nRuntime loaded' : ''}');
       }
+      b.writeln(
+          'System TTS file synthesis available: ${v.systemFileTtsAvailable.value}. Use model_id omitted for the default local/system voice.');
       b.writeln('Image generation: Pollinations online (internet required).');
       return b.toString().trim();
     },
@@ -57,21 +72,27 @@ void registerExtraTools(AgentService agent) {
     '{"url":"https://...","name":"optional file name to save as"}',
     (args) async {
       final uri = Uri.tryParse((args['url'] ?? '').toString());
-      if (uri == null || !(uri.scheme == 'https' || uri.scheme == 'http')) return 'Error: give a full http(s) URL.';
+      if (uri == null || !(uri.scheme == 'https' || uri.scheme == 'http'))
+        return 'Error: give a full http(s) URL.';
       var name = (args['name'] ?? '').toString().trim();
       if (name.isEmpty) {
-        name = uri.pathSegments.isNotEmpty && uri.pathSegments.last.isNotEmpty ? uri.pathSegments.last : 'download.bin';
+        name = uri.pathSegments.isNotEmpty && uri.pathSegments.last.isNotEmpty
+            ? uri.pathSegments.last
+            : 'download.bin';
       }
       final client = http.Client();
       try {
         final res = await client.send(http.Request('GET', uri)
-          ..headers['User-Agent'] = 'Mozilla/5.0 (Linux; Android 14) NeuroMeshAI');
-        if (res.statusCode != 200) return 'Error: server answered ${res.statusCode}.';
+          ..headers['User-Agent'] =
+              'Mozilla/5.0 (Linux; Android 14) NeuroMeshAI');
+        if (res.statusCode != 200)
+          return 'Error: server answered ${res.statusCode}.';
         final f = await newFile(name);
         final sink = f.openWrite();
         var n = 0;
         try {
-          await for (final chunk in res.stream.timeout(const Duration(seconds: 60))) {
+          await for (final chunk
+              in res.stream.timeout(const Duration(seconds: 60))) {
             n += chunk.length;
             if (n > 200 * 1048576) {
               await sink.close();
@@ -83,13 +104,14 @@ void registerExtraTools(AgentService agent) {
         } finally {
           await sink.close();
         }
-        return 'Saved ${nameOf(f)} (${size(n)}). Show it with [📎 ${nameOf(f)}](nmfile:${nameOf(f)}).';
+        return 'Saved ${nameOf(f)} (${size(n)}). Show it with [📎 ${nameOf(f)}](${outputFileUri(nameOf(f))}).';
       } catch (e) {
         return 'Error: download failed: $e';
       } finally {
         client.close();
       }
     },
+    needsConfirm: true,
   ));
 
   agent.addTool(AgentTool(
@@ -98,12 +120,15 @@ void registerExtraTools(AgentService agent) {
     '{"method":"GET|POST|PUT|PATCH|DELETE","url":"https://...","headers":"optional JSON object","body":"optional text or JSON string"}',
     (args) async {
       final uri = Uri.tryParse((args['url'] ?? '').toString());
-      if (uri == null || !(uri.scheme == 'https' || uri.scheme == 'http')) return 'Error: give a full http(s) URL.';
+      if (uri == null || !(uri.scheme == 'https' || uri.scheme == 'http'))
+        return 'Error: give a full http(s) URL.';
       final method = (args['method'] ?? 'GET').toString().toUpperCase();
       final headers = <String, String>{'User-Agent': 'NeuroMeshAI'};
       final h = args['headers'];
       try {
-        final m = h is Map ? h : (h is String && h.trim().isNotEmpty ? jsonDecode(h) : null);
+        final m = h is Map
+            ? h
+            : (h is String && h.trim().isNotEmpty ? jsonDecode(h) : null);
         if (m is Map) {
           for (final e in m.entries) {
             headers['${e.key}'] = '${e.value}';
@@ -113,18 +138,25 @@ void registerExtraTools(AgentService agent) {
         return 'Error: "headers" must be a JSON object.';
       }
       final bodyArg = args['body'];
-      final body = bodyArg == null ? null : (bodyArg is String ? bodyArg : jsonEncode(bodyArg));
-      if (body != null && !headers.keys.any((k) => k.toLowerCase() == 'content-type')) {
+      final body = bodyArg == null
+          ? null
+          : (bodyArg is String ? bodyArg : jsonEncode(bodyArg));
+      if (body != null &&
+          !headers.keys.any((k) => k.toLowerCase() == 'content-type')) {
         headers['Content-Type'] = 'application/json';
       }
       final req = http.Request(method, uri)..headers.addAll(headers);
       if (body != null) req.body = body;
       try {
-        final streamed = await http.Client().send(req).timeout(const Duration(seconds: 30));
+        final streamed =
+            await http.Client().send(req).timeout(const Duration(seconds: 30));
         final res = await http.Response.fromStream(streamed);
         var text = utf8.decode(res.bodyBytes, allowMalformed: true);
-        if ((res.headers['content-type'] ?? '').contains('html')) text = readableText(text);
-        if (text.length > 6000) text = '${text.substring(0, 6000)}\n… (${text.length} characters; cut)';
+        if ((res.headers['content-type'] ?? '').contains('html'))
+          text = readableText(text);
+        if (text.length > 6000)
+          text =
+              '${text.substring(0, 6000)}\n… (${text.length} characters; cut)';
         return 'HTTP ${res.statusCode}\n$text';
       } catch (e) {
         return 'Error: request failed: $e';
@@ -167,7 +199,9 @@ void registerExtraTools(AgentService agent) {
       final q = (args['query'] ?? '').toString().toLowerCase().trim();
       if (q.isEmpty) return 'Error: empty query.';
       final out = <String>[];
-      for (final e in (await agent.filesDir()).listSync().whereType<File>()) {
+      for (final e in (await agent.filesDir())
+          .listSync(followLinks: false)
+          .whereType<File>()) {
         final n = nameOf(e);
         if (n.toLowerCase().contains(q)) out.add('$n  (name matches)');
         if (e.lengthSync() > 2 * 1048576) continue;
@@ -177,7 +211,8 @@ void registerExtraTools(AgentService agent) {
           for (var i = 0; i < lines.length && hits < 3; i++) {
             if (lines[i].toLowerCase().contains(q)) {
               final l = lines[i].trim();
-              out.add('$n:${i + 1}: ${l.length > 160 ? '${l.substring(0, 160)}…' : l}');
+              out.add(
+                  '$n:${i + 1}: ${l.length > 160 ? '${l.substring(0, 160)}…' : l}');
               hits++;
             }
           }
@@ -193,7 +228,11 @@ void registerExtraTools(AgentService agent) {
     'Put several workspace files into one .zip file.',
     '{"names":"comma-separated file names","output":"archive name ending in .zip"}',
     (args) async {
-      final names = (args['names'] ?? '').toString().split(',').map((e) => e.trim()).where((e) => e.isNotEmpty);
+      final names = (args['names'] ?? '')
+          .toString()
+          .split(',')
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty);
       var out = (args['output'] ?? 'archive.zip').toString();
       if (!out.toLowerCase().endsWith('.zip')) out = '$out.zip';
       final enc = ZipFileEncoder();
@@ -211,7 +250,7 @@ void registerExtraTools(AgentService agent) {
         await dst.delete();
         return 'Error: none of those files exist. Use list_files.';
       }
-      return 'Created ${nameOf(dst)} with $n file(s) (${size(dst.lengthSync())}). Show it with [📎 ${nameOf(dst)}](nmfile:${nameOf(dst)}).';
+      return 'Created ${nameOf(dst)} with $n file(s) (${size(dst.lengthSync())}). Show it with [📎 ${nameOf(dst)}](${outputFileUri(nameOf(dst))}).';
     },
   ));
 
@@ -235,13 +274,17 @@ void registerExtraTools(AgentService agent) {
       final saved = <String>[];
       for (final e in a) {
         if (!e.isFile || saved.length >= 300) continue;
-        final flat = e.name.replaceAll(RegExp(r'[\\/]+'), '_').replaceAll(RegExp(r'[^\w.\- ]'), '_');
+        final flat = e.name
+            .replaceAll(RegExp(r'[\\/]+'), '_')
+            .replaceAll(RegExp(r'[^\w.\- ]'), '_');
         if (flat.isEmpty || flat.startsWith('.')) continue;
         final out = await newFile(flat);
         await out.writeAsBytes(e.content as List<int>);
         saved.add(nameOf(out));
       }
-      return saved.isEmpty ? '(the archive is empty)' : 'Extracted ${saved.length} file(s): ${saved.take(40).join(', ')}';
+      return saved.isEmpty
+          ? '(the archive is empty)'
+          : 'Extracted ${saved.length} file(s): ${saved.take(40).join(', ')}';
     },
   ));
 }

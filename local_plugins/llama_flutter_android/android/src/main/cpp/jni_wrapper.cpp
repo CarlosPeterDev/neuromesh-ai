@@ -1,5 +1,7 @@
 #include <jni.h>
 #include <string>
+#include <codecvt>
+#include <locale>
 #include <vector>
 #include <algorithm>
 #include <atomic>
@@ -28,6 +30,14 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "utf8_token_stream.h"
+#include "llama.cpp/common/chat.h"
+#include "native_tool_protocol.h"
+static common_chat_params g_native_chat_params;
+static std::mutex g_native_chat_params_mutex;
+static common_chat_params native_chat_params_snapshot() {
+    std::lock_guard<std::mutex> lock(g_native_chat_params_mutex);
+    return g_native_chat_params;
+}
 #define LOG_TAG "LlamaJNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -1432,4 +1442,93 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeSetSy
     JNIEnv* env, jobject thiz, jint length) {
     // Currently not used but available for future smart context management
     LOGI("System prompt length set to: %d tokens (currently unused)", length);
+}
+
+// Called only while generation owns the native model (the Kotlin job joins
+// previous generation first). Metadata is authoritative; no filename guessing.
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeChatCapabilities(JNIEnv*, jobject) {
+    if (!g_model || !llama_model_chat_template(g_model, nullptr)) return 0;
+    try {
+        auto templates = common_chat_templates_init(g_model, "");
+        const auto caps = common_chat_templates_get_caps(templates.get());
+        const bool tools = caps.count("supports_tools") && caps.at("supports_tools") &&
+            caps.count("supports_tool_calls") && caps.at("supports_tool_calls");
+        return 4 | neuromesh_reasoning_flags(templates.get()) | (tools ? 2 : 0);
+    } catch (...) { return 0; }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeFormatChat(
+        JNIEnv* env, jobject, jobjectArray roles, jobjectArray contents, jboolean thinking, jstring schemas) {
+    if (!g_model || !llama_model_chat_template(g_model, nullptr)) return nullptr;
+    try {
+        auto templates = common_chat_templates_init(g_model, "");
+        common_chat_templates_inputs inputs;
+        const bool canToggle=(neuromesh_reasoning_flags(templates.get()) & 1) != 0;
+        inputs.enable_thinking = canToggle ? thinking == JNI_TRUE : true;
+        if(canToggle)inputs.chat_template_kwargs["enable_thinking"] = inputs.enable_thinking ? "true" : "false";
+        const jchar* schemaChars=env->GetStringChars(schemas,nullptr);
+        const std::u16string schemaUtf16(reinterpret_cast<const char16_t*>(schemaChars),env->GetStringLength(schemas));
+        env->ReleaseStringChars(schemas,schemaChars);
+        const auto schemaText=std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t>{}.to_bytes(schemaUtf16);
+        inputs.tools=common_chat_tools_parse_oaicompat(common_json::parse(schemaText));
+        std::vector<std::pair<std::string,std::string>> history;
+        const auto count = env->GetArrayLength(roles);
+        for (jsize i = 0; i < count; ++i) {
+            auto role = static_cast<jstring>(env->GetObjectArrayElement(roles, i));
+            auto content = static_cast<jstring>(env->GetObjectArrayElement(contents, i));
+            const auto toUtf8 = [env](jstring value) {
+                const jchar* chars = env->GetStringChars(value, nullptr);
+                std::u16string text(reinterpret_cast<const char16_t*>(chars), env->GetStringLength(value));
+                env->ReleaseStringChars(value, chars);
+                return std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>{}.to_bytes(text);
+            };
+            common_chat_msg msg;
+            msg.role = toUtf8(role); msg.content = toUtf8(content);
+            history.emplace_back(msg.role,msg.content);
+            env->DeleteLocalRef(role); env->DeleteLocalRef(content);
+        }
+        if(inputs.tools.empty()) {
+            for(const auto& entry:history){common_chat_msg msg;msg.role=entry.first;msg.content=entry.second;inputs.messages.push_back(msg);}
+        } else inputs.messages=neuromesh_native_messages(history);
+        const auto params = common_chat_templates_apply(templates.get(), inputs);
+        { std::lock_guard<std::mutex> lock(g_native_chat_params_mutex); g_native_chat_params=params; }
+        const auto utf16 = std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>{}.from_bytes(params.prompt);
+        return env->NewString(reinterpret_cast<const jchar*>(utf16.data()), utf16.size());
+    } catch (const std::exception& e) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), e.what());
+        return nullptr;
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeNormalizeTools(JNIEnv* env,jobject,jstring response) {
+    try {
+        const jchar* chars=env->GetStringChars(response,nullptr);
+        std::u16string text(reinterpret_cast<const char16_t*>(chars),env->GetStringLength(response));
+        env->ReleaseStringChars(response,chars);
+        auto convert=std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t>{};
+        const auto output=neuromesh_normalize_native(convert.to_bytes(text),native_chat_params_snapshot());
+        const auto utf16=convert.from_bytes(output);
+        return env->NewString(reinterpret_cast<const jchar*>(utf16.data()),utf16.size());
+    } catch(const std::exception& e) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),e.what());return nullptr;
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativePreviewTools(JNIEnv* env,jobject,jstring response) {
+    try {
+        const jchar* chars=env->GetStringChars(response,nullptr);
+        std::u16string text(reinterpret_cast<const char16_t*>(chars),env->GetStringLength(response));
+        env->ReleaseStringChars(response,chars);
+        auto convert=std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t>{};
+        const auto visible=neuromesh_preview_native(convert.to_bytes(text),native_chat_params_snapshot());
+        const auto utf16=convert.from_bytes(visible);
+        return env->NewString(reinterpret_cast<const jchar*>(utf16.data()),utf16.size());
+    } catch(const std::exception&) {
+        // Incomplete grammar prefixes need more tokens, not a fabricated view.
+        return env->NewStringUTF("");
+    }
 }

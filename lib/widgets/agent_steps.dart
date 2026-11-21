@@ -1,14 +1,16 @@
+import '../utils/output_links.dart';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../services/agent_service.dart';
+import '../services/output_file_service.dart';
+import 'image_viewer.dart';
 
 /// One tool step the agent took, parsed from a saved trace line.
 class AgentStep {
@@ -18,8 +20,10 @@ class AgentStep {
   final String result;
   final bool running;
   final int ms;
+  final bool timingRecorded;
   const AgentStep(
-      this.name, this.label, this.args, this.result, this.running, this.ms);
+      this.name, this.label, this.args, this.result, this.running, this.ms,
+      {this.timingRecorded = true});
 
   static AgentStep? parse(String line) {
     if (!line.startsWith(ToolLoopResult.traceMark)) return null;
@@ -35,6 +39,7 @@ class AgentStep {
         '${j['r'] ?? ''}',
         j['run'] == true,
         (j['ms'] is num) ? (j['ms'] as num).toInt() : 0,
+        timingRecorded: j['ms'] is num,
       );
     } catch (_) {
       return null;
@@ -58,6 +63,18 @@ class AgentStep {
   }
   return (steps, rest.join('\n').trimLeft());
 }
+
+String toolDuration(int milliseconds) => milliseconds <= 0
+    ? '<1 ms'
+    : milliseconds < 1000
+        ? '$milliseconds ms'
+        : '${(milliseconds / 1000).toStringAsFixed(1)} s';
+
+String _stepTiming(AgentStep step) => step.running
+    ? 'Working…'
+    : step.timingRecorded
+        ? toolDuration(step.ms)
+        : 'Time not recorded';
 
 IconData _iconFor(String n) {
   switch (n) {
@@ -199,7 +216,7 @@ class _AgentStepsViewState extends State<AgentStepsView> {
                     child: Text(
                         running
                             ? 'Working… ${steps.lastWhere((s) => s.running).label}'
-                            : '${steps.length} step${steps.length == 1 ? '' : 's'}${total > 0 ? ' · ${(total / 1000).toStringAsFixed(1)}s' : ''}',
+                            : '${steps.length} step${steps.length == 1 ? '' : 's'}${steps.every((s) => s.timingRecorded) ? ' · ${toolDuration(total)} in tools' : ''}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis)),
                 const Icon(Icons.chevron_right, size: 17)
@@ -235,9 +252,7 @@ class _StepTile extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontSize: 13)),
       subtitle: Text(
-        step.running
-            ? 'Working…'
-            : '${step.name}${step.ms > 0 ? ' · ${(step.ms / 1000).toStringAsFixed(1)}s' : ''}',
+        step.running ? 'Working…' : '${step.name} · ${_stepTiming(step)}',
         style: const TextStyle(fontSize: 11.5),
       ),
       trailing: const Icon(Icons.chevron_right_rounded, size: 18),
@@ -276,8 +291,7 @@ class _StepDetails extends StatelessWidget {
             children: [
               Text(step.label, style: theme.textTheme.titleMedium),
               const SizedBox(height: 4),
-              Text(
-                  '${step.name}${step.ms > 0 ? ' · ${(step.ms / 1000).toStringAsFixed(1)}s' : ''}',
+              Text('${step.name} · ${_stepTiming(step)}',
                   style: theme.textTheme.bodySmall),
               if (step.args.isNotEmpty) ...[
                 const SizedBox(height: 12),
@@ -342,16 +356,16 @@ String _fieldValue(Object? value) {
 const nmFileScheme = 'nmfile:';
 
 Future<File?> agentFile(String name) async {
-  final dir = await Get.find<AgentService>().filesDir();
-  final n = name.split('/').last.split('\\').last;
-  final f = File('${dir.path}/$n');
-  return await f.exists() ? f : null;
+  try {
+    return await Get.find<AgentService>().workspaceFile(name);
+  } catch (_) {
+    return null;
+  }
 }
 
 /// Inline image for `![alt](nmfile:name)`.
 Widget agentImage(Uri uri, String? alt, {String? project}) {
-  final name =
-      Uri.decodeComponent(uri.toString().substring(nmFileScheme.length));
+  final name = outputFileName(uri.toString().substring(nmFileScheme.length));
   return FutureBuilder<File?>(
     future: project == null
         ? agentFile(name)
@@ -365,10 +379,12 @@ Widget agentImage(Uri uri, String? alt, {String? project}) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: GestureDetector(
-          onTap: () => Share.shareXFiles([XFile(f.path)]),
+          behavior: HitTestBehavior.opaque,
+          onTap: () => ImageViewer.showFile(c, f),
           child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: Image.file(f, fit: BoxFit.contain, height: 320)),
+              child:
+                  Image.file(f, fit: BoxFit.contain, width: 320, height: 320)),
         ),
       );
     },
@@ -377,12 +393,16 @@ Widget agentImage(Uri uri, String? alt, {String? project}) {
 
 /// Tapping a produced file: play audio, otherwise share / save it.
 Future<void> openAgentFile(BuildContext context, String name) async {
-  final f = await agentFile(Uri.decodeComponent(name));
+  final f = await agentFile(outputFileName(name));
   if (f == null) {
     Get.snackbar('File not found', name);
     return;
   }
   final ext = f.path.split('.').last.toLowerCase();
+  if (_imageExts.contains(ext)) {
+    if (context.mounted) await ImageViewer.showFile(context, f);
+    return;
+  }
   if (['wav', 'mp3', 'm4a', 'ogg', 'aac', 'flac'].contains(ext)) {
     if (!context.mounted) return;
     await showModalBottomSheet(
@@ -470,12 +490,10 @@ class _FileSheetState extends State<_FileSheet> {
 
   Future<void> _save() async {
     try {
-      final bytes = await widget.file.readAsBytes();
-      final path = await FilePicker.saveFile(
-          dialogTitle: 'Save $_name', fileName: _name, bytes: bytes);
-      if (path != null) Get.snackbar('Saved', _name);
-    } catch (e) {
-      Get.snackbar('Could not save', '$e');
+      if (await OutputFileService.save(widget.file) != null)
+        Get.snackbar('Saved', _name);
+    } catch (error) {
+      Get.snackbar('Could not save', '$error');
     }
   }
 
@@ -610,9 +628,17 @@ class _AudioSheetState extends State<_AudioSheet> {
             ),
             const SizedBox(width: 12),
             OutlinedButton.icon(
-              onPressed: () => Share.shareXFiles([XFile(widget.file.path)]),
-              icon: const Icon(Icons.ios_share_rounded),
-              label: const Text('Share / save'),
+              onPressed: () async {
+                try {
+                  final saved = await OutputFileService.save(widget.file);
+                  if (saved != null)
+                    Get.snackbar('Saved', widget.file.uri.pathSegments.last);
+                } catch (error) {
+                  Get.snackbar('Could not save', '$error');
+                }
+              },
+              icon: const Icon(Icons.download_outlined),
+              label: const Text('Save'),
             ),
           ]),
         ]),

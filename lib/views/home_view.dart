@@ -3,9 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../controllers/home_controller.dart';
-import '../services/opencode_adapter.dart';
 import '../widgets/chat_drawer.dart';
-import 'agent_hub_view.dart';
 import 'chat_view.dart';
 import 'model_view.dart';
 import 'server_view.dart';
@@ -86,15 +84,7 @@ class _HomeViewState extends State<HomeView> with RouteAware {
         label: 'Settings'),
   ];
 
-  List<_NavItem> _navigationItems(BuildContext context) => [
-        ..._tabs,
-        if (hasDesktopAgents)
-          _NavItem(
-            icon: Icons.terminal_outlined,
-            activeIcon: Icons.terminal_rounded,
-            label: agentHubUsesArabic(context) ? 'الوكلاء' : 'Agents',
-          ),
-      ];
+  List<_NavItem> _navigationItems(BuildContext context) => _tabs;
 
   bool get _isWide {
     // Force bottom navbar for all layouts per user request
@@ -126,7 +116,6 @@ class _HomeViewState extends State<HomeView> with RouteAware {
                     const ModelView(),
                     const ServerView(),
                     const SettingsView(),
-                    if (hasDesktopAgents) const AgentHubView(),
                   ],
                 );
                 if (_isWide) {

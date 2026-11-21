@@ -5,6 +5,26 @@ import 'package:neuromesh_ai/services/voice_models.dart';
 import 'package:neuromesh_ai/services/voice_service.dart';
 
 void main() {
+  test('system file synthesis only selects explicitly installed offline voices',
+      () {
+    const base = {'name': 'voice', 'locale': 'en-US'};
+    for (final flag in ['1', 1, true, 'true', null]) {
+      expect(
+          isOfflineSystemVoice({...base, 'network_required': flag}), isFalse);
+    }
+    for (final flag in ['0', 0, false]) {
+      expect(isOfflineSystemVoice({...base, 'network_required': flag}), isTrue);
+    }
+    expect(
+        isOfflineSystemVoice(
+            {...base, 'network_required': '0', 'features': 'notInstalled'}),
+        isFalse);
+    expect(
+        isOfflineSystemVoice(
+            {...base, 'network_required': '0', 'features': 'networkTts'}),
+        isFalse);
+  });
+
   test('wav header is valid', () {
     final wav = encodeWav(Float32List.fromList([0, 0.5, -0.5, 1]), 16000);
     expect(String.fromCharCodes(wav.sublist(0, 4)), 'RIFF');
@@ -31,14 +51,17 @@ void main() {
   });
 
   test('voice names resolve exact speakers or unique short labels', () {
-    final model = kVoiceModels.firstWhere((m) => m.speakers.contains('Bella (F)'));
+    final model =
+        kVoiceModels.firstWhere((m) => m.speakers.contains('Bella (F)'));
     expect(model.speakerIndexFor('bella'), model.speakers.indexOf('Bella (F)'));
-    expect(model.speakerIndexFor('BELLA (F)'), model.speakers.indexOf('Bella (F)'));
+    expect(model.speakerIndexFor('BELLA (F)'),
+        model.speakers.indexOf('Bella (F)'));
     expect(model.speakerIndexFor('unavailable'), isNull);
   });
 
   test('speech chunks drop markdown, code and thinking', () {
-    final c = speechChunks('<think>hmm</think>**Hello** there. How are you? ```x=1```');
+    final c = speechChunks(
+        '<think>hmm</think>**Hello** there. How are you? ```x=1```');
     expect(c, ['Hello there.', 'How are you?']);
     expect(speechChunks('  '), isEmpty);
   });
@@ -48,7 +71,8 @@ void main() {
     expect(r.sentences, ['Hello there.']);
     r = nextSentences('Hello there. How are you today? Fine', r.next);
     expect(r.sentences, ['How are you today?']);
-    r = nextSentences('Hello there. How are you today? Fine', r.next, flush: true);
+    r = nextSentences('Hello there. How are you today? Fine', r.next,
+        flush: true);
     expect(r.sentences, ['Fine']);
   });
 

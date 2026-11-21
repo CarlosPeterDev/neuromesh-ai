@@ -1,4 +1,7 @@
+import '../utils/reasoning_support.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/services.dart';
 import 'dart:ffi' show Abi;
 import 'dart:io' show Platform, Directory, File;
 import 'package:path_provider/path_provider.dart';
@@ -26,6 +29,9 @@ class LoadResult {
   final int gpuLayers;
   final String runtime;
   final String backend;
+  final bool supportsThinking;
+  final bool supportsToolSchema;
+  final ReasoningSupport reasoningSupport;
   LoadResult({
     required this.success,
     required this.message,
@@ -33,6 +39,9 @@ class LoadResult {
     this.gpuLayers = 0,
     this.runtime = '',
     this.backend = '',
+    this.supportsThinking = false,
+    this.supportsToolSchema = false,
+    this.reasoningSupport = ReasoningSupport.unknown,
   });
 }
 
@@ -191,7 +200,9 @@ class InferenceEngine {
     // ── Load ──
     String? visionError;
     await onLoadStage?.call(
-      gpuLayers > 0 ? 'llama.cpp Vulkan model load' : 'llama.cpp CPU model load',
+      gpuLayers > 0
+          ? 'llama.cpp Vulkan model load'
+          : 'llama.cpp CPU model load',
       null,
     );
     try {
@@ -236,11 +247,20 @@ class InferenceEngine {
         : 'CPU ($threads threads)';
     print('[Inference] ✓ Model loaded: $accel, ctx=$contextSize');
 
+    final templateCapabilities = Platform.isAndroid
+        ? await _controller!.getSupportedTemplates()
+        : <String>[];
+
     return LoadResult(
       success: true,
       message: 'Model loaded ($accel).',
       gpuName: gpuNameStr,
       gpuLayers: gpuLayers,
+      supportsThinking:
+          templateCapabilities.contains('metadata-thinking-supported'),
+      supportsToolSchema:
+          templateCapabilities.contains('metadata-tools-supported'),
+      reasoningSupport: ReasoningSupport.fromTemplates(templateCapabilities),
       runtime: 'llama',
       backend: gpuLayers > 0 ? 'gpu' : 'cpu',
     );
@@ -381,8 +401,10 @@ class InferenceEngine {
     String? imagePath,
     String? audioPath,
     String source = 'chat',
+    List<Map<String, dynamic>> nativeTools = const [],
     bool normalThinking = false,
     void Function(String token)? onToken,
+    void Function(String visible)? onPreview,
   }) async {
     if (_desk != null) {
       return _desk.generate(
@@ -422,12 +444,49 @@ class InferenceEngine {
     final buffer = StringBuffer();
     bool completed = false;
     final controller = _controller;
+    Timer? previewTimer;
+    var previewBusy = false;
+    var lastPreview = '';
+    void schedulePreview() {
+      if (onPreview == null ||
+          nativeTools.isEmpty ||
+          !Platform.isAndroid ||
+          completed ||
+          previewBusy ||
+          previewTimer != null) return;
+      previewTimer = Timer(const Duration(milliseconds: 70), () async {
+        previewTimer = null;
+        if (completed || _disposed) return;
+        previewBusy = true;
+        final raw = buffer.toString();
+        try {
+          final visible =
+              await const MethodChannel('com.neuromesh.ai/llama_tools')
+                  .invokeMethod<String>('preview', raw);
+          if (!completed &&
+              !_disposed &&
+              visible != null &&
+              visible.isNotEmpty &&
+              visible != lastPreview) {
+            lastPreview = visible;
+            onPreview(visible);
+          }
+        } catch (_) {
+          // Older native bindings may lack preview parsing. Never expose raw
+          // tool arguments as a fallback; the final parser remains authoritative.
+        } finally {
+          previewBusy = false;
+          if (!completed && buffer.length != raw.length) schedulePreview();
+        }
+      });
+    }
 
     // Timeouts and stop must halt the native engine too; cancelling the Dart
     // subscription alone leaves llama.cpp generating in the background.
     void finish(String result, {bool stopNative = true}) {
       if (!completed && !_disposed) {
         completed = true;
+        previewTimer?.cancel();
         _idleTimer?.cancel();
         _subscription?.cancel();
         _onStop = null;
@@ -446,17 +505,21 @@ class InferenceEngine {
       finish(buffer.toString());
     };
 
-    final qwen3 = RegExp(r'qwen[-_ ]?3(?![0-9])', caseSensitive: false)
-        .hasMatch(modelName);
     // ── Use generateChat() for native template handling ──
     Stream<String>? stream;
     try {
+      if (Platform.isAndroid) {
+        await const MethodChannel('com.neuromesh.ai/llama_tools')
+            .invokeMethod('configure', jsonEncode(nativeTools));
+      }
       final messages = _buildChatMessages(
           prompt, conversationHistory, systemPrompt,
-          imagePath: imagePath);
+          imagePath: imagePath, nativeToolMode: nativeTools.isNotEmpty);
       stream = _controller!.generateChat(
         messages: messages,
-        template: qwen3 && !normalThinking ? 'qwen3-direct' : null,
+        template: Platform.isAndroid
+            ? (normalThinking ? 'metadata-think' : 'metadata-direct')
+            : null,
         maxTokens: maxTokens,
         temperature: temperature,
         topP: 0.9,
@@ -467,7 +530,8 @@ class InferenceEngine {
       );
       print('[Inference] generateChat() started (${messages.length} messages)');
     } catch (e) {
-      if (imagePath != null) return 'ERROR: Could not prepare image input.';
+      if (imagePath != null || Platform.isAndroid)
+        return 'ERROR: Could not apply the model chat template: $e';
       print('[Inference] generateChat() failed: $e — fallback to generate()');
       try {
         await _controller!.stop();
@@ -501,9 +565,11 @@ class InferenceEngine {
           print('[Inference] Idle timeout — $tokenCount tokens');
           finish(buffer.toString());
         });
-        final clean = _sanitizeGemmaGarbage(token);
+        final clean =
+            nativeTools.isEmpty ? _sanitizeGemmaGarbage(token) : token;
         if (clean.isEmpty) return;
         buffer.write(clean);
+        schedulePreview();
         tokenCount++;
         onToken?.call(clean);
       },
@@ -536,7 +602,19 @@ class InferenceEngine {
       }
     });
 
-    return await completer.future;
+    final response = await completer.future;
+    if (Platform.isAndroid &&
+        nativeTools.isNotEmpty &&
+        !response.startsWith('ERROR:')) {
+      try {
+        return await const MethodChannel('com.neuromesh.ai/llama_tools')
+                .invokeMethod<String>('normalize', response) ??
+            'ERROR: Native tool parser returned no response.';
+      } catch (e) {
+        return 'ERROR: Native tool response could not be validated: $e';
+      }
+    }
+    return response;
   }
 
   Future<String> _generateLiteRt({
@@ -937,6 +1015,7 @@ class InferenceEngine {
     List<Map<String, String>>? history,
     String systemPrompt, {
     String? imagePath,
+    bool nativeToolMode = false,
   }) {
     final messages = <ChatMessage>[];
     messages.add(ChatMessage(role: 'system', content: systemPrompt));
@@ -952,8 +1031,13 @@ class InferenceEngine {
       }
       for (final msg in recent) {
         final content = msg['content'] ?? '';
-        messages
-            .add(ChatMessage(role: msg['role'] ?? 'user', content: content));
+        messages.add(ChatMessage(
+            role: nativeToolMode &&
+                    msg['role'] == 'assistant' &&
+                    msg['_nm_tools'] == 'true'
+                ? 'assistant_tool'
+                : msg['role'] ?? 'user',
+            content: content));
       }
     }
 

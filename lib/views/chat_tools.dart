@@ -12,7 +12,11 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/ui.dart';
 import '../controllers/chat_controller.dart';
 import '../widgets/agent_steps.dart';
+import '../widgets/device_access_status.dart';
 import '../services/agent_service.dart';
+import '../services/inference_service.dart';
+import '../services/cloud_service.dart';
+import '../controllers/settings_controller.dart';
 import '../services/mcp_client.dart';
 import '../services/mcp_presets.dart';
 import '../services/user_files.dart';
@@ -51,17 +55,22 @@ class _ChatToolsViewState extends State<ChatToolsView> {
     final t = AppTokens.of(context);
     return Scaffold(
       backgroundColor: t.bg,
-      appBar: appScreenBar(context, title: 'Tools & permissions', showBack: true),
+      appBar:
+          appScreenBar(context, title: 'Tools & permissions', showBack: true),
       body: ListView(padding: kPagePadding, children: [
+        const DeviceAccessStatus(),
         // ── when tools are used ──
         const SectionHeader('How the AI decides'),
-        Obx(() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Obx(() =>
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               SizedBox(
                 width: double.infinity,
                 child: SegmentedButton<AgentChatMode>(
                   segments: const [
-                    ButtonSegment(value: AgentChatMode.auto, label: Text('Auto')),
-                    ButtonSegment(value: AgentChatMode.always, label: Text('Always')),
+                    ButtonSegment(
+                        value: AgentChatMode.auto, label: Text('Auto')),
+                    ButtonSegment(
+                        value: AgentChatMode.always, label: Text('Always')),
                     ButtonSegment(value: AgentChatMode.off, label: Text('Off')),
                   ],
                   selected: {_agent.mode.value},
@@ -72,14 +81,33 @@ class _ChatToolsViewState extends State<ChatToolsView> {
               Text(
                 switch (_agent.mode.value) {
                   AgentChatMode.auto =>
-                    'Tools are offered when your message looks like it needs them (files, search, actions, attachments). Plain questions are answered straight away.',
+                    'The model reads every request and decides whether to answer directly or use available tools. Tool use is never triggered by words in your message.',
                   AgentChatMode.always =>
-                    'Tools are offered on every message. Uses more of the context window; small models may over-use them.',
-                  AgentChatMode.off => 'The AI only chats. No tools, no file access.',
+                    'Offers more tool details to the model. The model still decides whether to use a tool; this does not make small models more reliable.',
+                  AgentChatMode.off =>
+                    'The AI only chats. No tools, no file access.',
                 },
                 style: t.caption,
               ),
             ])),
+
+        Obx(() {
+          final cloud =
+              Get.find<SettingsController>().inferenceMode.value == 'cloud';
+          final inference = Get.find<InferenceService>();
+          final description = cloud
+              ? (Get.find<CloudService>().supportsNativeTools
+                  ? 'Native provider tool calls are validated before execution. Provider/model support is checked by the request; unsupported calls return an error.'
+                  : 'This provider uses the validated structured-output adapter. Tool reliability depends on the selected model.')
+              : !inference.isModelLoaded.value
+                  ? 'Load a local model before using the assistant.'
+                  : inference.supportsToolSchema.value
+                      ? 'The loaded model template supports native tools. NeuroMesh passes function schemas through that template and validates parsed calls before execution. Small contexts discover additional schemas as needed.'
+                      : 'This model does not advertise tool support. Structured tool output is unverified; malformed responses stop execution safely. Use Off for direct chat.';
+          return Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(description, style: t.caption));
+        }),
 
         if (SandboxService.supported) ...[
           const SectionHeader('Linux sandbox'),
@@ -92,7 +120,8 @@ class _ChatToolsViewState extends State<ChatToolsView> {
           AppRow(
             icon: Icons.schedule_rounded,
             title: 'Run tasks on a schedule',
-            subtitle: 'Daily news, reminders, reports: the AI does them by itself',
+            subtitle:
+                'Daily news, reminders, reports: the AI does them by itself',
             chevron: true,
             onTap: () => Get.to(() => const ScheduledTasksView()),
           ),
@@ -104,8 +133,11 @@ class _ChatToolsViewState extends State<ChatToolsView> {
               AppRow(
                 icon: Icons.psychology_alt_rounded,
                 title: 'Remember things automatically',
-                subtitle: 'Say "remember that…" or let the AI save facts. Notes are added to every chat.',
-                trailing: Switch(value: _agent.autoMemory.value, onChanged: _agent.setAutoMemory),
+                subtitle:
+                    'Say "remember that…" or let the AI save facts. Notes are added to every chat.',
+                trailing: Switch(
+                    value: _agent.autoMemory.value,
+                    onChanged: _agent.setAutoMemory),
               ),
               for (final n in _agent.memory.toList())
                 AppRow(
@@ -128,19 +160,22 @@ class _ChatToolsViewState extends State<ChatToolsView> {
           Expanded(
             child: TextField(
               controller: _note,
-              decoration: appInputDecoration(context, hint: 'Add a note the AI should remember'),
+              decoration: appInputDecoration(context,
+                  hint: 'Add a note the AI should remember'),
               onSubmitted: (_) => _addNote(),
             ),
           ),
           const SizedBox(width: 8),
-          IconButton.filledTonal(onPressed: _addNote, icon: const Icon(Icons.add_rounded)),
+          IconButton.filledTonal(
+              onPressed: _addNote, icon: const Icon(Icons.add_rounded)),
         ]),
         Obx(() => _agent.memory.isEmpty
             ? const SizedBox.shrink()
             : Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton(
-                    onPressed: _agent.clearMemory, child: const Text('Clear all memory')))),
+                    onPressed: _agent.clearMemory,
+                    child: const Text('Clear all memory')))),
 
         // ── files ──
         const SectionHeader('Files the AI can see'),
@@ -166,7 +201,8 @@ class _ChatToolsViewState extends State<ChatToolsView> {
                   try {
                     await _files.addFolder();
                   } catch (e) {
-                    showToast('Could not open the picker', '$e', tone: ToastTone.error);
+                    showToast('Could not open the picker', '$e',
+                        tone: ToastTone.error);
                   }
                 },
               ),
@@ -191,12 +227,14 @@ class _ChatToolsViewState extends State<ChatToolsView> {
                 ),
               for (final tool in _agent.catalog)
                 if (!hasDesktopShell || tool.name != 'run_shell')
-                _PolicyRow(
-                  title: tool.name,
-                  subtitle: tool.description,
-                  value: _agent.policyFor('built-in', tool.name, needsConfirm: tool.needsConfirm),
-                  onChanged: (v) => _agent.setPolicy('built-in', tool.name, v),
-                ),
+                  _PolicyRow(
+                    title: tool.name,
+                    subtitle: tool.description,
+                    value: _agent.policyFor('built-in', tool.name,
+                        needsConfirm: tool.needsConfirm),
+                    onChanged: (v) =>
+                        _agent.setPolicy('built-in', tool.name, v),
+                  ),
             ])),
         Obx(() => _agent.policy.isEmpty
             ? const SizedBox.shrink()
@@ -217,7 +255,8 @@ class _ChatToolsViewState extends State<ChatToolsView> {
                 AppRow(
                   icon: Icons.hub_outlined,
                   title: s.name,
-                  subtitle: _agent.serverStatus[s.id] ?? (s.enabled ? 'Not connected yet' : 'Off'),
+                  subtitle: _agent.serverStatus[s.id] ??
+                      (s.enabled ? 'Not connected yet' : 'Off'),
                   chevron: true,
                   onTap: () => _serverSheet(existing: s),
                 ),
@@ -257,7 +296,11 @@ class _ChatToolsViewState extends State<ChatToolsView> {
     final ctl = TextEditingController(text: old);
     await showAppSheet<void>(context, title: 'Edit note', builder: (ctx) {
       return Column(children: [
-        TextField(controller: ctl, minLines: 2, maxLines: 6, decoration: appInputDecoration(ctx)),
+        TextField(
+            controller: ctl,
+            minLines: 2,
+            maxLines: 6,
+            decoration: appInputDecoration(ctx)),
         const SizedBox(height: 12),
         PrimaryButton(
             label: 'Save',
@@ -273,11 +316,14 @@ class _ChatToolsViewState extends State<ChatToolsView> {
   // ── MCP ──
 
   Future<void> _presets() async {
-    await showAppSheet<void>(context, title: 'Ready-made servers', builder: (ctx) {
+    await showAppSheet<void>(context, title: 'Ready-made servers',
+        builder: (ctx) {
       return AppGroup(children: [
         for (final p in kMcpPresets)
           AppRow(
-            icon: p.unsupported != null ? Icons.block_rounded : Icons.hub_outlined,
+            icon: p.unsupported != null
+                ? Icons.block_rounded
+                : Icons.hub_outlined,
             title: p.name,
             subtitle: p.blurb,
             chevron: true,
@@ -295,100 +341,116 @@ class _ChatToolsViewState extends State<ChatToolsView> {
     final fields = {for (final f in p.fields) f.key: TextEditingController()};
     String? error;
     var busy = false;
-    await showAppSheet<void>(context, title: p.name, subtitle: p.blurb, builder: (ctx) {
+    await showAppSheet<void>(context, title: p.name, subtitle: p.blurb,
+        builder: (ctx) {
       return StatefulBuilder(builder: (ctx, setS) {
-        if (p.unsupported != null) return AppNotice(p.unsupported!, icon: Icons.info_outline_rounded);
-        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          if (p.tokenLabel != null) ...[
-            TextField(
-              controller: token,
-              obscureText: true,
-              decoration: appInputDecoration(ctx, label: p.tokenLabel),
-            ),
-            if (p.tokenHelp != null) ...[
-              const SizedBox(height: 6),
-              Text(p.tokenHelp!, style: AppTokens.of(ctx).caption),
-            ],
-            if (p.tokenUrl != null)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton(
-                    onPressed: () => launchUrl(Uri.parse(p.tokenUrl!),
-                        mode: LaunchMode.externalApplication),
-                    child: const Text('Get a token')),
+        if (p.unsupported != null)
+          return AppNotice(p.unsupported!, icon: Icons.info_outline_rounded);
+        return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (p.tokenLabel != null) ...[
+                TextField(
+                  controller: token,
+                  obscureText: true,
+                  decoration: appInputDecoration(ctx, label: p.tokenLabel),
+                ),
+                if (p.tokenHelp != null) ...[
+                  const SizedBox(height: 6),
+                  Text(p.tokenHelp!, style: AppTokens.of(ctx).caption),
+                ],
+                if (p.tokenUrl != null)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                        onPressed: () => launchUrl(Uri.parse(p.tokenUrl!),
+                            mode: LaunchMode.externalApplication),
+                        child: const Text('Get a token')),
+                  ),
+              ],
+              OutlinedButton.icon(
+                icon: const Icon(Icons.login_rounded),
+                label: const Text('Sign in with browser instead (no token)'),
+                onPressed: busy
+                    ? null
+                    : () async {
+                        final u = presetUrl(p, {
+                          for (final e in fields.entries) e.key: e.value.text
+                        });
+                        setS(() {
+                          busy = true;
+                          error = null;
+                        });
+                        try {
+                          await McpOAuth.signIn(u);
+                          final cfg = McpServerConfig(
+                              id: 'test', name: p.name, url: u, token: '');
+                          final tools = await _agent.testServer(cfg);
+                          await _agent.addServer(cfg.name, cfg.url, '');
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          showToast(
+                              'Connected', '${p.name}: ${tools.length} tools',
+                              tone: ToastTone.success);
+                        } catch (e) {
+                          setS(() {
+                            busy = false;
+                            error = '$e';
+                          });
+                        }
+                      },
               ),
-          ],
-          OutlinedButton.icon(
-            icon: const Icon(Icons.login_rounded),
-            label: const Text('Sign in with browser instead (no token)'),
-            onPressed: busy
-                ? null
-                : () async {
-                    final u = presetUrl(p, {for (final e in fields.entries) e.key: e.value.text});
+              for (final f in p.fields) ...[
+                const SizedBox(height: 8),
+                TextField(
+                    controller: fields[f.key],
+                    decoration:
+                        appInputDecoration(ctx, label: f.label, hint: f.hint)),
+              ],
+              if (error != null) ...[
+                const SizedBox(height: 8),
+                AppNotice(error!,
+                    icon: Icons.error_outline_rounded, color: Colors.red),
+              ],
+              const SizedBox(height: 14),
+              PrimaryButton(
+                label: 'Connect',
+                busy: busy,
+                onPressed: () async {
+                  if (p.tokenLabel != null &&
+                      token.text.trim().isEmpty &&
+                      !await McpOAuth.hasTokens(presetUrl(p, {
+                        for (final e in fields.entries) e.key: e.value.text
+                      }))) {
+                    setS(() => error =
+                        'Paste a token, or use "Sign in with browser".');
+                    return;
+                  }
+                  final cfg = McpServerConfig(
+                    id: 'test',
+                    name: p.name,
+                    url: presetUrl(p,
+                        {for (final e in fields.entries) e.key: e.value.text}),
+                    token: token.text.trim(),
+                  );
+                  setS(() {
+                    busy = true;
+                    error = null;
+                  });
+                  try {
+                    final tools = await _agent.testServer(cfg);
+                    await _agent.addServer(cfg.name, cfg.url, cfg.token);
+                    if (ctx.mounted) Navigator.pop(ctx);
+                    showToast('Connected', '${p.name}: ${tools.length} tools',
+                        tone: ToastTone.success);
+                  } catch (e) {
                     setS(() {
-                      busy = true;
-                      error = null;
+                      busy = false;
+                      error = '$e';
                     });
-                    try {
-                      await McpOAuth.signIn(u);
-                      final cfg = McpServerConfig(id: 'test', name: p.name, url: u, token: '');
-                      final tools = await _agent.testServer(cfg);
-                      await _agent.addServer(cfg.name, cfg.url, '');
-                      if (ctx.mounted) Navigator.pop(ctx);
-                      showToast('Connected', '${p.name}: ${tools.length} tools', tone: ToastTone.success);
-                    } catch (e) {
-                      setS(() {
-                        busy = false;
-                        error = '$e';
-                      });
-                    }
-                  },
-          ),
-          for (final f in p.fields) ...[
-            const SizedBox(height: 8),
-            TextField(
-                controller: fields[f.key],
-                decoration: appInputDecoration(ctx, label: f.label, hint: f.hint)),
-          ],
-          if (error != null) ...[
-            const SizedBox(height: 8),
-            AppNotice(error!, icon: Icons.error_outline_rounded, color: Colors.red),
-          ],
-          const SizedBox(height: 14),
-          PrimaryButton(
-            label: 'Connect',
-            busy: busy,
-            onPressed: () async {
-              if (p.tokenLabel != null &&
-                  token.text.trim().isEmpty &&
-                  !await McpOAuth.hasTokens(presetUrl(p, {for (final e in fields.entries) e.key: e.value.text}))) {
-                setS(() => error = 'Paste a token, or use "Sign in with browser".');
-                return;
-              }
-              final cfg = McpServerConfig(
-                id: 'test',
-                name: p.name,
-                url: presetUrl(p, {for (final e in fields.entries) e.key: e.value.text}),
-                token: token.text.trim(),
-              );
-              setS(() {
-                busy = true;
-                error = null;
-              });
-              try {
-                final tools = await _agent.testServer(cfg);
-                await _agent.addServer(cfg.name, cfg.url, cfg.token);
-                if (ctx.mounted) Navigator.pop(ctx);
-                showToast('Connected', '${p.name}: ${tools.length} tools', tone: ToastTone.success);
-              } catch (e) {
-                setS(() {
-                  busy = false;
-                  error = '$e';
-                });
-              }
-            },
-          ),
-        ]);
+                  }
+                },
+              ),
+            ]);
       });
     });
     token.dispose();
@@ -400,42 +462,50 @@ class _ChatToolsViewState extends State<ChatToolsView> {
   Future<void> _paste() async {
     final ctl = TextEditingController();
     String? msg;
-    await showAppSheet<void>(context, title: 'Paste a config or URL', builder: (ctx) {
+    await showAppSheet<void>(context, title: 'Paste a config or URL',
+        builder: (ctx) {
       return StatefulBuilder(builder: (ctx, setS) {
-        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          TextField(
-            controller: ctl,
-            minLines: 5,
-            maxLines: 10,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5),
-            decoration: appInputDecoration(ctx,
-                hint: '{"mcpServers":{"name":{"url":"https://…","headers":{"Authorization":"Bearer …"}}}}'),
-          ),
-          if (msg != null) ...[
-            const SizedBox(height: 8),
-            AppNotice(msg!),
-          ],
-          const SizedBox(height: 12),
-          PrimaryButton(
-            label: 'Add',
-            onPressed: () async {
-              final r = parseMcpConfig(ctl.text);
-              if (r.servers.isEmpty) {
-                setS(() => msg = r.skipped.isEmpty
-                    ? 'Nothing to add.'
-                    : 'Could not use: ${r.skipped.join('; ')}');
-                return;
-              }
-              for (final s in r.servers) {
-                await _agent.addServer(s.name, s.url, '', headers: s.headers);
-              }
-              if (ctx.mounted) Navigator.pop(ctx);
-              showToast('Added ${r.servers.length}',
-                  r.skipped.isEmpty ? 'Connecting…' : 'Skipped: ${r.skipped.join('; ')}',
-                  tone: ToastTone.success);
-            },
-          ),
-        ]);
+        return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                controller: ctl,
+                minLines: 5,
+                maxLines: 10,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5),
+                decoration: appInputDecoration(ctx,
+                    hint:
+                        '{"mcpServers":{"name":{"url":"https://…","headers":{"Authorization":"Bearer …"}}}}'),
+              ),
+              if (msg != null) ...[
+                const SizedBox(height: 8),
+                AppNotice(msg!),
+              ],
+              const SizedBox(height: 12),
+              PrimaryButton(
+                label: 'Add',
+                onPressed: () async {
+                  final r = parseMcpConfig(ctl.text);
+                  if (r.servers.isEmpty) {
+                    setS(() => msg = r.skipped.isEmpty
+                        ? 'Nothing to add.'
+                        : 'Could not use: ${r.skipped.join('; ')}');
+                    return;
+                  }
+                  for (final s in r.servers) {
+                    await _agent.addServer(s.name, s.url, '',
+                        headers: s.headers);
+                  }
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  showToast(
+                      'Added ${r.servers.length}',
+                      r.skipped.isEmpty
+                          ? 'Connecting…'
+                          : 'Skipped: ${r.skipped.join('; ')}',
+                      tone: ToastTone.success);
+                },
+              ),
+            ]);
       });
     });
     ctl.dispose();
@@ -448,7 +518,9 @@ class _ChatToolsViewState extends State<ChatToolsView> {
     final headers = TextEditingController(
         text: existing == null
             ? ''
-            : existing.headers.entries.map((e) => '${e.key}: ${e.value}').join('\n'));
+            : existing.headers.entries
+                .map((e) => '${e.key}: ${e.value}')
+                .join('\n'));
     String? result;
     var ok = false;
     var busy = false;
@@ -457,7 +529,8 @@ class _ChatToolsViewState extends State<ChatToolsView> {
       final out = <String, String>{};
       for (final line in headers.text.split('\n')) {
         final i = line.indexOf(':');
-        if (i > 0) out[line.substring(0, i).trim()] = line.substring(i + 1).trim();
+        if (i > 0)
+          out[line.substring(0, i).trim()] = line.substring(i + 1).trim();
       }
       return out;
     }
@@ -472,178 +545,202 @@ class _ChatToolsViewState extends State<ChatToolsView> {
           disabledTools: existing?.disabledTools ?? const {},
         );
 
-    await showAppSheet<void>(
-        context,
+    await showAppSheet<void>(context,
         title: existing == null ? 'Add a server' : existing.name,
         builder: (ctx) {
       return StatefulBuilder(builder: (ctx, setS) {
-        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          TextField(controller: name, decoration: appInputDecoration(ctx, label: 'Name')),
-          const SizedBox(height: 8),
-          TextField(
-              controller: url,
-              keyboardType: TextInputType.url,
-              decoration: appInputDecoration(ctx, label: 'Server URL', hint: 'https://…/mcp')),
-          const SizedBox(height: 8),
-          TextField(
-              controller: token,
-              obscureText: true,
-              decoration: appInputDecoration(ctx, label: 'Bearer token (optional)')),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              icon: const Icon(Icons.login_rounded, size: 18),
-              label: FutureBuilder<bool>(
-                future: McpOAuth.hasTokens(url.text.trim()),
-                builder: (_, snapshot) => Text(snapshot.data == true
-                    ? 'Signed in · sign in again'
-                    : 'Sign in with browser'),
+        return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                  controller: name,
+                  decoration: appInputDecoration(ctx, label: 'Name')),
+              const SizedBox(height: 8),
+              TextField(
+                  controller: url,
+                  keyboardType: TextInputType.url,
+                  decoration: appInputDecoration(ctx,
+                      label: 'Server URL', hint: 'https://…/mcp')),
+              const SizedBox(height: 8),
+              TextField(
+                  controller: token,
+                  obscureText: true,
+                  decoration: appInputDecoration(ctx,
+                      label: 'Bearer token (optional)')),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  icon: const Icon(Icons.login_rounded, size: 18),
+                  label: FutureBuilder<bool>(
+                    future: McpOAuth.hasTokens(url.text.trim()),
+                    builder: (_, snapshot) => Text(snapshot.data == true
+                        ? 'Signed in · sign in again'
+                        : 'Sign in with browser'),
+                  ),
+                  onPressed: busy
+                      ? null
+                      : () async {
+                          final u = url.text.trim();
+                          if (u.isEmpty) {
+                            setS(() {
+                              ok = false;
+                              result = 'Enter the server URL first.';
+                            });
+                            return;
+                          }
+                          setS(() {
+                            busy = true;
+                            ok = true;
+                            result = 'Opening your browser…';
+                          });
+                          try {
+                            await McpOAuth.signIn(u,
+                                onStatus: (m) => setS(() => result = m));
+                            final tools = await _agent.testServer(build());
+                            setS(() {
+                              ok = true;
+                              result =
+                                  'Signed in. ${tools.length} tools available.';
+                            });
+                          } catch (e) {
+                            setS(() {
+                              ok = false;
+                              result = '$e';
+                            });
+                          } finally {
+                            setS(() => busy = false);
+                          }
+                        },
+                ),
               ),
-              onPressed: busy
-                  ? null
-                  : () async {
-                      final u = url.text.trim();
-                      if (u.isEmpty) {
+              const SizedBox(height: 4),
+              TextField(
+                  controller: headers,
+                  minLines: 1,
+                  maxLines: 4,
+                  decoration: appInputDecoration(ctx,
+                      label: 'Other headers (optional)',
+                      hint: 'Header-Name: value, one per line')),
+              if (result != null) ...[
+                const SizedBox(height: 8),
+                AppNotice(result!,
+                    icon: ok
+                        ? Icons.check_circle_outline_rounded
+                        : Icons.error_outline_rounded,
+                    color: ok ? Colors.green : Colors.red),
+              ],
+              const SizedBox(height: 12),
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: busy
+                        ? null
+                        : () async {
+                            setS(() {
+                              busy = true;
+                              result = null;
+                            });
+                            try {
+                              final tools = await _agent.testServer(build());
+                              setS(() {
+                                ok = true;
+                                result =
+                                    'Works: ${tools.length} tools (${tools.take(4).map((e) => e.name).join(', ')}${tools.length > 4 ? '…' : ''})';
+                              });
+                            } catch (e) {
+                              setS(() {
+                                ok = false;
+                                result = '$e';
+                              });
+                            } finally {
+                              setS(() => busy = false);
+                            }
+                          },
+                    child: const Text('Test'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () async {
+                      final cfg = build();
+                      if (cfg.url.isEmpty) {
                         setS(() {
                           ok = false;
-                          result = 'Enter the server URL first.';
+                          result = 'Enter the server URL.';
                         });
                         return;
                       }
-                      setS(() {
-                        busy = true;
-                        ok = true;
-                        result = 'Opening your browser…';
-                      });
-                      try {
-                        await McpOAuth.signIn(u, onStatus: (m) => setS(() => result = m));
-                        final tools = await _agent.testServer(build());
-                        setS(() {
-                          ok = true;
-                          result = 'Signed in. ${tools.length} tools available.';
-                        });
-                      } catch (e) {
-                        setS(() {
-                          ok = false;
-                          result = '$e';
-                        });
-                      } finally {
-                        setS(() => busy = false);
+                      if (existing == null) {
+                        await _agent.addServer(cfg.name, cfg.url, cfg.token,
+                            headers: cfg.headers);
+                      } else {
+                        await _agent.updateServer(cfg);
                       }
+                      if (ctx.mounted) Navigator.pop(ctx);
                     },
-            ),
-          ),
-          const SizedBox(height: 4),
-          TextField(
-              controller: headers,
-              minLines: 1,
-              maxLines: 4,
-              decoration: appInputDecoration(ctx,
-                  label: 'Other headers (optional)', hint: 'Header-Name: value, one per line')),
-          if (result != null) ...[
-            const SizedBox(height: 8),
-            AppNotice(result!,
-                icon: ok ? Icons.check_circle_outline_rounded : Icons.error_outline_rounded,
-                color: ok ? Colors.green : Colors.red),
-          ],
-          const SizedBox(height: 12),
-          Row(children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: busy
-                    ? null
-                    : () async {
-                        setS(() {
-                          busy = true;
-                          result = null;
-                        });
-                        try {
-                          final tools = await _agent.testServer(build());
-                          setS(() {
-                            ok = true;
-                            result = 'Works: ${tools.length} tools (${tools.take(4).map((e) => e.name).join(', ')}${tools.length > 4 ? '…' : ''})';
-                          });
-                        } catch (e) {
-                          setS(() {
-                            ok = false;
-                            result = '$e';
-                          });
-                        } finally {
-                          setS(() => busy = false);
-                        }
-                      },
-                child: const Text('Test'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: FilledButton(
-                onPressed: () async {
-                  final cfg = build();
-                  if (cfg.url.isEmpty) {
-                    setS(() {
-                      ok = false;
-                      result = 'Enter the server URL.';
-                    });
-                    return;
-                  }
-                  if (existing == null) {
-                    await _agent.addServer(cfg.name, cfg.url, cfg.token, headers: cfg.headers);
-                  } else {
-                    await _agent.updateServer(cfg);
-                  }
-                  if (ctx.mounted) Navigator.pop(ctx);
-                },
-                child: Text(existing == null ? 'Add' : 'Save'),
-              ),
-            ),
-          ]),
-          if (existing != null) ...[
-            const SizedBox(height: 16),
-            Obx(() {
-              if (_agent.toolsVersion.value < 0) return const SizedBox.shrink(); // rebuilds when tools change
-              final tools = _agent.toolsOf(existing.id);
-              final s = _agent.servers.firstWhereOrNull((x) => x.id == existing.id) ?? existing;
-              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                AppRow(
-                  icon: Icons.power_settings_new_rounded,
-                  title: 'Enabled',
-                  trailing: Switch(
-                      value: s.enabled, onChanged: (v) => _agent.setEnabled(existing.id, v)),
+                    child: Text(existing == null ? 'Add' : 'Save'),
+                  ),
                 ),
-                if (tools.isNotEmpty) ...[
-                  const SectionHeader('Tools'),
-                  AppGroup(children: [
-                    for (final tl in tools)
-                      _PolicyRow(
-                        title: tl.name,
-                        subtitle: tl.description,
-                        value: s.disabledTools.contains(tl.name)
-                            ? 'block'
-                            : _agent.policyFor(s.name, tl.name, needsConfirm: true),
-                        onChanged: (v) async {
-                          if (v == 'block') {
-                            await _agent.setToolEnabled(existing.id, tl.name, false);
-                          } else {
-                            await _agent.setToolEnabled(existing.id, tl.name, true);
-                            await _agent.setPolicy(s.name, tl.name, v);
-                          }
-                        },
-                      ),
-                  ]),
-                ],
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () async {
-                    await _agent.removeServer(existing.id);
-                    if (ctx.mounted) Navigator.pop(ctx);
-                  },
-                  child: const Text('Remove this server', style: TextStyle(color: Colors.red)),
-                ),
-              ]);
-            }),
-          ],
-        ]);
+              ]),
+              if (existing != null) ...[
+                const SizedBox(height: 16),
+                Obx(() {
+                  if (_agent.toolsVersion.value < 0)
+                    return const SizedBox
+                        .shrink(); // rebuilds when tools change
+                  final tools = _agent.toolsOf(existing.id);
+                  final s = _agent.servers
+                          .firstWhereOrNull((x) => x.id == existing.id) ??
+                      existing;
+                  return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        AppRow(
+                          icon: Icons.power_settings_new_rounded,
+                          title: 'Enabled',
+                          trailing: Switch(
+                              value: s.enabled,
+                              onChanged: (v) =>
+                                  _agent.setEnabled(existing.id, v)),
+                        ),
+                        if (tools.isNotEmpty) ...[
+                          const SectionHeader('Tools'),
+                          AppGroup(children: [
+                            for (final tl in tools)
+                              _PolicyRow(
+                                title: tl.name,
+                                subtitle: tl.description,
+                                value: s.disabledTools.contains(tl.name)
+                                    ? 'block'
+                                    : _agent.policyFor(s.name, tl.name,
+                                        needsConfirm: true),
+                                onChanged: (v) async {
+                                  if (v == 'block') {
+                                    await _agent.setToolEnabled(
+                                        existing.id, tl.name, false);
+                                  } else {
+                                    await _agent.setToolEnabled(
+                                        existing.id, tl.name, true);
+                                    await _agent.setPolicy(s.name, tl.name, v);
+                                  }
+                                },
+                              ),
+                          ]),
+                        ],
+                        const SizedBox(height: 8),
+                        TextButton(
+                          onPressed: () async {
+                            await _agent.removeServer(existing.id);
+                            if (ctx.mounted) Navigator.pop(ctx);
+                          },
+                          child: const Text('Remove this server',
+                              style: TextStyle(color: Colors.red)),
+                        ),
+                      ]);
+                }),
+              ],
+            ]);
       });
     });
     name.dispose();
@@ -673,7 +770,8 @@ class _PolicyRow extends StatelessWidget {
     };
     return AppRow(
       title: title,
-      subtitle: subtitle.length > 90 ? '${subtitle.substring(0, 90)}…' : subtitle,
+      subtitle:
+          subtitle.length > 90 ? '${subtitle.substring(0, 90)}…' : subtitle,
       trailing: PopupMenuButton<String>(
         tooltip: 'Permission',
         initialValue: value,
@@ -687,7 +785,8 @@ class _PolicyRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Text(_ChatToolsViewState._label(value),
-                style: TextStyle(color: color, fontWeight: FontWeight.w600, fontSize: 13)),
+                style: TextStyle(
+                    color: color, fontWeight: FontWeight.w600, fontSize: 13)),
             Icon(Icons.arrow_drop_down_rounded, color: color),
           ]),
         ),
@@ -730,7 +829,8 @@ class AlpineTerminalViewState extends State<AlpineTerminalView> {
   final _output = ScrollController();
   final _entries = <String>[];
   late final _agent = Get.find<AgentService>();
-  late final _project = _agent.projectForChat(Get.find<ChatController>().currentSessionId.value);
+  late final _project =
+      _agent.projectForChat(Get.find<ChatController>().currentSessionId.value);
   bool _running = false;
   String _cwd = '/workspace';
 
@@ -786,14 +886,19 @@ $command""";
           if (!_sandbox.installed.value) {
             return Center(
               child: FilledButton(
-                onPressed: _sandbox.busy.value ? null : () async {
-                  try {
-                    await _sandbox.install();
-                  } catch (error) {
-                    if (context.mounted) showToast('Install failed', '$error');
-                  }
-                },
-                child: Text(_sandbox.busy.value ? _sandbox.status.value : 'Install Alpine Linux'),
+                onPressed: _sandbox.busy.value
+                    ? null
+                    : () async {
+                        try {
+                          await _sandbox.install();
+                        } catch (error) {
+                          if (context.mounted)
+                            showToast('Install failed', '$error');
+                        }
+                      },
+                child: Text(_sandbox.busy.value
+                    ? _sandbox.status.value
+                    : 'Install Alpine Linux'),
               ),
             );
           }
@@ -871,17 +976,24 @@ class _WorkspaceState extends State<_Workspace> {
           if (f is! File) continue;
           final st = await f.stat();
           if (st.type != FileSystemEntityType.file) continue;
-          out.add(FileSystemEntityInfo(f.path, f.uri.pathSegments.last, st.size));
+          out.add(
+              FileSystemEntityInfo(f.path, f.uri.pathSegments.last, st.size));
         }
         out.sort((a, b) => a.name.compareTo(b.name));
         final archived = await widget.agent.archivedWorkspaceFiles();
-        return (out, archived.where((name) => !out.any((item) => item.name == name)).toList());
+        return (
+          out,
+          archived
+              .where((name) => !out.any((item) => item.name == name))
+              .toList()
+        );
       });
-      if (mounted && _project == project) setState(() {
-        _items = items;
-        _archived = archived;
-        _error = null;
-      });
+      if (mounted && _project == project)
+        setState(() {
+          _items = items;
+          _archived = archived;
+          _error = null;
+        });
     } catch (_) {
       if (mounted) setState(() => _error = 'The workspace could not be read.');
     }
@@ -903,9 +1015,15 @@ class _WorkspaceState extends State<_Workspace> {
           onChanged: (value) => name = value,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(dialog, ''), child: const Text('Use shared workspace')),
-          FilledButton(onPressed: () => Navigator.pop(dialog, name.trim()), child: const Text('Save')),
+          TextButton(
+              onPressed: () => Navigator.pop(dialog),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(dialog, ''),
+              child: const Text('Use shared workspace')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialog, name.trim()),
+              child: const Text('Save')),
         ],
       ),
     );
@@ -927,8 +1045,8 @@ class _WorkspaceState extends State<_Workspace> {
 
   Future<void> _history(String name) async {
     final project = _project;
-    final versions = await widget.agent.inProject(project,
-        () => widget.agent.workspaceVersions(name));
+    final versions = await widget.agent
+        .inProject(project, () => widget.agent.workspaceVersions(name));
     if (!mounted) return;
     final selected = await showAppSheet<int>(
       context,
@@ -939,7 +1057,11 @@ class _WorkspaceState extends State<_Workspace> {
           : Column(children: [
               for (final version in versions)
                 ListTile(
-                  title: Text(DateTime.fromMicrosecondsSinceEpoch(version).toLocal().toString().split('.').first),
+                  title: Text(DateTime.fromMicrosecondsSinceEpoch(version)
+                      .toLocal()
+                      .toString()
+                      .split('.')
+                      .first),
                   trailing: const Icon(Icons.restore_rounded),
                   onTap: () => Navigator.pop(context, version),
                 ),
@@ -947,12 +1069,14 @@ class _WorkspaceState extends State<_Workspace> {
     );
     if (selected == null || !mounted) return;
     try {
-      final restored = await widget.agent.inProject(project,
-          () => widget.agent.restoreWorkspaceVersion(name, selected));
-      if (mounted) showToast(restored ? 'File restored' : 'Version unavailable', name);
+      final restored = await widget.agent.inProject(
+          project, () => widget.agent.restoreWorkspaceVersion(name, selected));
+      if (mounted)
+        showToast(restored ? 'File restored' : 'Version unavailable', name);
       await _load();
     } catch (_) {
-      if (mounted) showToast('Could not restore the file', name, tone: ToastTone.error);
+      if (mounted)
+        showToast('Could not restore the file', name, tone: ToastTone.error);
     }
   }
 
@@ -977,8 +1101,10 @@ class _WorkspaceState extends State<_Workspace> {
         AppRow(
           icon: Icons.insert_drive_file_outlined,
           title: f.name,
-          onTap: () => widget.agent.inProject(_project, () => openAgentFile(context, Uri.encodeComponent(f.name))),
-          subtitle: '${(f.size / 1024).toStringAsFixed(f.size < 10240 ? 1 : 0)} KB · AI workspace',
+          onTap: () => widget.agent.inProject(_project,
+              () => openAgentFile(context, Uri.encodeComponent(f.name))),
+          subtitle:
+              '${(f.size / 1024).toStringAsFixed(f.size < 10240 ? 1 : 0)} KB · AI workspace',
           trailing: PopupMenuButton<String>(
             tooltip: 'File actions',
             itemBuilder: (_) => const [
@@ -989,7 +1115,8 @@ class _WorkspaceState extends State<_Workspace> {
               if (action == 'history') {
                 await _history(f.name);
               } else {
-                await widget.agent.inProject(_project, () => widget.agent.deleteWorkspaceFile(f.name));
+                await widget.agent.inProject(
+                    _project, () => widget.agent.deleteWorkspaceFile(f.name));
                 await _load();
               }
             },
@@ -1009,7 +1136,8 @@ class _WorkspaceState extends State<_Workspace> {
           final r = await FilePicker.pickFiles(type: FileType.any);
           final f = r?.files.single;
           if (f?.path == null) return;
-          await widget.agent.inProject(_project, () => widget.agent.importToWorkspace(f!.path!, f.name));
+          await widget.agent.inProject(
+              _project, () => widget.agent.importToWorkspace(f!.path!, f.name));
           _load();
         },
       ),
@@ -1023,7 +1151,6 @@ class FileSystemEntityInfo {
   final int size;
   const FileSystemEntityInfo(this.path, this.name, this.size);
 }
-
 
 class _SandboxCard extends StatelessWidget {
   const _SandboxCard();
@@ -1045,13 +1172,20 @@ class _SandboxCard extends StatelessWidget {
                     ? 'The AI can run commands, create files and deploy from here'
                     : 'About 4 MB download. Lets the AI run real commands (python, node, git, curl…).',
             trailing: sb.busy.value
-                ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(value: sb.downloadProgress.value, strokeWidth: 2))
+                ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        value: sb.downloadProgress.value, strokeWidth: 2))
                 : sb.installed.value
                     ? IconButton(
                         icon: const Icon(Icons.delete_outline),
                         onPressed: () async {
-                          try { await sb.uninstall(); }
-                          catch (error) { Get.snackbar('Linux is busy', '$error'); }
+                          try {
+                            await sb.uninstall();
+                          } catch (error) {
+                            Get.snackbar('Linux is busy', '$error');
+                          }
                         })
                     : IconButton(
                         icon: const Icon(Icons.download_rounded),
@@ -1059,7 +1193,8 @@ class _SandboxCard extends StatelessWidget {
                           try {
                             await sb.install();
                           } catch (e) {
-                            Get.snackbar('Install failed', '$e'.replaceFirst('Exception: ', ''));
+                            Get.snackbar('Install failed',
+                                '$e'.replaceFirst('Exception: ', ''));
                           }
                         }),
           ),

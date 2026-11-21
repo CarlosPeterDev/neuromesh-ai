@@ -17,6 +17,18 @@ import 'hive_service.dart';
 import 'voice_models.dart';
 import 'workload_placement.dart';
 
+/// Android voice catalog entries must explicitly allow offline synthesis.
+bool isOfflineSystemVoice(Map voice) {
+  final network = voice['network_required'];
+  final offline = network == '0' || network == 0 || network == false;
+  final features = '${voice['features'] ?? ''}'.toLowerCase();
+  return offline &&
+      !features.contains('notinstalled') &&
+      !features.contains('networktts') &&
+      voice['name'] is String &&
+      voice['locale'] is String;
+}
+
 /// Pure helper: float samples in [-1,1] to a 16-bit mono WAV file body.
 Uint8List encodeWav(Float32List samples, int sampleRate) {
   final data = ByteData(44 + samples.length * 2);
@@ -97,7 +109,8 @@ Float32List resampleWav(Float32List samples, int from, int to) {
     final position = i * from / to;
     final left = math.min(position.floor(), samples.length - 1);
     final right = math.min(left + 1, samples.length - 1);
-    output[i] = samples[left] + (samples[right] - samples[left]) * (position - left);
+    output[i] =
+        samples[left] + (samples[right] - samples[left]) * (position - left);
   }
   return output;
 }
@@ -131,7 +144,9 @@ List<String> speechChunks(String text) {
   for (final m in re.allMatches(visible.substring(from))) {
     final end = from + m.end;
     // A trailing '.' at the very end may be a decimal point still being typed.
-    if (!flush && m.end == visible.length - from && !m.group(0)!.endsWith(' ') &&
+    if (!flush &&
+        m.end == visible.length - from &&
+        !m.group(0)!.endsWith(' ') &&
         !m.group(0)!.contains('\n')) {
       break;
     }
@@ -176,13 +191,15 @@ class VoiceService extends GetxService {
 
   Future<T> _withTts<T>(Future<T> Function() action) {
     final result = _ttsQueue.then((_) => action());
-    _ttsQueue = result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    _ttsQueue =
+        result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
     return result;
   }
 
   Future<T> _withStt<T>(Future<T> Function() action) {
     final result = _sttQueue.then((_) => action());
-    _sttQueue = result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    _sttQueue =
+        result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
     return result;
   }
 
@@ -192,15 +209,101 @@ class VoiceService extends GetxService {
     final saved = hive.getSetting<int>('voice_speaker_${model.id}') ??
         (hive.getSetting<String>('voice_tts_id') == model.id
             ? hive.getSetting<int>('voice_sid')
-            : null) ?? 0;
+            : null) ??
+        0;
     return saved.clamp(0, model.speakers.length - 1);
   }
 
   static Future<void> saveSpeaker(VoiceModelInfo model, int index) =>
       Get.find<HiveService>().setSetting('voice_speaker_${model.id}', index);
 
-
   final AudioPlayer _player;
+  final systemFileTtsAvailable = false.obs;
+  @override
+  void onInit() {
+    super.onInit();
+    unawaited(detectSystemFileTts());
+  }
+
+  Future<void> detectSystemFileTts() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final tts = _system ??= FlutterTts();
+      final engine = await tts.getDefaultEngine;
+      final voices = await tts.getVoices;
+      systemFileTtsAvailable.value = engine is String &&
+          engine.isNotEmpty &&
+          voices is List &&
+          voices.whereType<Map>().any(isOfflineSystemVoice);
+    } catch (_) {
+      systemFileTtsAvailable.value = false;
+    }
+  }
+
+  Future<List<Map<String, String>>> availableSystemVoices() async {
+    if (!Platform.isAndroid) return const [];
+    await detectSystemFileTts();
+    if (!systemFileTtsAvailable.value) return const [];
+    final voices = await _system!.getVoices;
+    if (voices is! List) return const [];
+    return voices
+        .whereType<Map>()
+        .where(isOfflineSystemVoice)
+        .where((v) => v['name'] is String && v['locale'] is String)
+        .map((v) =>
+            {'name': v['name'] as String, 'locale': v['locale'] as String})
+        .toList();
+  }
+
+  Future<Uint8List> _systemWav(String text, String language, String voice) =>
+      _withTts(() async {
+        await detectSystemFileTts();
+        if (!systemFileTtsAvailable.value)
+          throw StateError(
+              'No Android TTS engine with installed voices is available.');
+        final tts = _system!;
+        final voices = (await tts.getVoices as List)
+            .whereType<Map>()
+            .where(isOfflineSystemVoice)
+            .toList();
+        final matches = voices
+            .where((v) =>
+                (language.isEmpty ||
+                    '${v['locale']}'
+                        .toLowerCase()
+                        .startsWith(language.toLowerCase())) &&
+                (voice.isEmpty || v['name'] == voice))
+            .toList();
+        if (matches.isEmpty)
+          throw StateError(
+              'No installed offline system voice matches the requested language/voice.');
+        final chosen = matches.first;
+        if (await tts.setLanguage(chosen['locale'] as String) != 1)
+          throw StateError('TTS language is unavailable.');
+        if (await tts.setVoice({
+              'name': chosen['name'] as String,
+              'locale': chosen['locale'] as String
+            }) !=
+            1) throw StateError('The offline TTS voice could not be selected.');
+        await tts.awaitSynthCompletion(true);
+        final temp = await Directory.systemTemp.createTemp('neuromesh-tts-');
+        final file = File('${temp.path}/speech.wav');
+        try {
+          final result = await tts
+              .synthesizeToFile(text, file.path, true)
+              .timeout(const Duration(seconds: 90));
+          if (result != 1 || !await file.exists())
+            throw StateError('The TTS engine did not create an audio file.');
+          final bytes = await file.readAsBytes();
+          if (decodeWav(bytes)?.samples.isNotEmpty != true)
+            throw StateError(
+                'The TTS engine returned an unsupported or empty WAV.');
+          return bytes;
+        } finally {
+          await temp.delete(recursive: true);
+        }
+      });
+
   FlutterTts? _system;
   bool _stopSpeaking = false;
   bool _isClone = false;
@@ -254,6 +357,16 @@ class VoiceService extends GetxService {
   }
 
   bool get sttReady => _stt != null;
+  bool get canSynthesizeFiles =>
+      systemFileTtsAvailable.value ||
+      (Get.isRegistered<VoiceModelStore>() &&
+          pickInstalled(VoiceKind.tts) != null) ||
+      WorkloadPlacement.forWorkload(PhoneWorkload.speech) != null;
+  bool get canTranscribeFiles =>
+      (Get.isRegistered<VoiceModelStore>() &&
+          pickInstalled(VoiceKind.stt) != null) ||
+      WorkloadPlacement.forWorkload(PhoneWorkload.transcription) != null;
+
   bool get ttsReady => _tts != null;
 
   void _initBindings() {
@@ -293,10 +406,14 @@ class VoiceService extends GetxService {
         debug: false,
       );
     } else {
-      final enc = await _firstFile(dir, (p) => p.contains('encoder') && p.endsWith('.int8.onnx'))
-          .catchError((_) => _firstFile(dir, (p) => p.contains('encoder') && p.endsWith('.onnx')));
-      final dec = await _firstFile(dir, (p) => p.contains('decoder') && p.endsWith('.int8.onnx'))
-          .catchError((_) => _firstFile(dir, (p) => p.contains('decoder') && p.endsWith('.onnx')));
+      final enc = await _firstFile(
+              dir, (p) => p.contains('encoder') && p.endsWith('.int8.onnx'))
+          .catchError((_) => _firstFile(
+              dir, (p) => p.contains('encoder') && p.endsWith('.onnx')));
+      final dec = await _firstFile(
+              dir, (p) => p.contains('decoder') && p.endsWith('.int8.onnx'))
+          .catchError((_) => _firstFile(
+              dir, (p) => p.contains('decoder') && p.endsWith('.onnx')));
       model = sherpa.OfflineModelConfig(
         whisper: sherpa.OfflineWhisperModelConfig(
             encoder: enc, decoder: dec, language: language, task: 'transcribe'),
@@ -324,8 +441,8 @@ class VoiceService extends GetxService {
     _initBindings();
     final dir = await Get.find<VoiceModelStore>().dirFor(m);
     if (m.clone) {
-      Future<String> f(String part, String ext) =>
-          _firstFile(dir, (p) => p.split('/').last.contains(part) && p.endsWith(ext));
+      Future<String> f(String part, String ext) => _firstFile(
+          dir, (p) => p.split('/').last.contains(part) && p.endsWith(ext));
       final cfg = sherpa.OfflineTtsConfig(
         model: sherpa.OfflineTtsModelConfig(
           pocket: sherpa.OfflineTtsPocketModelConfig(
@@ -355,7 +472,8 @@ class VoiceService extends GetxService {
           .listSync()
           .whereType<File>()
           .map((f) => f.path)
-          .where((p) => p.split('/').last.startsWith('lexicon') && p.endsWith('.txt'))
+          .where((p) =>
+              p.split('/').last.startsWith('lexicon') && p.endsWith('.txt'))
           .toList()
         ..sort();
       final fsts = Directory(dir)
@@ -384,8 +502,10 @@ class VoiceService extends GetxService {
               ),
               numThreads: 4,
               debug: false);
-      _replaceTts(m, sherpa.OfflineTtsConfig(
-          model: mc, ruleFsts: fsts.join(','), maxNumSentences: 1));
+      _replaceTts(
+          m,
+          sherpa.OfflineTtsConfig(
+              model: mc, ruleFsts: fsts.join(','), maxNumSentences: 1));
       return;
     }
     final model = await _firstFile(dir, (p) => p.endsWith('.onnx'));
@@ -431,7 +551,9 @@ class VoiceService extends GetxService {
   VoiceModelInfo? _requestedModel(VoiceKind kind, String id) {
     if (id.trim().isEmpty) return null;
     final model = voiceModelById(id.trim());
-    if (model == null || model.kind != kind || model.clone ||
+    if (model == null ||
+        model.kind != kind ||
+        model.clone ||
         !Get.find<VoiceModelStore>().installed.contains(model.id)) {
       throw ArgumentError('Choose an installed model ID from models_status.');
     }
@@ -442,7 +564,9 @@ class VoiceService extends GetxService {
   VoiceModelInfo? pickInstalled(VoiceKind k, {String lang = ''}) {
     final store = Get.find<VoiceModelStore>();
     final h = Get.find<HiveService>();
-    final picked = h.getSetting<String>(k == VoiceKind.stt ? 'voice_stt_id' : 'voice_tts_id') ?? '';
+    final picked = h.getSetting<String>(
+            k == VoiceKind.stt ? 'voice_stt_id' : 'voice_tts_id') ??
+        '';
     VoiceModelInfo? first;
     for (final m in kVoiceModels) {
       if (m.kind != k || m.clone || !store.installed.contains(m.id)) continue;
@@ -454,28 +578,36 @@ class VoiceService extends GetxService {
   }
 
   /// Transcribes an audio file (mp3, m4a, ogg, wav, mp4…) in 25-second pieces.
-  Future<String> transcribeFile(String path, {String language = '', String modelId = ''}) async {
+  Future<String> transcribeFile(String path,
+      {String language = '', String modelId = ''}) async {
     final requested = _requestedModel(VoiceKind.stt, modelId);
     Float32List? pcm;
     if (path.toLowerCase().endsWith('.wav')) {
       final decoded = decodeWav(await File(path).readAsBytes());
-      if (decoded != null) pcm = resampleWav(decoded.samples, decoded.rate, 16000);
+      if (decoded != null)
+        pcm = resampleWav(decoded.samples, decoded.rate, 16000);
     }
     pcm ??= await Get.find<DeviceBridge>().decodeAudio(path);
-    if (pcm == null || pcm.isEmpty) throw Exception('Could not read audio from this file.');
+    if (pcm == null || pcm.isEmpty)
+      throw Exception('Could not read audio from this file.');
     const piece = 16000 * 25;
     final out = StringBuffer();
     for (var i = 0; i < pcm.length; i += piece) {
       final end = math.min(i + piece, pcm.length);
-      final t = await transcribeSamples(
-          Float32List.sublistView(pcm, i, end), language: language, model: requested);
-      if (t.isNotEmpty) out..write(t)..write(' ');
+      final t = await transcribeSamples(Float32List.sublistView(pcm, i, end),
+          language: language, model: requested);
+      if (t.isNotEmpty)
+        out
+          ..write(t)
+          ..write(' ');
     }
     return out.toString().trim();
   }
 
   Future<String> transcribeSamples(Float32List samples,
-      {String language = '', bool allowWorker = true, VoiceModelInfo? model}) async {
+      {String language = '',
+      bool allowWorker = true,
+      VoiceModelInfo? model}) async {
     final worker = allowWorker && model == null
         ? WorkloadPlacement.forWorkload(PhoneWorkload.transcription)
         : null;
@@ -489,7 +621,8 @@ class VoiceService extends GetxService {
       return utf8.decode(bytes).trim();
     }
     final selected = model ?? pickInstalled(VoiceKind.stt);
-    if (selected == null) throw StateError('Install or assign a listening model.');
+    if (selected == null)
+      throw StateError('Install or assign a listening model.');
     return _withStt(() async {
       await _loadStt(selected, language: language);
       return transcribe(samples);
@@ -498,7 +631,13 @@ class VoiceService extends GetxService {
 
   /// Speaks [text] with the chosen voice into a WAV file's bytes.
   Future<Uint8List> synthesizeToWav(String text,
-      {String lang = '', bool allowWorker = true, String modelId = '', String speaker = ''}) async {
+      {String lang = '',
+      bool allowWorker = true,
+      String modelId = '',
+      String speaker = ''}) async {
+    if (text.trim().isEmpty || text.length > 50000)
+      throw ArgumentError('Speech needs 1 to 50,000 characters.');
+    if (modelId == 'system') return _systemWav(text, lang, speaker);
     final requested = _requestedModel(VoiceKind.tts, modelId);
     final worker = allowWorker && requested == null && speaker.trim().isEmpty
         ? WorkloadPlacement.forWorkload(PhoneWorkload.speech)
@@ -510,17 +649,24 @@ class VoiceService extends GetxService {
     }
     final m = requested ?? pickInstalled(VoiceKind.tts, lang: lang);
     if (m == null) {
-      throw StateError('Download a speaking model in Models → Voice.');
+      if (modelId.isNotEmpty)
+        throw StateError('The selected speaking model is unavailable.');
+      return _systemWav(text, lang, speaker);
     }
-    final voice = speaker.trim().isEmpty ? savedSpeaker(m) : m.speakerIndexFor(speaker);
-    if (voice == null) throw ArgumentError('Choose a speaker listed for ${m.id} in models_status.');
-    final rateMultiplier = Get.find<HiveService>().getSetting<double>('voice_speed') ?? 1.0;
+    final voice =
+        speaker.trim().isEmpty ? savedSpeaker(m) : m.speakerIndexFor(speaker);
+    if (voice == null)
+      throw ArgumentError(
+          'Choose a speaker listed for ${m.id} in models_status.');
+    final rateMultiplier =
+        Get.find<HiveService>().getSetting<double>('voice_speed') ?? 1.0;
     return _withTts(() async {
       await _loadTts(m);
       final parts = <Float32List>[];
       var rate = 22050;
       for (final c in speechChunks(text)) {
-        final r = synthesize(c, speakerIndex: voice, speakingSpeed: rateMultiplier);
+        final r =
+            synthesize(c, speakerIndex: voice, speakingSpeed: rateMultiplier);
         if (r == null) continue;
         parts.add(r.samples);
         rate = r.rate;
@@ -533,6 +679,50 @@ class VoiceService extends GetxService {
         o += p.length;
       }
       return encodeWav(all, rate);
+    });
+  }
+
+  Future<Uint8List> synthesizeClonedToWav(
+      String text, Float32List reference, int rate) async {
+    if (text.trim().isEmpty ||
+        text.length > 50000 ||
+        reference.isEmpty ||
+        rate <= 0) {
+      throw ArgumentError(
+          'Valid text and a saved voice reference are required.');
+    }
+    final model = voiceModelById('pocket-tts-clone');
+    if (model == null ||
+        !Get.isRegistered<VoiceModelStore>() ||
+        !Get.find<VoiceModelStore>().installed.contains(model.id)) {
+      throw StateError('Install the local cloning model first.');
+    }
+    return _withTts(() async {
+      final previousReference = _cloneRef, previousRate = _cloneRate;
+      try {
+        await _loadTts(model);
+        setCloneVoice(reference, rate);
+        final parts = <Float32List>[];
+        var outputRate = 24000;
+        for (final chunk in speechChunks(text)) {
+          final audio = synthesize(chunk);
+          if (audio == null || audio.samples.isEmpty)
+            throw StateError('The clone model returned no audio.');
+          parts.add(audio.samples);
+          outputRate = audio.rate;
+        }
+        final samples =
+            Float32List(parts.fold<int>(0, (size, p) => size + p.length));
+        var offset = 0;
+        for (final part in parts) {
+          samples.setRange(offset, offset + part.length, part);
+          offset += part.length;
+        }
+        return encodeWav(samples, outputRate);
+      } finally {
+        _cloneRef = previousReference;
+        _cloneRate = previousRate;
+      }
     });
   }
 
@@ -626,7 +816,8 @@ class VoiceService extends GetxService {
         model != null && voice >= 0 && voice < model.speakers.length
             ? model.speakers[voice]
             : '';
-    final locale = RegExp(r'\(([A-Z]{2}) [FM]\)$').firstMatch(speakerName)?.group(1);
+    final locale =
+        RegExp(r'\(([A-Z]{2}) [FM]\)$').firstMatch(speakerName)?.group(1);
     final phonemizerVoice = switch (locale) {
       'UK' => 'en-gb',
       'ES' => 'es',
@@ -698,10 +889,9 @@ class VoiceService extends GetxService {
   Future<bool> pingWorker() async {
     if (workerUrl.isEmpty) return false;
     try {
-      final res = await http
-          .get(Uri.parse('$workerUrl/ping'),
-              headers: {'Authorization': 'Bearer $workerToken'})
-          .timeout(const Duration(seconds: 6));
+      final res = await http.get(Uri.parse('$workerUrl/ping'), headers: {
+        'Authorization': 'Bearer $workerToken'
+      }).timeout(const Duration(seconds: 6));
       return res.statusCode == 200;
     } catch (_) {
       return false;

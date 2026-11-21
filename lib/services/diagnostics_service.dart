@@ -8,14 +8,12 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
-import '../ffi/sd_ffi_bindings.dart';
 import '../core/redact.dart';
 import '../core/build_flavor.dart';
 import 'app_log_service.dart';
 import 'device_bridge.dart';
 import 'hive_service.dart';
 import 'inference_service.dart';
-import 'local_image_service.dart';
 import 'model_load_diagnostics.dart';
 import 'telegram_report_delivery.dart';
 
@@ -92,16 +90,6 @@ class DiagnosticsService {
           ..writeln('Context size: ${service.contextTokensTotal.value}');
       }
     }
-    if (Get.isRegistered<LocalImageService>()) {
-      final service = Get.find<LocalImageService>();
-      if (service.isModelLoaded.value) {
-        report
-          ..writeln('Active image model: ${service.loadedModelName.value}')
-          ..writeln(
-            'Image backend: ${service.currentBackend.value.displayName}',
-          );
-      }
-    }
     if (Get.isRegistered<HiveService>()) {
       final hive = Get.find<HiveService>();
       for (final (title, key) in [
@@ -139,7 +127,6 @@ class DiagnosticsService {
           .where((entry) =>
               entry.isImportant ||
               entry.message.startsWith('[Inference]') ||
-              entry.message.startsWith('[LocalImageService]') ||
               entry.message.startsWith('[ModelController]'))
           .take(80)
           .toList();

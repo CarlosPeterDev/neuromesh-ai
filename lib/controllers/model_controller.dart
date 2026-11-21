@@ -12,7 +12,6 @@ import '../utils/model_file_role.dart';
 import '../utils/model_fit.dart';
 import '../services/gguf_metadata.dart';
 import '../services/inference_service.dart';
-import '../services/local_image_service.dart';
 import '../services/hive_service.dart';
 import '../services/app_log_service.dart';
 import '../services/device_info_service.dart';
@@ -22,7 +21,6 @@ import '../services/model_artifact_metadata.dart';
 import '../services/model_helper_service.dart';
 import '../views/diagnostics_view.dart';
 import '../models/ai_model.dart';
-import '../ffi/sd_ffi_bindings.dart';
 import '../core/constants.dart';
 import '../core/ui.dart';
 import '../services/cluster_service.dart';
@@ -41,7 +39,6 @@ class FolderModelFile {
 
 class ModelController extends GetxController {
   final DownloadService _download = Get.find<DownloadService>();
-  final LocalImageService _localImage = Get.find<LocalImageService>();
   final InferenceService _inference = Get.find<InferenceService>();
   final HiveService _hive = Get.find<HiveService>();
   final SettingsController _settings = Get.find<SettingsController>();
@@ -192,7 +189,8 @@ class ModelController extends GetxController {
     for (final file in files) {
       fileSizes[file] = await _download.getModelSize(file);
       if (!kIsWeb) {
-        final artifact = await _artifactReader.read(await _download.modelPath(file));
+        final artifact =
+            await _artifactReader.read(await _download.modelPath(file));
         if (artifact == null) {
           _artifacts.remove(file);
         } else {
@@ -249,13 +247,17 @@ class ModelController extends GetxController {
     }
 
     final helperPaths = {
-      for (final helper in visionFiles) helper: await _download.modelPath(helper),
+      for (final helper in visionFiles)
+        helper: await _download.modelPath(helper),
     };
     for (final model in availableModels.toList()) {
       if (!files.contains(model.filename)) continue;
-      final described = model.copyWith(artifact: _artifacts[model.filename] ?? const ModelArtifact());
-      final resolved = await _resolveVisionHelper(described, paths: helperPaths);
-      final index = availableModels.indexWhere((m) => m.filename == model.filename);
+      final described = model.copyWith(
+          artifact: _artifacts[model.filename] ?? const ModelArtifact());
+      final resolved =
+          await _resolveVisionHelper(described, paths: helperPaths);
+      final index =
+          availableModels.indexWhere((m) => m.filename == model.filename);
       if (index >= 0 && identical(availableModels[index], model)) {
         availableModels[index] = resolved;
       }
@@ -286,33 +288,37 @@ class ModelController extends GetxController {
 
   Future<String?> installedFileFingerprint(String filename) async {
     if (kIsWeb || !isDownloaded(filename)) return null;
-    return _installedVisionHelpers.fingerprint(await _download.modelPath(filename));
+    return _installedVisionHelpers
+        .fingerprint(await _download.modelPath(filename));
   }
 
   Future<VisionHelperSource?> identifyInstalledVisionHelper(
       String filename) async {
-    if (kIsWeb ||
-        !_isVisionProjectorFile(filename) ||
-        !isDownloaded(filename)) return null;
-    return _installedVisionHelpers.identify(await _download.modelPath(filename));
+    if (kIsWeb || !_isVisionProjectorFile(filename) || !isDownloaded(filename))
+      return null;
+    return _installedVisionHelpers
+        .identify(await _download.modelPath(filename));
   }
 
   Future<AiModel> _resolveVisionHelper(AiModel model,
       {Map<String, String>? paths}) async {
     if (kIsWeb) return model;
     final source = _withHelper((_visionSources[model.filename] ?? model)
-        .copyWith(artifact: _artifacts[model.filename] ?? const ModelArtifact()));
-    final helpers = paths ?? {
-      for (final file in (await _download.getDownloadedModels())
-          .where(_isVisionProjectorFile))
-        file: await _download.modelPath(file),
-    };
+        .copyWith(
+            artifact: _artifacts[model.filename] ?? const ModelArtifact()));
+    final helpers = paths ??
+        {
+          for (final file in (await _download.getDownloadedModels())
+              .where(_isVisionProjectorFile))
+            file: await _download.modelPath(file),
+        };
     final match = await _installedVisionHelpers.find(source, helpers,
         matchesMetadata: (filename) => ModelHelperService.matchesBaseMetadata(
             source, _artifacts[filename]));
     if (match == null || match == source.mmprojFilename) return source;
     _visionSources.putIfAbsent(model.filename, () => source);
-    return source.copyWith(mmprojFilename: match, mmprojUrl: '', isVision: true);
+    return source.copyWith(
+        mmprojFilename: match, mmprojUrl: '', isVision: true);
   }
 
   Future<void> attachVisionHelper(
@@ -320,15 +326,18 @@ class ModelController extends GetxController {
     if (!_isVisionProjectorFile(filename) ||
         model.fileRole.isHelper ||
         model.runtime != AiModel.runtimeLlama) {
-      throw const FormatException('Choose a main GGUF model and a vision projector.');
+      throw const FormatException(
+          'Choose a main GGUF model and a vision projector.');
     }
     final links = Map<dynamic, dynamic>.from(
         _hive.getSetting<Map>('model_helper_links') ?? {});
     links[model.filename] = {'filename': filename, 'url': url};
     await _hive.setSetting('model_helper_links', links);
-    final index = availableModels.indexWhere((m) => m.filename == model.filename);
+    final index =
+        availableModels.indexWhere((m) => m.filename == model.filename);
     if (index >= 0) {
-      availableModels[index] = _withHelper(_visionSources[model.filename] ?? model);
+      availableModels[index] =
+          _withHelper(_visionSources[model.filename] ?? model);
     }
   }
 
@@ -384,7 +393,8 @@ class ModelController extends GetxController {
   /// Downloads just the vision file for a model that's already on disk.
   Future<void> downloadVisionFile(AiModel model) async {
     model = await _resolveVisionHelper(model);
-    if (model.hasVisionProjector && model.mmprojUrl.isEmpty &&
+    if (model.hasVisionProjector &&
+        model.mmprojUrl.isEmpty &&
         await _download.isModelDownloaded(model.mmprojFilename)) {
       await refreshDownloaded();
       return;
@@ -428,7 +438,8 @@ class ModelController extends GetxController {
   Future<void> reloadLastModel() => loadModel(
         lastLoadedModelName,
         includeHelpers:
-            _hive.getSetting<bool>(AppConstants.keyLocalModelIncludesHelpers) ?? true,
+            _hive.getSetting<bool>(AppConstants.keyLocalModelIncludesHelpers) ??
+                true,
       );
 
   bool get canLoadLastModel =>
@@ -575,7 +586,8 @@ class ModelController extends GetxController {
         unawaited(downloadVisionFile(model));
       }
       if (huggingFaceRepository(model.url) != null &&
-          !AppConstants.availableModels.any((m) => m['filename'] == model.filename)) {
+          !AppConstants.availableModels
+              .any((m) => m['filename'] == model.filename)) {
         customModels.removeWhere((m) => m.filename == model.filename);
         customModels.add(model);
         await _saveCustomModels();
@@ -640,7 +652,8 @@ class ModelController extends GetxController {
 
   bool get supportsDownloadsFolder => !kIsWeb && Platform.isAndroid;
 
-  Future<void> downloadModelToDownloads(AiModel model, {ModelFileKind? kind}) async {
+  Future<void> downloadModelToDownloads(AiModel model,
+      {ModelFileKind? kind}) async {
     if (isImageModel(model)) {
       _showOnlineImageNotice();
       return;
@@ -746,8 +759,9 @@ class ModelController extends GetxController {
   }
 
   Future<bool> _tryDeleteModel(String filename) async {
-    if (_modelOperationInProgress || _localImage.isGenerating.value) {
-      showToast('Model in use', 'Wait for the current model operation to finish.',
+    if (_modelOperationInProgress) {
+      showToast(
+          'Model in use', 'Wait for the current model operation to finish.',
           tone: ToastTone.warning);
       return false;
     }
@@ -759,14 +773,11 @@ class ModelController extends GetxController {
       if (_inference.loadedModelName.value == filename) {
         await _inference.unloadModel();
       }
-      if (_localImage.loadedModelName.value == filename) {
-        await _localImage.unloadModel();
-        if (_localImage.isModelLoaded.value) return false;
-      }
       await _download.deleteModel(filename);
       final model =
           availableModels.firstWhereOrNull((m) => m.filename == filename);
-      if (model != null && model.hasVisionProjector &&
+      if (model != null &&
+          model.hasVisionProjector &&
           !availableModels.any((other) =>
               other.filename != filename &&
               other.mmprojFilename == model.mmprojFilename)) {
@@ -774,8 +785,8 @@ class ModelController extends GetxController {
       }
       return true;
     } catch (error) {
-      Get.find<AppLogService>().error('Could not delete model',
-          details: diagnosticText('$error'));
+      Get.find<AppLogService>()
+          .error('Could not delete model', details: diagnosticText('$error'));
       showToast('Could not delete model', 'Check the log for details.',
           tone: ToastTone.error);
       return false;
@@ -785,9 +796,7 @@ class ModelController extends GetxController {
   }
 
   bool get _modelOperationInProgress =>
-      isPreparingModel.value ||
-      _inference.isLoadingModel.value ||
-      _localImage.isLoadingModel.value;
+      isPreparingModel.value || _inference.isLoadingModel.value;
 
   Future<void> loadModel(String filename,
       {bool safeRetry = false, bool includeHelpers = true}) async {
@@ -796,16 +805,17 @@ class ModelController extends GetxController {
           tone: ToastTone.warning);
       return;
     }
-    final selected = availableModels.firstWhereOrNull((m) => m.filename == filename);
+    final selected =
+        availableModels.firstWhereOrNull((m) => m.filename == filename);
     if ((selected != null && isImageModel(selected)) ||
         RegExp(r'\.(safetensors|sdbundle|coreml|mlpackage|mlmodelc)(?:\.zip)?$',
-                caseSensitive: false).hasMatch(filename)) {
+                caseSensitive: false)
+            .hasMatch(filename)) {
       _showOnlineImageNotice();
       return;
     }
     if (fileRole(filename).isHelper || _isAuxiliaryImageFile(filename)) {
-      showToast('Helper file', fileRole(filename).help,
-          tone: ToastTone.info);
+      showToast('Helper file', fileRole(filename).help, tone: ToastTone.info);
       return;
     }
 
@@ -815,12 +825,14 @@ class ModelController extends GetxController {
       ..set('includeHelpers', includeHelpers)
       ..stage('file check');
     try {
-      await _loadModel(filename, report, safeRetry: safeRetry, includeHelpers: includeHelpers);
+      await _loadModel(filename, report,
+          safeRetry: safeRetry, includeHelpers: includeHelpers);
     } catch (error, stack) {
       report
         ..set('exceptionType', error.runtimeType.toString())
         ..set('dartStack', stack.toString().split('\n').take(16).join('\n'));
-      if (error is PlatformException) report.set('platformErrorCode', error.code);
+      if (error is PlatformException)
+        report.set('platformErrorCode', error.code);
       if (error is FileSystemException) {
         report.set('osErrorCode', error.osError?.errorCode);
       }
@@ -831,7 +843,8 @@ class ModelController extends GetxController {
     }
   }
 
-  Future<void> _loadModel(String filename, ModelLoadDiagnostics report, {required bool safeRetry, required bool includeHelpers}) async {
+  Future<void> _loadModel(String filename, ModelLoadDiagnostics report,
+      {required bool safeRetry, required bool includeHelpers}) async {
     final listedModel =
         availableModels.firstWhereOrNull((m) => m.filename == filename);
     final model = listedModel == null || !includeHelpers
@@ -840,23 +853,35 @@ class ModelController extends GetxController {
     final name = model?.name ?? filename;
     final parameters = ModelLoadDiagnostics.parameterLabel('$name $filename');
     final lower = filename.toLowerCase();
-    final isLiteRt = lower.endsWith('.litertlm') ||
-        model?.runtime == AiModel.runtimeLiteRt;
+    final isLiteRt =
+        lower.endsWith('.litertlm') || model?.runtime == AiModel.runtimeLiteRt;
     final isImage = isImageModel(model ??
-        AiModel(name: filename, filename: filename, url: '', size: '',
-            description: '', template: ''));
+        AiModel(
+            name: filename,
+            filename: filename,
+            url: '',
+            size: '',
+            description: '',
+            template: ''));
     report
       ..set('model', name)
-      ..set('runtime', isImage ? 'image' : isLiteRt ? 'LiteRT-LM' : 'llama.cpp')
+      ..set(
+          'runtime',
+          isImage
+              ? 'image'
+              : isLiteRt
+                  ? 'LiteRT-LM'
+                  : 'llama.cpp')
       ..set('parametersFromName', parameters ?? 'unknown')
-      ..set('quantizationFromFilename', RegExp(
-          r'(?:^|[^a-z0-9])((?:i?q[2-8](?:_[a-z0-9]+)*)|fp8|f16|bf16|f32)(?=$|[^a-z0-9])',
-          caseSensitive: false).firstMatch(lower)?.group(1)?.toUpperCase())
-      ..set('imageForceCpu', isImage ? _settings.imageGenForceCpu.value : null)
+      ..set(
+          'quantizationFromFilename',
+          RegExp(r'(?:^|[^a-z0-9])((?:i?q[2-8](?:_[a-z0-9]+)*)|fp8|f16|bf16|f32)(?=$|[^a-z0-9])',
+                  caseSensitive: false)
+              .firstMatch(lower)
+              ?.group(1)
+              ?.toUpperCase())
       ..set('contextRequested', isImage ? null : _settings.contextSize.value)
-      ..set('performanceMode', isImage
-          ? _settings.imageGenBackend.value.displayName
-          : _settings.liteRtPerformanceMode.value);
+      ..set('performanceMode', _settings.liteRtPerformanceMode.value);
     final path = await _download.modelPath(filename);
     final type = await FileSystemEntity.type(path);
     if (type == FileSystemEntityType.notFound) {
@@ -867,19 +892,20 @@ class ModelController extends GetxController {
       return _reportLoadFailure(filename, report,
           'Expected a model file. Select a GGUF or LiteRT-LM file.');
     }
-    final fileBytes = type == FileSystemEntityType.file
-        ? await File(path).length()
-        : 0;
+    final fileBytes =
+        type == FileSystemEntityType.file ? await File(path).length() : 0;
     if (type == FileSystemEntityType.file) {
       report.set('fileBytes', fileBytes);
       fileSizes[filename] = fileBytes;
       if (fileBytes == 0) {
-        return _reportLoadFailure(filename, report,
-            'The model file is empty. Download it again.');
+        return _reportLoadFailure(
+            filename, report, 'The model file is empty. Download it again.');
       }
       if (model != null && _isIncompleteCatalogFile(model, fileBytes)) {
         final actual = DownloadService.formatBytes(fileBytes);
-        return _reportLoadFailure(filename, report,
+        return _reportLoadFailure(
+            filename,
+            report,
             'The model download is incomplete ($actual, expected about ${model.size}). '
             'Download it again.');
       }
@@ -916,7 +942,8 @@ class ModelController extends GetxController {
     if (!isImage &&
         lower.endsWith('.gguf') &&
         (isFastMtpDraft(filename) || isFastMtpDraft(gguf?.name ?? ''))) {
-      const reason = 'This GGUF is a FastMTP draft companion and cannot run as a chat model.';
+      const reason =
+          'This GGUF is a FastMTP draft companion and cannot run as a chat model.';
       report
         ..stage('validate GGUF model role')
         ..set('ggufRole', 'fastmtp_draft');
@@ -958,7 +985,8 @@ class ModelController extends GetxController {
       // and load text-only for now.
       String? mmprojPath;
       var visionNote = '';
-      final hasOptionalHelper = model != null && model.hasVisionProjector && !isLiteRt;
+      final hasOptionalHelper =
+          model != null && model.hasVisionProjector && !isLiteRt;
       if (hasOptionalHelper && !includeHelpers) {
         visionNote = ' Loaded for text chat.';
       } else if (hasOptionalHelper) {
@@ -977,9 +1005,8 @@ class ModelController extends GetxController {
       report
         ..set('visionProjectorAvailable', mmprojPath != null)
         ..set('visionProjectorExpected', hasOptionalHelper && includeHelpers)
-        ..set('visionProjector', model?.hasVisionProjector == true
-            ? model!.mmprojFilename
-            : null);
+        ..set('visionProjector',
+            model?.hasVisionProjector == true ? model!.mmprojFilename : null);
       final result = await _inference.loadModel(
         path,
         safeRetry: safeRetry,
@@ -997,7 +1024,8 @@ class ModelController extends GetxController {
             ? (!fallbackToText && model != null && isVisionModel(model))
             : _inference.ggufVisionLoaded;
         try {
-          await _hive.setSetting(AppConstants.keyLocalModelIncludesHelpers, includeHelpers);
+          await _hive.setSetting(
+              AppConstants.keyLocalModelIncludesHelpers, includeHelpers);
           await _settings.setInferenceMode('local');
         } catch (error) {
           Get.find<AppLogService>().warning('Could not save inference mode',
@@ -1019,8 +1047,10 @@ class ModelController extends GetxController {
     ({String? likely, String details})? diagnosis,
   }) async {
     final details = diagnosticText(diagnosis?.details ?? error);
-    report.set('likelyCause', diagnosis?.likely ?? _getFriendlyErrorMessage(error));
-    await report.finish(error: error, details: diagnosis == null ? null : details);
+    report.set(
+        'likelyCause', diagnosis?.likely ?? _getFriendlyErrorMessage(error));
+    await report.finish(
+        error: error, details: diagnosis == null ? null : details);
     final safeError = diagnosticText(error);
     Get.find<AppLogService>().error('Model load failed', details: safeError);
     _showLoadFailedSheet(filename, safeError,
@@ -1055,35 +1085,44 @@ class ModelController extends GetxController {
           await raf.close();
         }
         final magic = String.fromCharCodes(head.take(4));
-        line('Header magic: ${magic == 'GGUF' ? 'GGUF (valid)' : 'NOT GGUF ("$magic")'}');
+        line(
+            'Header magic: ${magic == 'GGUF' ? 'GGUF (valid)' : 'NOT GGUF ("$magic")'}');
         if (magic != 'GGUF') {
-          likely ??= 'This file is not a valid GGUF model (wrong header). The download is probably corrupt or it is an HTML error page: delete it and download again.';
+          likely ??=
+              'This file is not a valid GGUF model (wrong header). The download is probably corrupt or it is an HTML error page: delete it and download again.';
         } else {
           final info = gguf;
           if (info == null) {
             line('Header details: could not be read (file may be cut short).');
             // Metadata used for estimates is optional for some architectures.
           } else {
-            line('Architecture: ${info.architecture}${info.name != null ? ' (${info.name})' : ''}');
-            line('Layers: ${info.layers}, trained context: ${info.trainedContext}');
+            line(
+                'Architecture: ${info.architecture}${info.name != null ? ' (${info.name})' : ''}');
+            line(
+                'Layers: ${info.layers}, trained context: ${info.trainedContext}');
             if (!isSupportedLlamaArch(info.architecture)) {
-              likely ??= 'This app\'s llama.cpp engine does not support the "${info.architecture}" architecture yet, so this model cannot run here. Pick another model.';
+              likely ??=
+                  'This app\'s llama.cpp engine does not support the "${info.architecture}" architecture yet, so this model cannot run here. Pick another model.';
             }
             final ctx = _hive.getSetting<int>(AppConstants.keyContextSize,
                     defaultValue: AppConstants.defaultContextSize) ??
                 AppConstants.defaultContextSize;
             final need = info.estimateBytes(ctx);
             line('Context size setting: $ctx tokens');
-            line('Estimated memory needed: ${DownloadService.formatBytes(need)}');
+            line(
+                'Estimated memory needed: ${DownloadService.formatBytes(need)}');
             if (Get.isRegistered<DeviceInfoService>()) {
               final dev = Get.find<DeviceInfoService>();
               final total = dev.totalRamGB.value;
               final avail = dev.availableRamGB.value;
-              line('Phone RAM: ${total.toStringAsFixed(1)} GB total, ${avail.toStringAsFixed(1)} GB free now');
+              line(
+                  'Phone RAM: ${total.toStringAsFixed(1)} GB total, ${avail.toStringAsFixed(1)} GB free now');
               if ((error.toLowerCase().contains('memory') ||
                       error.toLowerCase().contains('alloc')) &&
-                  avail > 0 && need / (1024 * 1024 * 1024) > avail) {
-                likely ??= 'Not enough free memory: it needs about ${(need / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB but only ${avail.toStringAsFixed(1)} GB is free. Close other apps, lower the context size in Settings, or choose a smaller quantisation.';
+                  avail > 0 &&
+                  need / (1024 * 1024 * 1024) > avail) {
+                likely ??=
+                    'Not enough free memory: it needs about ${(need / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB but only ${avail.toStringAsFixed(1)} GB is free. Close other apps, lower the context size in Settings, or choose a smaller quantisation.';
               }
             }
           }
@@ -1094,14 +1133,21 @@ class ModelController extends GetxController {
     }
     final low = error.toLowerCase();
     if (likely == null) {
-      if (low.contains('out of memory') || low.contains('oom') || low.contains('alloc')) {
-        likely = 'The phone ran out of memory while loading. Lower the context size, close other apps, or use a smaller model.';
+      if (low.contains('out of memory') ||
+          low.contains('oom') ||
+          low.contains('alloc')) {
+        likely =
+            'The phone ran out of memory while loading. Lower the context size, close other apps, or use a smaller model.';
       } else if (low.contains('vulkan') || low.contains('gpu')) {
-        likely = 'The GPU backend failed. Turn on CPU Safe mode in Performance settings and try again.';
-      } else if (low.contains('unknown model architecture') || low.contains('unsupported')) {
-        likely = 'This model type is not supported by the engine in this app version.';
+        likely =
+            'The GPU backend failed. Turn on CPU Safe mode in Performance settings and try again.';
+      } else if (low.contains('unknown model architecture') ||
+          low.contains('unsupported')) {
+        likely =
+            'This model type is not supported by the engine in this app version.';
       } else if (low.contains('mmproj') || low.contains('vision')) {
-        likely = 'The vision projector file did not load. Re-download the matching mmproj file.';
+        likely =
+            'The vision projector file did not load. Re-download the matching mmproj file.';
       }
     }
     line('');
@@ -1193,11 +1239,8 @@ class ModelController extends GetxController {
 
     // Whatever is loaded now (text or image) gets unloaded first, so count
     // its memory as free when judging whether the new model fits.
-    final loadedName = _inference.isModelLoaded.value
-        ? _inference.loadedModelName.value
-        : _localImage.isModelLoaded.value
-            ? _localImage.loadedModelName.value
-            : '';
+    final loadedName =
+        _inference.isModelLoaded.value ? _inference.loadedModelName.value : '';
     final hasLoadedModel = loadedName.isNotEmpty;
     final isSameModelLoaded = hasLoadedModel && loadedName == filename;
     final loadedBytes = hasLoadedModel ? (fileSizes[loadedName] ?? 0) : 0;
@@ -1445,7 +1488,6 @@ class ModelController extends GetxController {
 
   Future<void> _unloadModels() async {
     await _inference.unloadModel();
-    await _localImage.unloadModel();
   }
 
   Future<List<AiModel>> importModelsFromStorage() async {
@@ -1725,9 +1767,13 @@ class ModelController extends GetxController {
       final at = rawError.lastIndexOf('Exception: ');
       return at >= 0 ? rawError.substring(at + 'Exception: '.length) : rawError;
     }
-    if (lower.contains('not found') || lower.contains('is empty') || lower.contains('expected a model file') ||
+    if (lower.contains('not found') ||
+        lower.contains('is empty') ||
+        lower.contains('expected a model file') ||
         lower.contains('download is incomplete') ||
-        lower.contains('invalid gguf header') || lower.contains('invalid safetensors') || lower.contains('invalid litert')) {
+        lower.contains('invalid gguf header') ||
+        lower.contains('invalid safetensors') ||
+        lower.contains('invalid litert')) {
       return rawError;
     }
     if (lower.contains('unknown model architecture') ||
@@ -1764,7 +1810,8 @@ class ModelController extends GetxController {
   }
 
   void _showLoadFailedSheet(String filename, String result,
-      {bool includeHelpers = true, ({String? likely, String details})? diagnosis}) {
+      {bool includeHelpers = true,
+      ({String? likely, String details})? diagnosis}) {
     final friendlyMsg = diagnosis?.likely ?? _getFriendlyErrorMessage(result);
     final context = Get.context;
     if (context == null || !context.mounted) {
@@ -1854,7 +1901,7 @@ class ModelController extends GetxController {
               ),
               const SizedBox(height: 20),
               if ((filename.toLowerCase().endsWith('.gguf') ||
-                  filename.toLowerCase().endsWith('.litertlm')) &&
+                      filename.toLowerCase().endsWith('.litertlm')) &&
                   !isFastMtpDraft(filename) &&
                   !friendlyMsg.contains('draft companion') &&
                   !friendlyMsg.contains('incomplete') &&
@@ -1864,7 +1911,8 @@ class ModelController extends GetxController {
                   label: const Text('Retry with CPU and smaller context'),
                   onPressed: () {
                     Navigator.pop(ctx);
-                    loadModel(filename, safeRetry: true, includeHelpers: includeHelpers);
+                    loadModel(filename,
+                        safeRetry: true, includeHelpers: includeHelpers);
                   },
                 ),
               FilledButton.icon(

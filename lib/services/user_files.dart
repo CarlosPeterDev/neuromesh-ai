@@ -30,6 +30,21 @@ class UserFilesService extends GetxService {
 
   final folders = <GrantedFolder>[].obs;
 
+  Map<String, bool>? _readGrants, _writeGrants;
+  Iterable<GrantedFolder> get availableFolders =>
+      folders.where((f) => _readGrants == null || _readGrants![f.uri] == true);
+  bool canWrite(GrantedFolder f) =>
+      _writeGrants == null || _writeGrants![f.uri] == true;
+  bool get hasWritableFolder => availableFolders.any(canWrite);
+
+  /// Persisted picker entries are preferences, not proof that Android still
+  /// grants access. Recheck before advertising shared-file tools.
+  Future<void> refreshGrants() async {
+    final grants = await _ch.invokeListMethod<Map>('persistedFolders') ?? [];
+    _readGrants = {for (final g in grants) '${g['uri']}': g['read'] == true};
+    _writeGrants = {for (final g in grants) '${g['uri']}': g['write'] == true};
+  }
+
   @override
   void onInit() {
     super.onInit();
@@ -135,14 +150,27 @@ class UserFilesService extends GetxService {
   }
 
   Future<void> writeText(GrantedFolder f, String path, String content) async {
+    await writeBytes(f, path, Uint8List.fromList(utf8.encode(content)));
+  }
+
+  Future<String> writeBytes(
+      GrantedFolder f, String path, Uint8List bytes) async {
     final success = await _ch.invokeMethod<bool>('writeFile', {
       'uri': f.uri,
       'path': path,
-      'bytes': Uint8List.fromList(utf8.encode(content))
+      'bytes': bytes,
     });
-    if (success != true) {
-      throw StateError('The shared folder did not confirm the write.');
-    }
+    if (success != true)
+      throw StateError('The shared folder did not verify the write.');
+    return fileUri(f, path);
+  }
+
+  Future<String> fileUri(GrantedFolder f, String path) async {
+    final uri = await _ch
+        .invokeMethod<String>('sharedFileUri', {'uri': f.uri, 'path': path});
+    if (uri == null || !uri.startsWith('content://'))
+      throw StateError('The provider returned no usable document URI.');
+    return uri;
   }
 
   Future<String> mutateFile(GrantedFolder folder, String path, String action,
