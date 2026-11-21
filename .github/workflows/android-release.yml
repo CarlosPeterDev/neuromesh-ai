@@ -165,11 +165,31 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.sign.outputs.production == 'true' && 'false' || 'true' }}
+          BUILD_NAME: ${{ steps.ver.outputs.name }}
+          BUILD_NUMBER: ${{ steps.ver.outputs.code }}
         run: |
-          V='--build-name=${{ steps.ver.outputs.name }} --build-number=${{ steps.ver.outputs.code }}'
+          set -euo pipefail
           M=android/app/src/main/AndroidManifest.xml
           sed -i -E '/MANAGE_EXTERNAL_STORAGE|REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|WRITE_EXTERNAL_STORAGE|READ_EXTERNAL_STORAGE/d' "$M"
-          flutter build appbundle --release "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json" --dart-define=PLAY_BUILD=true $V
+          # Flutter 3.38's appbundle command expects a bundled libflutter.so.sym
+          # even when AGP strips the library and intentionally omits the metadata.
+          flutter build apk --release --config-only --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
+          dart_defines=$(python - "$RUNNER_TEMP/neuromesh-report-defines.json" <<'PYTHON'
+          import base64
+          import json
+          import sys
+
+          with open(sys.argv[1]) as file:
+              defines = json.load(file)
+          defines['PLAY_BUILD'] = 'true'
+          print(','.join(base64.b64encode(f'{key}={value}'.encode()).decode()
+                         for key, value in defines.items()))
+          PYTHON
+          )
+          cd android
+          ./gradlew -q :app:bundleRelease -Ptarget-platform=android-arm,android-arm64,android-x64 \
+            -Ptarget=lib/main.dart -Pbase-application-name=android.app.Application \
+            -Ptree-shake-icons=true "-Pdart-defines=$dart_defines"
 
       - name: Play policy and size check
         id: play_size
@@ -179,7 +199,18 @@ jobs:
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/bundletool.jar" https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar
           AAB=build/app/outputs/bundle/release/app-release.aab
           python scripts/check_play_bundle.py "$AAB"
-          java -jar "$RUNNER_TEMP/bundletool.jar" validate --bundle="$AAB"
+          jarsigner -verify "$AAB" > "$RUNNER_TEMP/bundle-signature.txt"
+          grep -Fx 'jar verified.' "$RUNNER_TEMP/bundle-signature.txt"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            for library in libapp.so libflutter.so; do
+              unzip -p "$AAB" "base/lib/$abi/$library" > "$RUNNER_TEMP/bundle-library.so"
+              readelf --wide --sections "$RUNNER_TEMP/bundle-library.so" > "$RUNNER_TEMP/bundle-sections.txt"
+              if grep -Eq '[[:space:]]\.(z?debug_[[:alnum:]_]+|symtab)[[:space:]]' "$RUNNER_TEMP/bundle-sections.txt"; then
+                echo "::error::Unstripped library: $abi/$library"; exit 1
+              fi
+            done
+          done
+          java -jar "$RUNNER_TEMP/bundletool.jar" validate --bundle="$AAB" > "$RUNNER_TEMP/bundle-validation.txt"
           # 1) The merged manifest must not contain restricted permissions.
           java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle="$AAB" > "$RUNNER_TEMP/manifest.xml"
           if grep -E 'MANAGE_EXTERNAL_STORAGE|REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|SYSTEM_ALERT_WINDOW|READ_SMS|READ_CALL_LOG|QUERY_ALL_PACKAGES|ACCESS_BACKGROUND_LOCATION' "$RUNNER_TEMP/manifest.xml"; then
