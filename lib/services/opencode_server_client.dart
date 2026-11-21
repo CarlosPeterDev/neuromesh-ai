@@ -192,7 +192,21 @@ class OpenCodeServerClient {
     final path = _session(id);
     final response = await _request('GET', '/event');
     final ready = Completer<void>();
-    final textPartIds = <String>{};
+    final textParts = <String, StringBuffer>{};
+    final toolStatuses = <String, String>{};
+    void tool(Map part) {
+      final state = part['state'];
+      final partId = part['id'];
+      if (part['type'] != 'tool' ||
+          part['tool'] is! String ||
+          state is! Map ||
+          partId is! String) return;
+      final status = '${part['tool']} · ${state['status'] ?? ''}';
+      if (toolStatuses[partId] == status) return;
+      toolStatuses[partId] = status;
+      onTool(status);
+    }
+
     final events =
         response.transform(utf8.decoder).transform(const LineSplitter());
     final subscription = events.listen((line) {
@@ -206,19 +220,22 @@ class OpenCodeServerClient {
       if (event?['type'] == 'message.part.updated' &&
           part is Map &&
           part['sessionID'] == id) {
-        if (part['type'] == 'text' && part['id'] is String)
-          textPartIds.add(part['id'] as String);
-        final state = part['state'];
-        if (part['type'] == 'tool' && part['tool'] is String && state is Map) {
-          onTool('${part['tool']} · ${state['status'] ?? ''}');
+        if (part['type'] == 'text' && part['id'] is String) {
+          textParts.putIfAbsent(part['id'] as String, StringBuffer.new);
         }
+        tool(part);
       }
+      final partId = properties['partID'];
       if (event?['type'] == 'message.part.delta' &&
           properties['sessionID'] == id &&
-          textPartIds.contains(properties['partID']) &&
+          partId is String &&
           properties['field'] == 'text' &&
           properties['delta'] is String) {
-        onText(properties['delta'] as String);
+        final stream = textParts[partId];
+        if (stream == null) return;
+        final delta = properties['delta'] as String;
+        stream.write(delta);
+        onText(delta);
       }
     }, onError: (Object error) {
       if (!ready.isCompleted) ready.completeError(error);
@@ -240,6 +257,22 @@ class OpenCodeServerClient {
       if (info is! Map || info['error'] != null) {
         throw StateError(
             'OpenCode could not complete the turn. Check the server and model.');
+      }
+      // The message response and SSE use separate sockets. Reconcile the
+      // completed text in case the response arrives before the last event.
+      await subscription.cancel();
+      final parts = (data as Map)['parts'];
+      if (parts is List) {
+        for (final part in parts.whereType<Map>()) {
+          final text = part['text'];
+          if (part['type'] == 'text' && text is String) {
+            final streamed = textParts[part['id']]?.toString() ?? '';
+            if (text.startsWith(streamed) && text.length > streamed.length) {
+              onText(text.substring(streamed.length));
+            }
+          }
+          tool(part);
+        }
       }
     } finally {
       await subscription.cancel();

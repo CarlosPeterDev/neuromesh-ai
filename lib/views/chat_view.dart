@@ -16,6 +16,7 @@ import '../services/agent_service.dart' show stripToolTrace;
 import '../services/cluster_service.dart';
 import '../services/inference_service.dart';
 import '../utils/thought_parser.dart';
+import '../utils/thinking_mode.dart';
 import '../widgets/agent_steps.dart';
 import '../widgets/context_mentions.dart';
 import '../widgets/attachment_preview.dart';
@@ -639,8 +640,7 @@ class ChatView extends GetView<ChatController> {
                   settings.inferenceMode.value == 'local' &&
                       inference.isModelLoaded.value &&
                       inference.loadedModelRuntime.value != 'litert' &&
-                      RegExp(r'qwen[-_ ]?3(?![0-9])', caseSensitive: false)
-                          .hasMatch(name);
+                      ThinkingMode.forModel(name) != ThinkingMode.unsupported;
               if (!supportsThinking) return const SizedBox.shrink();
               final thinking = settings.normalThinking.value;
               return Align(

@@ -328,7 +328,7 @@ class Gemma2Template : ChatTemplate {
  * `<|turn>role … <turn|>` blocks. BOS is added by the tokenizer, not here.
  * Earlier model replies have their `<|channel>…<channel|>` thinking removed.
  */
-class Gemma4Template : ChatTemplate {
+class Gemma4Template(private val thinking: Boolean = false) : ChatTemplate {
     override val name = "gemma4"
 
     private fun stripThinking(text: String): String {
@@ -347,10 +347,16 @@ class Gemma4Template : ChatTemplate {
 
     override fun format(messages: List<TemplateChatMessage>): String {
         val builder = StringBuilder()
-        for (message in messages) {
+        if (thinking && messages.firstOrNull()?.role != "system") {
+            builder.append("<|turn>system\n<|think|>\n<turn|>\n")
+        }
+        for ((index, message) in messages.withIndex()) {
             when (message.role) {
-                "system" -> builder.append("<|turn>system\n")
-                    .append(message.content.trim()).append("<turn|>\n")
+                "system" -> {
+                    builder.append("<|turn>system\n")
+                    if (thinking && index == 0) builder.append("<|think|>\n")
+                    builder.append(message.content.trim()).append("<turn|>\n")
+                }
                 "user" -> builder.append("<|turn>user\n")
                     .append(message.content.trim()).append("<turn|>\n")
                 "assistant" -> builder.append("<|turn>model\n")
@@ -694,6 +700,7 @@ object ChatTemplateManager {
         "gemma3" to Gemma3Template(),
         "gemma-3" to Gemma3Template(),
         "gemma4" to Gemma4Template(),
+        "gemma4-thinking" to Gemma4Template(thinking = true),
         "gemma-4" to Gemma4Template()
     )
     

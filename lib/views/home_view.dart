@@ -175,6 +175,7 @@ class _HomeViewState extends State<HomeView> with RouteAware {
             for (var i = 0; i < tabs.length; i++)
               Expanded(
                 child: Semantics(
+                  identifier: i == 4 ? 'neuromesh.agents' : null,
                   selected: current == i,
                   button: true,
                   label: tabs[i].label,

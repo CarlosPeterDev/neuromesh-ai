@@ -15,7 +15,7 @@ enum StarterUse { chat, code, learn, write, camera }
 
 typedef StarterChoice = ({AiModel model, double ram, int bytes});
 
-StarterChoice? recommendStarter({
+List<StarterChoice> recommendStarters({
   required StarterUse use,
   required bool preferSpeed,
   required double availableRam,
@@ -28,38 +28,66 @@ StarterChoice? recommendStarter({
         (freeBytes == 0 || freeBytes >= choice.bytes + 200000000);
   }
 
-  if (use == StarterUse.camera) {
-    final vision = (
-      model: AiModel.fromMap(AppConstants.artemisStarter),
-      ram: 2.2,
-      bytes: 740000000,
-    );
-    return fits(vision) ? vision : null;
-  }
-
-  StarterChoice qwen(bool small) {
-    final variant = use == StarterUse.code ? 'Coder-' : '';
-    final size = small ? '0.5B' : '1.5B';
-    final title = 'Qwen2.5-$variant$size-Instruct';
-    final filename = '${title.toLowerCase()}-q4_k_m.gguf';
+  StarterChoice catalog(String file, double ram, int bytes, {String? size}) {
+    final data = AppConstants.availableModels
+        .firstWhere((item) => item['filename'] == file);
     return (
-      model: AiModel.fromMap({
-        'name': 'Qwen 2.5 ${use == StarterUse.code ? 'Coder ' : ''}$size',
-        'filename': filename,
-        'url': 'https://huggingface.co/Qwen/$title-GGUF/resolve/main/$filename',
-        'size': small ? '492 MB' : '1.12 GB',
-        'description': 'Q4_K_M instruction model for local inference.',
-        'template': 'chatml',
-      }),
-      ram: small ? 1.0 : 2.1,
-      bytes: small ? 492000000 : 1118000000,
+      model: AiModel.fromMap({...data, if (size != null) 'size': size}),
+      ram: ram,
+      bytes: bytes,
     );
   }
 
-  final compact = qwen(true);
-  final larger = qwen(false);
-  if (!preferSpeed && totalRam >= 4 && fits(larger)) return larger;
-  return fits(compact) ? compact : null;
+  StarterChoice community(String name, String repository, String filename,
+          String size, String template, double ram, int bytes) =>
+      (
+        model: AiModel.fromMap({
+          'name': name,
+          'filename': filename,
+          'url': 'https://huggingface.co/$repository/resolve/main/$filename',
+          'size': size,
+          'template': template,
+        }),
+        ram: ram,
+        bytes: bytes,
+      );
+
+  StarterChoice coder(String parameters, double ram, int bytes, String size) {
+    final name = 'Qwen2.5-Coder-$parameters-Instruct';
+    return community('Qwen 2.5 Coder $parameters', 'Qwen/$name-GGUF',
+        '${name.toLowerCase()}-q4_k_m.gguf', size, 'chatml', ram, bytes);
+  }
+
+  final smol = community('SmolLM2 360M', 'bartowski/SmolLM2-360M-Instruct-GGUF',
+      'SmolLM2-360M-Instruct-Q4_K_M.gguf', '271 MB', 'chatml', .85, 271000000);
+  final liquid = catalog('lfm2.5-1.2b-instruct-q4_k_m.gguf', 1.6, 731000000);
+  final gemma = catalog('gemma-3-1b-it-q4_0.gguf', 1.65, 722000000);
+  final llama = catalog('llama-3.2-1b-instruct-q4_k_m.gguf', 1.75, 808000000,
+      size: '808 MB');
+  final phi = catalog('phi-3.5-mini-instruct-q4_k_m.gguf', 3.8, 2394000000,
+      size: '2.39 GB');
+  final qwenFast = coder('0.5B', 1, 492000000, '492 MB');
+  final qwenCode = coder('1.5B', 2.1, 1118000000, '1.12 GB');
+
+  final candidates = switch (use) {
+    StarterUse.chat => [liquid, gemma, llama, smol],
+    StarterUse.learn => [phi, gemma, llama, smol],
+    StarterUse.write => [llama, gemma, liquid, smol],
+    StarterUse.code => [qwenCode, phi, qwenFast, liquid],
+    StarterUse.camera => [
+        catalog('gemma-3-4b-it-q4_k_m.gguf', 4.5, 3342000000),
+        catalog('lfm2.5-vl-1.6b-q4_k_m.gguf', 2.6, 1315000000),
+        (
+          model: AiModel.fromMap(AppConstants.artemisStarter),
+          ram: 2.2,
+          bytes: 740000000
+        ),
+      ],
+  }
+      .where(fits)
+      .toList();
+  if (preferSpeed) candidates.sort((a, b) => a.bytes.compareTo(b.bytes));
+  return candidates.take(4).toList();
 }
 
 class ModelQuizView extends StatefulWidget {
@@ -74,6 +102,7 @@ class ModelQuizView extends StatefulWidget {
 class _ModelQuizViewState extends State<ModelQuizView> {
   late int _step = widget.welcome ? 0 : 1;
   StarterUse? _use;
+  String? _selectedModel;
   bool _preferSpeed = false;
   bool _checking = true;
   int _storage = 0;
@@ -133,9 +162,12 @@ class _ModelQuizViewState extends State<ModelQuizView> {
             : null,
         automaticallyImplyLeading: false,
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(_t('Skip for now', 'تخطَّ الآن')),
+          Semantics(
+            identifier: 'neuromesh.onboarding.skip',
+            child: TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(_t('Skip for now', 'تخطَّ الآن')),
+            ),
           ),
         ],
       ),
@@ -256,12 +288,15 @@ class _ModelQuizViewState extends State<ModelQuizView> {
       ];
 
   List<Widget> _result(ColorScheme scheme) {
-    final choice = recommendStarter(
+    final candidates = recommendStarters(
         use: _use!,
         preferSpeed: _preferSpeed,
         availableRam: _available,
         totalRam: _total,
         freeBytes: _storage);
+    final choice = candidates.firstWhereOrNull(
+            (choice) => choice.model.filename == _selectedModel) ??
+        candidates.firstOrNull;
     return [
       _headline(_t('Your starting model', 'نموذجك للبدء')),
       const SizedBox(height: 12),
@@ -277,30 +312,20 @@ class _ModelQuizViewState extends State<ModelQuizView> {
             'No starter model fits the reported memory or storage for this choice.',
             'لا يوجد نموذج بدء يناسب الذاكرة أو التخزين المتاح لهذا الخيار.'))
       else ...[
-        Card(
-          color: scheme.primaryContainer,
-          child: Padding(
-            padding: const EdgeInsets.all(18),
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(choice.model.name,
-                  style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 8),
-              Text(choice.model.size),
-              const SizedBox(height: 8),
-              Text(switch (_use) {
-                StarterUse.code => _t(
-                    'Tuned for code explanations and snippets.',
-                    'مناسب لشرح الشيفرة وكتابتها.'),
-                StarterUse.camera => _t(
-                    'Includes the matching vision helper for image input.',
-                    'يتضمّن مساعد الرؤية لإدخال الصور.'),
-                _ => _t('An instruction model for chat, learning, and writing.',
-                    'نموذج تعليمات للدردشة والتعلّم والكتابة.'),
-              }),
-            ]),
+        for (final candidate in candidates)
+          Card(
+            color: candidate == choice ? scheme.primaryContainer : null,
+            child: ListTile(
+              selected: candidate == choice,
+              leading: Icon(candidate == choice
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_unchecked),
+              title: Text(candidate.model.name),
+              subtitle: Text(candidate.model.size),
+              onTap: () =>
+                  setState(() => _selectedModel = candidate.model.filename),
+            ),
           ),
-        ),
         const SizedBox(height: 12),
         Obx(() {
           final models = Get.find<ModelController>();

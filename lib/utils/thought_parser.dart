@@ -14,8 +14,9 @@ class ThoughtParts {
 }
 
 ThoughtParts splitThoughtTags(String text) {
-  final startExp = RegExp(r'<think>', caseSensitive: false);
-  final endExp = RegExp(r'</think>', caseSensitive: false);
+  final startExp =
+      RegExp(r'<think>|<\|channel>thought\s*', caseSensitive: false);
+  final endExp = RegExp(r'</think>|<channel\|>', caseSensitive: false);
   final start = startExp.firstMatch(text);
 
   if (start == null) {

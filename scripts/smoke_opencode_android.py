@@ -19,7 +19,8 @@ def screen():
 
 def find(root, label):
     for node in root.iter("node"):
-        if label in (node.get("text"), node.get("content-desc")):
+        if (label in (node.get("text"), node.get("content-desc"), node.get("resource-id"))
+                or node.get("resource-id", "").endswith("/" + label)):
             return node
     return None
 
@@ -56,13 +57,17 @@ def open_agents():
     while time.monotonic() < deadline:
         try:
             root = screen()
-            skip = find(root, "Skip for now")
+            skip = find(root, "neuromesh.onboarding.skip")
+            if skip is None:
+                skip = find(root, "Skip for now")
             if skip is None:
                 skip = find(root, "Skip")
             if skip is not None:
                 tap(skip)
             else:
-                agents = find(root, "Agents")
+                agents = find(root, "neuromesh.agents")
+                if agents is None:
+                    agents = find(root, "Agents")
                 if agents is not None:
                     tap(agents)
                     return
@@ -70,6 +75,12 @@ def open_agents():
         except (ElementTree.ParseError, subprocess.SubprocessError):
             pass
         time.sleep(1)
+    labels = [
+        node.get("content-desc") or node.get("text") or node.get("resource-id")
+        for node in screen().iter("node")
+        if node.get("password") != "true"
+    ]
+    print("Visible setup labels:", [label for label in labels if label][:25])
     raise RuntimeError("Unable to open Android Agent Hub after first-run setup")
 
 

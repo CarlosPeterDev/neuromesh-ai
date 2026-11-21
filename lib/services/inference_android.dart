@@ -1,3 +1,4 @@
+import '../utils/thinking_mode.dart';
 import 'dart:async';
 import 'dart:ffi' show Abi;
 import 'dart:io' show Platform, Directory, File;
@@ -191,7 +192,9 @@ class InferenceEngine {
     // ── Load ──
     String? visionError;
     await onLoadStage?.call(
-      gpuLayers > 0 ? 'llama.cpp Vulkan model load' : 'llama.cpp CPU model load',
+      gpuLayers > 0
+          ? 'llama.cpp Vulkan model load'
+          : 'llama.cpp CPU model load',
       null,
     );
     try {
@@ -446,8 +449,7 @@ class InferenceEngine {
       finish(buffer.toString());
     };
 
-    final qwen3 = RegExp(r'qwen[-_ ]?3(?![0-9])', caseSensitive: false)
-        .hasMatch(modelName);
+    final thinking = ThinkingMode.forModel(modelName);
     // ── Use generateChat() for native template handling ──
     Stream<String>? stream;
     try {
@@ -456,7 +458,7 @@ class InferenceEngine {
           imagePath: imagePath);
       stream = _controller!.generateChat(
         messages: messages,
-        template: qwen3 && !normalThinking ? 'qwen3-direct' : null,
+        template: thinking.androidTemplate(normalThinking),
         maxTokens: maxTokens,
         temperature: temperature,
         topP: 0.9,
