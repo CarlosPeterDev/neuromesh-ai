@@ -12,6 +12,7 @@ See [the development handoff](continue.md) for release status, verification resu
 - Cloud providers (bring your own API key) alongside local models
 - Device clustering over the local network (worker discovery, QR / manual pairing)
 - Local OpenAI-compatible API server
+- OpenCode desktop preview with a local model in the Linux system terminal ([setup and supported features](docs/OPENCODE.md))
 - Document text extraction, public web search, and clickable links in assistant replies and voice transcripts
 - Online image generation and editing through Pollinations
 - Hugging Face search and download for GGUF models and helpers, with a queue and Wi-Fi-only option

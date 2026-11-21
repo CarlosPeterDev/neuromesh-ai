@@ -6,6 +6,13 @@ NeuroMesh AI is a Flutter workspace for private local AI with optional cloud pro
 
 Read this file, check the current branch and working tree, and review the latest GitHub runs and open pull requests before choosing work. Update this file when the next task, release status, or known limitations change.
 
+## NeuroMesh 2.0 desktop OpenCode milestone
+
+- **Agents** discovers installed OpenCode and shows whether the local terminal preview is available. On Linux with OpenCode v1.19.6 and a supported terminal, it links the loaded model over a dedicated authenticated loopback endpoint. Provider configuration and CLI history are scoped to a temporary profile. [Setup, architecture, and upstream and distribution audit](docs/OPENCODE.md)
+- Local verification passed 217 Flutter tests and all three build-config tests. Four optional checks were skipped in the standard suite. The separate Linux smoke test passed with Xfce Terminal, real OpenCode and Artemis GGUF in a loopback-only network namespace. [Implementation and checks](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/54/checks)
+- The preview exposes text completions. Next is the agent session API and native Chat UI, followed by structured tool support and approval tests. Windows and macOS launch, physical cluster operation through the bridge, Android runtime distribution, and a release from this branch remain pending.
+- The v1.0.139 AAB was 324,350,971 bytes. Meeting the 200 MB raw AAB requirement needs an Android packaging pass and a separate raw artifact check. The existing preview assets are pre-releases.
+
 ## Release and verification
 
 - **v1.0.139** was published from `b97a515d23a8d18ca2ad7dc0c2b3192038960398`. It includes tool discovery, Android shared-folder access, clickable replies, the narration fixes, and local Kitten and Kokoro synthesis. The Android 12 emulator passed installation and reinstallation. All six installers match the checksums on both release pages. The GitHub APKs use a temporary preview signer. [Release](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/tag/v1.0.139) · [ARM64 APK](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/download/v1.0.139/NeuroMesh-AI-v1.0.139-arm64-dev.apk) · [Build and publication](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44796547105)
