@@ -210,6 +210,9 @@ class AndroidOpenCode {
       'TMPDIR': '/tmp',
       'PATH': '/usr/local/bin:/usr/bin:/bin',
       'OPENCODE_DISABLE_PROJECT_CONFIG': 'true',
+      'OPENCODE_DISABLE_DEFAULT_PLUGINS': 'true',
+      'OPENCODE_DISABLE_EXTERNAL_SKILLS': 'true',
+      'OPENCODE_DISABLE_LSP_DOWNLOAD': 'true',
       'OPENCODE_DISABLE_MODELS_FETCH': 'true',
       'OPENCODE_DISABLE_AUTOUPDATE': 'true',
       'NEUROMESH_BRIDGE_KEY': token,
@@ -255,6 +258,7 @@ class AndroidOpenCode {
         },
         'share': 'disabled',
         'autoupdate': false,
+        'lsp': false,
         'permission': {
           '*': 'deny',
           for (final tool in openCodeReadTools) tool: 'allow',

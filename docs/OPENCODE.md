@@ -1,4 +1,4 @@
-# Desktop OpenCode preview
+# OpenCode preview
 
 ## Android 2.0 standalone preview
 

@@ -4,7 +4,7 @@ import 'dart:io';
 import 'agent_tools.dart';
 
 /// The first on-device agent profile can inspect the workspace.
-const openCodeReadTools = {'read', 'glob', 'grep', 'list'};
+const openCodeReadTools = {'read'};
 
 class OpenCodeTools {
   OpenCodeTools(Object? offered, {this.workspace}) {
