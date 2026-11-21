@@ -1,5 +1,5 @@
 /// True for the Play AAB, which disables the self-updater, restricted Android
-/// permissions, and the optional standalone Linux and OpenCode runtimes.
+/// permissions, and the legacy Alpine installer.
 const bool kPlayBuild = bool.fromEnvironment('PLAY_BUILD');
 
 /// Legacy channel marker retained for compatibility with earlier builds.

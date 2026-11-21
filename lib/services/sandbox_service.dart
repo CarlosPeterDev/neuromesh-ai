@@ -28,14 +28,26 @@ class SandboxService extends GetxService {
   final downloadProgress = Rx<double?>(null);
   Future<void>? _initializing;
   Future<void>? _installation;
-  http.Client? _installationClient;
   int _commands = 0;
   final busy = false.obs;
   final status = ''.obs;
 
   String _libDir = '';
 
-  static bool get supported => !kIsWeb && Platform.isAndroid && !kPlayBuild;
+  static String _legacyLibDir = '';
+  static bool get supported => _legacyLibDir.isNotEmpty;
+
+  static Future<void> detectLegacyLauncher(DeviceBridge bridge) async {
+    if (kIsWeb || !Platform.isAndroid || kPlayBuild) return;
+    try {
+      final directory = await bridge.nativeLibDir();
+      if (directory.isNotEmpty && _hasLauncher(directory)) {
+        _legacyLibDir = directory;
+      }
+    } on Exception {
+      // Older or unbundled installations can use the app without Alpine.
+    }
+  }
 
   Future<Directory> _root() async {
     final base = await getApplicationSupportDirectory();
@@ -53,19 +65,19 @@ class SandboxService extends GetxService {
   }
 
   Future<void> _initialize() async {
-    _libDir = await Get.find<DeviceBridge>().nativeLibDir();
+    _libDir = _legacyLibDir;
     installed.value =
         await File('${(await _root()).path}/rootfs/bin/busybox').exists();
   }
 
-  bool get hasProot =>
-      _libDir.isNotEmpty &&
-      [
+  bool get hasProot => _libDir.isNotEmpty && _hasLauncher(_libDir);
+
+  static bool _hasLauncher(String directory) => [
         'libproot.so',
         'libproot_loader.so',
         'libtalloc.so',
         'libandroid-shmem.so'
-      ].every((name) => File('$_libDir/$name').existsSync());
+      ].every((name) => File('$directory/$name').existsSync());
 
   Future<bool> runtimeAvailable() async {
     if (!supported) return false;
@@ -81,8 +93,6 @@ class SandboxService extends GetxService {
     return task.whenComplete(() => _installation = null);
   }
 
-  void cancelInstallation() => _installationClient?.close();
-
   Future<void> _install() async {
     if (!supported)
       throw Exception('The Linux sandbox requires the full Android build.');
@@ -95,7 +105,7 @@ class SandboxService extends GetxService {
       throw StateError('Wait for the current sandbox operation.');
     busy.value = true;
     downloadProgress.value = null;
-    final client = _installationClient = http.Client();
+    final client = http.Client();
     Directory? staging;
     File? archive;
     try {
@@ -185,7 +195,6 @@ class SandboxService extends GetxService {
       rethrow;
     } finally {
       client.close();
-      _installationClient = null;
       if (archive != null && await archive.exists()) await archive.delete();
       if (staging != null && await staging.exists())
         await staging.delete(recursive: true);
@@ -258,35 +267,6 @@ class SandboxService extends GetxService {
           '${text.substring(0, 2500)}\n… (output cut) …\n${text.substring(text.length - 3200)}';
     }
     return '${timedOut ? '[timed out after $timeoutSec s]\n' : ''}${text.isEmpty ? '(no output)' : text}\n[exit code $code]';
-  }
-
-  Future<Directory> openCodeDirectory() async {
-    if (!supported)
-      throw UnsupportedError('OpenCode requires the standalone Android APK.');
-    return Directory('${(await _root()).path}/rootfs/opt/neuromesh-opencode');
-  }
-
-  Future<Process> startOpenCodeProcess(List<String> command,
-      {Map<String, String> environment = const {}}) async {
-    if (busy.value || _commands > 0) {
-      throw StateError('Wait for the current Linux operation.');
-    }
-    _commands++;
-    final finished = Completer<void>();
-    _lock = finished.future;
-    try {
-      final process = await _start(command,
-          workingDirectory: '/workspace', environment: environment);
-      unawaited(process.exitCode.whenComplete(() {
-        _commands--;
-        finished.complete();
-      }));
-      return process;
-    } catch (_) {
-      _commands--;
-      finished.complete();
-      rethrow;
-    }
   }
 
   Future<Process> _start(List<String> command,

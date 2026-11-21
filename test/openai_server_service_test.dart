@@ -8,6 +8,7 @@ import 'package:neuromesh_ai/services/android_opencode.dart';
 import 'package:neuromesh_ai/services/inference_service.dart';
 import 'package:neuromesh_ai/services/openai_server_service_io.dart';
 import 'package:neuromesh_ai/services/opencode_tools.dart';
+import 'package:neuromesh_ai/services/opencode_server_client.dart';
 
 void main() {
   late OpenAiServerService server;
@@ -313,6 +314,37 @@ void main() {
     }
   });
 
+  test('OpenCode server refuses cleartext remote URLs and auth in URLs', () {
+    for (final url in [
+      'http://192.0.2.1:4096',
+      'http://localhost:4096',
+      'https://test:secret@example.test',
+      'https://example.test?token=secret',
+    ]) {
+      expect(() => OpenCodeServerClient(url, 'test', 'secret'),
+          throwsFormatException);
+    }
+    final local = OpenCodeServerClient('http://[::1]:4096', 'test', 'secret');
+    expect(local.isLoopback, isTrue);
+    local.close();
+  });
+
+  test('OpenCode server never forwards credentials through redirects',
+      () async {
+    final redirect = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => redirect.close(force: true));
+    var calls = 0;
+    redirect.listen((request) async {
+      calls++;
+      await request.response.redirect(Uri.parse('/unexpected'));
+    });
+    final remote = OpenCodeServerClient(
+        'http://127.0.0.1:${redirect.port}', 'test', 'secret');
+    addTearDown(remote.close);
+    await expectLater(remote.models(), throwsStateError);
+    expect(calls, 1);
+  });
+
   final openCodePath = Platform.environment['NEUROMESH_TEST_OPENCODE_CLI'];
   test('real OpenCode runs a local workspace tool and resumes the session',
       () async {
@@ -358,7 +390,7 @@ void main() {
           'OPENCODE_DISABLE_MODELS_FETCH': 'true',
           'OPENCODE_DISABLE_AUTOUPDATE': 'true',
           'NEUROMESH_BRIDGE_KEY': 'local-test',
-          'OPENCODE_CONFIG_CONTENT': AndroidOpenCode.localProviderConfig(
+          'OPENCODE_CONFIG_CONTENT': OpenCodeLocalProfile.localProviderConfig(
             name: 'fake-model',
             context: 8192,
             endpoint: '${server.localUrl}/v1',
@@ -389,7 +421,7 @@ void main() {
     expect(read, isTrue, reason: '${result.stdout}');
     final events = (result.stdout as String)
         .split('\n')
-        .map(AndroidOpenCode.parseEvent)
+        .map(OpenCodeLocalProfile.parseEvent)
         .whereType<Map>()
         .toList();
     expect(events.any((event) => event['type'] == 'tool_use'), isTrue);
@@ -400,7 +432,7 @@ void main() {
     final sessionFile = File('${directory.path}/session.json');
     final exported = await run([
       '-c',
-      AndroidOpenCode.exportToFile,
+      OpenCodeLocalProfile.exportToFile,
       'neuromesh-export',
       openCodePath!,
       session,
@@ -408,7 +440,7 @@ void main() {
     ], executable: '/bin/sh');
     expect(exported.exitCode, 0, reason: '${exported.stderr}');
     expect(
-        AndroidOpenCode.parseHistory(await sessionFile.readAsString()),
+        OpenCodeLocalProfile.parseHistory(await sessionFile.readAsString()),
         containsAllInOrder([
           (role: 'user', text: 'Read the test fixture.'),
           (role: 'assistant', text: 'Local file verified.'),
@@ -416,6 +448,80 @@ void main() {
         ]));
     expect(liveText.toString(), contains('Local file verified.'));
     expect(liveText.toString(), isNot(contains('<tool_call>')));
+  },
+      skip: openCodePath == null
+          ? 'Set NEUROMESH_TEST_OPENCODE_CLI to OpenCode v1.19.6'
+          : false,
+      timeout: const Timeout(Duration(minutes: 2)));
+  test('Android server client streams and resumes a real OpenCode session',
+      () async {
+    final directory =
+        await Directory.systemTemp.createTemp('neuromesh-opencode-http');
+    addTearDown(() => directory.delete(recursive: true));
+    Get.put<InferenceService>(
+        FakeInference()..reply = (_, __) => 'Served by OpenCode.');
+    addTearDown(Get.reset);
+    server = OpenAiServerService.forAgentModel('fake-model');
+    await server.start(port: 0, apiKey: 'bridge-key');
+    final reserved = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final port = reserved.port;
+    await reserved.close();
+    final proc = await Process.start(
+      openCodePath!,
+      ['serve', '--pure', '--hostname', '127.0.0.1', '--port', '$port'],
+      workingDirectory: directory.path,
+      includeParentEnvironment: false,
+      environment: {
+        'PATH': '/usr/bin:/bin',
+        'HOME': '${directory.path}/home',
+        'OPENCODE_SERVER_PASSWORD': 'server-key',
+        'OPENCODE_DISABLE_MODELS_FETCH': 'true',
+        'OPENCODE_DISABLE_AUTOUPDATE': 'true',
+        'NEUROMESH_BRIDGE_KEY': 'bridge-key',
+        'OPENCODE_CONFIG_CONTENT': OpenCodeLocalProfile.localProviderConfig(
+          name: 'fake-model',
+          context: 8192,
+          endpoint: '${server.localUrl}/v1',
+          allowTools: false,
+        ),
+      },
+    );
+    addTearDown(() async {
+      proc.kill();
+      await proc.exitCode;
+    });
+    final log = Completer<String>();
+    final output = proc.stdout
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen((line) {
+      if (!log.isCompleted && line.contains('listening')) log.complete(line);
+    });
+    addTearDown(output.cancel);
+    unawaited(proc.stderr.drain<void>());
+    await log.future.timeout(const Duration(seconds: 20));
+    final address = 'http://127.0.0.1:$port';
+    final unauthorized = OpenCodeServerClient(address, 'opencode', 'wrong');
+    addTearDown(unauthorized.close);
+    await expectLater(unauthorized.models(), throwsStateError);
+    final client = OpenCodeServerClient(address, 'opencode', 'server-key');
+    addTearDown(client.close);
+    expect(await client.verify(), OpenCodeServerClient.supportedVersion);
+    final models = await client.models();
+    final model = models.singleWhere((model) => model.provider == 'neuromesh');
+    final id = await client.createSession();
+    final partial = StringBuffer();
+    await client.send(id, model, 'Reply from the server.',
+        onText: partial.write, onTool: (_) {});
+    expect(partial.toString(), 'Served by OpenCode.');
+    expect(
+        (await client.sessions()).any((session) => session.id == id), isTrue);
+    expect(
+        await client.history(id),
+        containsAllInOrder([
+          (role: 'user', text: 'Reply from the server.'),
+          (role: 'assistant', text: 'Served by OpenCode.'),
+        ]));
   },
       skip: openCodePath == null
           ? 'Set NEUROMESH_TEST_OPENCODE_CLI to OpenCode v1.19.6'

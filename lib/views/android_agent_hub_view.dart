@@ -1,16 +1,17 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:get/get.dart';
-import 'package:xterm/xterm.dart';
 
 import '../core/ui.dart';
 import '../services/android_opencode.dart';
 import '../services/inference_service.dart';
-import '../services/sandbox_service.dart';
+import '../services/openai_server_service_io.dart';
+import '../services/opencode_server_client.dart';
+import 'agent_hub_view.dart';
 
 class AndroidAgentHubView extends StatefulWidget {
   const AndroidAgentHubView({super.key});
@@ -20,117 +21,155 @@ class AndroidAgentHubView extends StatefulWidget {
 }
 
 class _AndroidAgentHubViewState extends State<AndroidAgentHubView> {
-  final _agent = AndroidOpenCode(Get.find<SandboxService>());
-  final _inference = Get.find<InferenceService>();
+  final _address = TextEditingController(text: 'http://127.0.0.1:4096');
+  final _username = TextEditingController(text: 'opencode');
+  final _password = TextEditingController();
   final _input = TextEditingController();
   final _scroll = ScrollController();
+  final _inference = Get.find<InferenceService>();
+  OpenCodeServerClient? _server;
+  OpenAiServerService? _bridge;
+  String? _bridgeKey;
+  String? _bridgeConfig;
+  OpenCodeModel? _model;
+  List<OpenCodeModel> _models = [];
+  String? _session;
   List<OpenCodeMessage> _messages = [];
-  String _status = '';
+  String _partial = '';
   String _tool = '';
-  String _reply = '';
   String? _error;
-  double? _progress;
   bool _busy = false;
-  bool _installed = false;
-  bool _connected = false;
+  bool _sending = false;
   bool _allowWorkspaceReads = false;
 
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_act(_discover));
-  }
+  String _t(String en, String ar) => agentHubUsesArabic(context) ? ar : en;
 
-  Future<void> _discover() async {
-    final status = await _agent.discover();
-    final installed = await _agent.installed();
-    if (mounted) {
-      setState(() {
-        _status = status;
-        _installed = installed;
-      });
-    }
-  }
-
-  Future<void> _act(Future<void> Function() work) async {
-    if (_busy) return;
+  Future<void> _act(Future<void> Function() action) async {
+    if (_busy || !mounted) return;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      await work();
+      await action();
     } catch (error) {
       if (mounted) setState(() => _error = '$error');
     } finally {
-      if (mounted)
-        setState(() {
-          _progress = null;
-          _busy = false;
-        });
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<bool> _confirm(String title, String detail, String action) async =>
-      await showDialog<bool>(
-        context: context,
-        builder: (dialog) => AlertDialog(
-          title: Text(title),
-          content: Text(detail),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(dialog, false),
-                child: const Text('Cancel')),
-            FilledButton(
-                onPressed: () => Navigator.pop(dialog, true),
-                child: Text(action)),
-          ],
-        ),
-      ) ??
-      false;
-
-  Future<void> _install() async {
-    if (!await _confirm(
-        'Set up OpenCode',
-        'OpenCode downloads about 79 MB. Allow around 400 MB for installation, '
-            'temporary files and Alpine terminal tools. Alpine is installed if needed.',
-        _installed ? 'Repair installation' : 'Install')) return;
-    if (!mounted) return;
-    await _act(() async {
-      await _agent.install((text, value) {
-        if (mounted)
+  Future<void> _connect() => _act(() async {
+        final client = OpenCodeServerClient(
+            _address.text, _username.text.trim(), _password.text);
+        try {
+          await client.verify();
+          final models = await client.models();
+          if (!mounted) {
+            client.close();
+            return;
+          }
           setState(() {
-            _status = text;
-            _progress = value;
+            _server = client;
+            _models = models;
+            _password.clear();
           });
+        } catch (_) {
+          client.close();
+          rethrow;
+        }
       });
-      await _discover();
-    });
+
+  Future<void> _disconnect() => _act(() async {
+        _server?.close();
+        final bridge = _bridge;
+        setState(() {
+          _server = null;
+          _bridge = null;
+          _bridgeKey = null;
+          _bridgeConfig = null;
+          _session = null;
+          _models = [];
+          _model = null;
+          _messages = [];
+          _tool = '';
+        });
+        await bridge?.stop();
+      });
+
+  Future<void> _localBridge() => _act(() async {
+        if (_bridge == null) {
+          final model = _inference.loadedModelName.value;
+          final contextTokens = _inference.contextTokensTotal.value;
+          final random = Random.secure();
+          final key = List.generate(32,
+                  (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'))
+              .join();
+          final bridge = OpenAiServerService.forAgentModel(
+            model,
+            allowTools: _allowWorkspaceReads,
+          );
+          await bridge.start(port: 0, apiKey: key);
+          if (!mounted) {
+            await bridge.stop();
+            return;
+          }
+          setState(() {
+            _bridge = bridge;
+            _bridgeKey = key;
+            _bridgeConfig = OpenCodeLocalProfile.localProviderConfig(
+                name: model,
+                context: contextTokens,
+                endpoint: '${bridge.localUrl}/v1',
+                allowTools: _allowWorkspaceReads);
+          });
+        }
+        await _showModelConfig();
+      });
+
+  Future<void> _showModelConfig() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text(
+            _t('Same-phone local model', 'النموذج المحلي على الهاتف نفسه')),
+        content: SingleChildScrollView(
+            child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_t(
+              'Use this configuration in a separate OpenCode profile on this phone. Set NEUROMESH_BRIDGE_KEY in the server environment. Restart the server if it is already running. The key expires when the bridge stops.',
+              'استخدم هذا الإعداد في ملف تعريف منفصل لـ OpenCode على هذا الهاتف. اضبط NEUROMESH_BRIDGE_KEY في بيئة الخادم. أعد تشغيل الخادم إذا كان يعمل. تنتهي صلاحية المفتاح عند إيقاف الاتصال بالنموذج.',
+            )),
+            const SizedBox(height: 12),
+            const Text('NEUROMESH_BRIDGE_KEY'),
+            SelectableText(_bridgeKey!, textDirection: TextDirection.ltr),
+          ],
+        )),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Clipboard.setData(ClipboardData(text: _bridgeConfig!)),
+            child: Text(_t('Copy configuration', 'نسخ الإعداد')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialog),
+            child: Text(_t('Done', 'تم')),
+          ),
+        ],
+      ),
+    );
   }
 
-  Future<void> _connect({required bool terminal}) async {
-    final model = _inference.loadedModelName.value;
-    if (!await _confirm(
-        'Connect OpenCode to $model',
-        _allowWorkspaceReads
-            ? 'Allow OpenCode to read files in the default workspace using the local model.'
-            : 'Link OpenCode to the currently loaded model for text responses.',
-        'Connect')) return;
-    if (!mounted) return;
-    await _act(() async {
-      await _agent.connect(model, _inference.contextTokensTotal.value,
-          allowWorkspaceReads: _allowWorkspaceReads);
-      if (mounted) setState(() => _connected = true);
-      await _history();
-    });
-    if (terminal && mounted && _connected) await _terminal();
-  }
-
-  Future<void> _history() async {
-    final messages = await _agent.history();
-    if (mounted) setState(() => _messages = messages);
-    _toEnd();
-  }
+  Future<void> _stopBridge() => _act(() async {
+        final bridge = _bridge;
+        setState(() {
+          _bridge = null;
+          _bridgeKey = null;
+          _bridgeConfig = null;
+        });
+        await bridge?.stop();
+      });
 
   void _toEnd() => WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _scroll.hasClients) {
@@ -138,74 +177,90 @@ class _AndroidAgentHubViewState extends State<AndroidAgentHubView> {
         }
       });
 
+  Future<void> _openSession() => _act(() async {
+        final sessions = await _server!.sessions();
+        if (!mounted) return;
+        final selected = await showDialog<String>(
+          context: context,
+          builder: (dialog) => SimpleDialog(
+            title: Text(_t('OpenCode sessions', 'جلسات OpenCode')),
+            children: [
+              for (final session in sessions)
+                SimpleDialogOption(
+                    onPressed: () => Navigator.pop(dialog, session.id),
+                    child: Text(session.title)),
+              if (sessions.isEmpty)
+                Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Text(_t('No sessions', 'لا توجد جلسات'))),
+            ],
+          ),
+        );
+        if (selected == null || !mounted) return;
+        final history = await _server!.history(selected);
+        if (!mounted) return;
+        setState(() {
+          _session = selected;
+          _messages = history;
+          _tool = '';
+        });
+        _toEnd();
+      });
+
   Future<void> _send() async {
+    final model = _model;
     final text = _input.text.trim();
-    if (_busy || !_connected || text.isEmpty) return;
-    _input.clear();
-    setState(() {
-      _messages.add((role: 'user', text: text));
-      _reply = '';
-      _tool = '';
-    });
-    _toEnd();
+    if (_busy || model == null || text.isEmpty) return;
     await _act(() async {
+      final server = _server!;
+      final session = _session ??
+          await server.createSession(allowWorkspaceReads: _allowWorkspaceReads);
+      if (!mounted) return;
+      _input.clear();
+      setState(() {
+        _session = session;
+        _messages.add((role: 'user', text: text));
+        _tool = '';
+        _sending = true;
+      });
+      _toEnd();
       try {
-        await _agent.send(text, (reply) {
-          if (mounted) setState(() => _reply += reply);
+        await server.send(session, model, text, onText: (token) {
+          if (mounted) setState(() => _partial += token);
           _toEnd();
-        }, (tool) {
+        }, onTool: (tool) {
           if (mounted) setState(() => _tool = tool);
         });
       } finally {
         if (mounted) {
-          if (_reply.isNotEmpty)
-            _messages.add((role: 'assistant', text: _reply));
-          setState(() => _reply = '');
+          setState(() => _sending = false);
+          try {
+            final history = await server.history(session);
+            if (mounted) setState(() => _messages = history);
+          } finally {
+            if (mounted) setState(() => _partial = '');
+          }
+          _toEnd();
         }
       }
     });
   }
 
-  Future<void> _sessions() => _act(() async {
-        final sessions = await _agent.sessions();
-        if (!mounted) return;
-        final id = await showDialog<String>(
-          context: context,
-          builder: (dialog) => SimpleDialog(
-            title: const Text('OpenCode sessions'),
-            children: [
-              for (final session in sessions.entries)
-                SimpleDialogOption(
-                    onPressed: () => Navigator.pop(dialog, session.key),
-                    child: Text(session.value)),
-              if (sessions.isEmpty)
-                const Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text('No sessions yet.')),
-            ],
-          ),
-        );
-        if (id != null) {
-          await _agent.selectSession(id);
-          await _history();
-        }
-      });
-
-  Future<void> _terminal() => _act(() async {
-        await Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => _OpenCodeTerminal(agent: _agent),
-        ));
-        await _agent.stopProcess();
-        final sessions = await _agent.sessions();
-        if (_agent.sessionId == null && sessions.isNotEmpty) {
-          await _agent.selectSession(sessions.keys.first);
-        }
-        await _history();
-      });
+  Future<void> _abort() async {
+    try {
+      await _server?.abort(_session!);
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    }
+  }
 
   @override
   void dispose() {
-    unawaited(_agent.disconnect());
+    _server?.close();
+    unawaited(_bridge?.stop());
+    _address.dispose();
+    _username.dispose();
+    _password.dispose();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
@@ -213,229 +268,176 @@ class _AndroidAgentHubViewState extends State<AndroidAgentHubView> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: appScreenBar(context, title: 'Agent Hub'),
-        body: SafeArea(
-          child: Column(children: [
-            ListTile(
-              title: const Text('OpenCode · Android ARM64 preview'),
-              subtitle: Text(_error ?? _status),
-            ),
-            if (_busy) LinearProgressIndicator(value: _progress),
-            if (!_connected) ...[
-              Wrap(
-                spacing: 8,
-                children: [
-                  FilledButton(
-                    onPressed: _agent.compatible && !_busy ? _install : null,
-                    child: Text(
-                        _installed ? 'Repair OpenCode' : 'Install OpenCode'),
-                  ),
-                  if (_installed)
-                    TextButton(
-                      onPressed: _busy
-                          ? null
-                          : () async {
-                              if (!await _confirm(
-                                  'Remove OpenCode',
-                                  'This removes OpenCode and its local sessions. Alpine and your workspace files stay installed.',
-                                  'Remove')) return;
-                              if (!mounted) return;
-                              await _act(() async {
-                                await _agent.remove();
-                                await _discover();
-                              });
-                            },
-                      child: const Text('Remove'),
-                    ),
-                  if (_busy)
-                    TextButton(
-                        onPressed: _agent.cancel, child: const Text('Cancel')),
-                ],
-              ),
-              Obx(() {
-                final model = _inference.loadedModelName.value;
-                final ready = _inference.isModelLoaded.value &&
-                    _inference.contextTokensTotal.value >= 2048;
-                final canConnect = _installed && ready && !_busy;
-                return Column(
-                  children: [
-                    Text(ready
-                        ? 'Local model: $model'
-                        : 'Load a local model with at least 2048 context tokens'),
-                    Wrap(spacing: 8, children: [
-                      OutlinedButton.icon(
-                        onPressed:
-                            canConnect ? () => _connect(terminal: false) : null,
-                        icon: const Icon(Icons.chat_outlined),
-                        label: const Text('Chat'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed:
-                            canConnect ? () => _connect(terminal: true) : null,
-                        icon: const Icon(Icons.terminal),
-                        label: const Text('Terminal'),
-                      ),
-                    ]),
-                  ],
-                );
-              }),
-              SwitchListTile(
-                title: const Text('Allow workspace reads'),
-                subtitle: const Text(
-                    'Experimental. Requires a model that follows tool instructions.'),
-                value: _allowWorkspaceReads,
-                onChanged: _installed && !_busy
-                    ? (value) => setState(() => _allowWorkspaceReads = value)
-                    : null,
-              ),
-              const ListTile(
-                title: Text('Codex CLI and Claude Code'),
-                subtitle: Text('Unsupported in this Android preview.'),
-              ),
-            ] else ...[
-              Wrap(
-                children: [
-                  const Chip(label: Text('Chat')),
-                  TextButton(
-                      onPressed: _busy ? null : _sessions,
-                      child: const Text('Sessions')),
-                  TextButton(
-                      onPressed: _busy
-                          ? null
-                          : () => _act(() async {
-                                await _agent.newChat();
-                                await _history();
-                              }),
-                      child: const Text('New chat')),
-                  TextButton(
-                      onPressed: _busy ? null : _terminal,
-                      child: const Text('Terminal')),
-                  TextButton(
-                      onPressed: _busy
-                          ? null
-                          : () => _act(() async {
-                                await _agent.disconnect();
-                                if (mounted) setState(() => _connected = false);
-                              }),
-                      child: const Text('Disconnect')),
-                ],
-              ),
-              Expanded(
-                  child: ListView(
-                controller: _scroll,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                children: [
-                  for (final message in _messages) _message(context, message),
-                  if (_reply.isNotEmpty)
-                    _message(context, (role: 'assistant', text: _reply)),
-                  if (_tool.isNotEmpty)
-                    ListTile(
-                      leading: const Icon(Icons.build_outlined),
-                      title: Text(_tool),
-                    ),
-                ],
-              )),
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(children: [
-                  Expanded(
-                      child: TextField(
-                    controller: _input,
-                    onSubmitted: (_) => _send(),
-                    decoration: const InputDecoration(hintText: 'Ask OpenCode'),
-                  )),
-                  IconButton(
-                    tooltip: _busy ? 'Stop' : 'Send',
-                    onPressed: _busy ? _agent.cancel : _send,
-                    icon: Icon(_busy ? Icons.stop_circle_outlined : Icons.send),
-                  ),
-                ]),
-              ),
-            ],
-          ]),
-        ),
-      );
-
-  Widget _message(BuildContext context, OpenCodeMessage message) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(message.role == 'user' ? 'You' : 'OpenCode',
-              style: Theme.of(context).textTheme.labelLarge),
-          if (message.role == 'user')
-            SelectableText(message.text)
-          else
-            MarkdownBody(data: message.text, selectable: true),
-        ]),
-      );
-}
-
-class _OpenCodeTerminal extends StatefulWidget {
-  const _OpenCodeTerminal({required this.agent});
-  final AndroidOpenCode agent;
-
-  @override
-  State<_OpenCodeTerminal> createState() => _OpenCodeTerminalState();
-}
-
-class _OpenCodeTerminalState extends State<_OpenCodeTerminal> {
-  final _terminal = Terminal(maxLines: 1500);
-  Process? _process;
-  String _status = 'Opening OpenCode…';
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _start());
-  }
-
-  Future<void> _start() async {
-    if (!mounted) return;
-    try {
-      final process = await widget.agent.terminal(
-        width: _terminal.viewWidth,
-        height: _terminal.viewHeight,
-      );
-      if (!mounted) {
-        await widget.agent.stopProcess();
-        return;
-      }
-      _process = process;
-      _terminal.onOutput = (text) => _process?.stdin.add(utf8.encode(text));
-      setState(() => _status = '');
-      await Future.wait([
-        process.stdout
-            .transform(const Utf8Decoder(allowMalformed: true))
-            .forEach(_terminal.write),
-        process.stderr
-            .transform(const Utf8Decoder(allowMalformed: true))
-            .forEach(_terminal.write),
-      ]);
-      final code = await process.exitCode;
-      _process = null;
-      if (mounted) setState(() => _status = 'OpenCode exited ($code)');
-    } catch (error) {
-      if (mounted) setState(() => _status = '$error');
-    }
-  }
-
-  @override
-  void dispose() {
-    widget.agent.cancel();
-    _terminal.onOutput = null;
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar:
-            appScreenBar(context, title: 'OpenCode Terminal', showBack: true),
+        appBar: appScreenBar(context, title: _t('Agents', 'الوكلاء')),
         body: SafeArea(
             child: Column(children: [
-          if (_status.isNotEmpty)
-            Padding(padding: const EdgeInsets.all(8), child: Text(_status)),
-          Expanded(
-              child: TerminalView(_terminal,
-                  autofocus: true, keyboardType: TextInputType.text)),
+          if (_busy) const LinearProgressIndicator(),
+          if (_error != null)
+            Padding(padding: const EdgeInsets.all(12), child: Text(_error!)),
+          Expanded(child: _server == null ? _setup() : _chat()),
         ])),
       );
+
+  Widget _setup() => ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text('OpenCode', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 8),
+          Text(_t(
+            'Connect to an OpenCode server you manage. NeuroMesh does not install Linux or OpenCode. Messages are sent to the server you connect to.',
+            'اتصل بخادم OpenCode تديره بنفسك. لا يثبّت NeuroMesh نظام Linux أو OpenCode. تُرسل الرسائل إلى الخادم الذي تتصل به.',
+          )),
+          Text(_t(
+            'Use OpenCode 1.19.6 with server authentication. For a server on another device, use HTTPS. Terminal is available from your OpenCode host.',
+            'استخدم OpenCode 1.19.6 مع مصادقة الخادم وHTTPS عند الاتصال بجهاز آخر. استخدم الطرفية على جهاز خادم OpenCode.',
+          )),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(_t('Allow workspace reads in new chats',
+                'السماح بقراءة ملفات المشروع في المحادثات الجديدة')),
+            subtitle: Text(_t(
+                'Requires a compatible model. Existing sessions use the server’s permissions.',
+                'يتطلب نموذجًا متوافقًا. تستخدم الجلسات الحالية أذونات الخادم.')),
+            value: _allowWorkspaceReads,
+            onChanged: _busy || _bridge != null
+                ? null
+                : (value) => setState(() => _allowWorkspaceReads = value),
+          ),
+          Obx(() => OutlinedButton.icon(
+                onPressed: !_busy &&
+                        (_bridge != null || _inference.isModelLoaded.value)
+                    ? _localBridge
+                    : null,
+                icon: const Icon(Icons.memory),
+                label: Text(_bridge != null
+                    ? _t('View phone model configuration',
+                        'عرض إعدادات نموذج الهاتف')
+                    : _t(
+                        'Link loaded phone model', 'ربط نموذج الهاتف المحمّل')),
+              )),
+          if (_bridge != null)
+            TextButton(
+                onPressed: _busy ? null : _stopBridge,
+                child: Text(_t('Stop model bridge', 'إيقاف ربط النموذج'))),
+          TextField(
+              controller: _address,
+              enabled: !_busy,
+              keyboardType: TextInputType.url,
+              textDirection: TextDirection.ltr,
+              decoration: InputDecoration(
+                  labelText: _t('Server address', 'عنوان الخادم'))),
+          TextField(
+              controller: _username,
+              enabled: !_busy,
+              textDirection: TextDirection.ltr,
+              decoration:
+                  InputDecoration(labelText: _t('Username', 'اسم المستخدم'))),
+          TextField(
+              controller: _password,
+              enabled: !_busy,
+              obscureText: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: InputDecoration(
+                  labelText: _t('Server password', 'كلمة مرور الخادم'))),
+          const SizedBox(height: 16),
+          FilledButton(
+              onPressed: _busy ? null : _connect,
+              child: Text(_t('Connect to OpenCode', 'الاتصال بـ OpenCode'))),
+        ],
+      );
+
+  Widget _chat() => Column(children: [
+        ListTile(
+          title: Text(_t('OpenCode connected', 'تم الاتصال بـ OpenCode')),
+          subtitle: Text(_server!.endpoint.authority,
+              textDirection: TextDirection.ltr),
+          trailing: IconButton(
+              icon: const Icon(Icons.link_off),
+              onPressed: _busy ? null : _disconnect,
+              tooltip: _t('Disconnect', 'قطع الاتصال')),
+        ),
+        if (_models.isEmpty)
+          Text(_t('Configure a model on the server, then reconnect.',
+              'أعد الاتصال بعد إعداد نموذج على الخادم.'))
+        else
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: DropdownButton<OpenCodeModel>(
+              value: _model,
+              isExpanded: true,
+              hint: Text(_t('Select a server model', 'اختيار نموذج الخادم')),
+              onChanged:
+                  _busy ? null : (model) => setState(() => _model = model),
+              items: [
+                for (final model in _models)
+                  DropdownMenuItem(
+                      value: model,
+                      child: Text('${model.name} · ${model.provider}',
+                          overflow: TextOverflow.ellipsis)),
+              ],
+            ),
+          ),
+        Wrap(children: [
+          TextButton(
+              onPressed: _busy ? null : _openSession,
+              child: Text(_t('Sessions', 'الجلسات'))),
+          TextButton(
+            onPressed: _busy
+                ? null
+                : () => setState(() {
+                      _session = null;
+                      _messages = [];
+                      _tool = '';
+                    }),
+            child: Text(_t('New chat', 'محادثة جديدة')),
+          ),
+        ]),
+        Expanded(
+            child: ListView(
+          controller: _scroll,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          children: [
+            for (final message in _messages)
+              Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(message.role == 'user'
+                          ? _t('You', 'أنت')
+                          : 'OpenCode'),
+                      if (message.role == 'user')
+                        SelectableText(message.text)
+                      else
+                        MarkdownBody(data: message.text, selectable: true),
+                    ],
+                  )),
+            if (_partial.isNotEmpty)
+              MarkdownBody(data: _partial, selectable: true),
+            if (_tool.isNotEmpty)
+              ListTile(
+                  leading: const Icon(Icons.build_outlined),
+                  title: Text(_tool)),
+          ],
+        )),
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(children: [
+            Expanded(
+                child: TextField(
+                    controller: _input,
+                    enabled: !_busy && _model != null,
+                    onSubmitted: (_) => _send(),
+                    decoration: InputDecoration(
+                        hintText: _t('Ask OpenCode', 'اسأل OpenCode')))),
+            IconButton(
+              tooltip: _sending ? _t('Stop', 'إيقاف') : _t('Send', 'إرسال'),
+              icon: Icon(_sending ? Icons.stop_circle_outlined : Icons.send),
+              onPressed:
+                  _sending ? _abort : (_busy || _model == null ? null : _send),
+            ),
+          ]),
+        ),
+      ]);
 }

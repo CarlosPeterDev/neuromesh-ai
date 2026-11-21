@@ -17,6 +17,17 @@ launch_app() {
     adb shell pidof "$app_id" | grep -E '[0-9]+'
 }
 
+report_installed_package() {
+    local app_id="$1" apk bytes total=0
+    while IFS= read -r apk; do
+        bytes=$(adb shell stat -c %s "$apk" | tr -d '\r')
+        [[ "$bytes" =~ ^[0-9]+$ ]]
+        total=$((total + bytes))
+    done < <(adb shell pm path "$app_id" | tr -d '\r' | sed -n 's/^package://p')
+    test "$total" -gt 0
+    printf '%s installed APK files: %s bytes (excludes app data and extracted libraries)\n' "$app_id" "$total" | tee -a "$GITHUB_STEP_SUMMARY"
+}
+
 # Install a minimal older APK with the same test identity, then upgrade it.
 # This exercises Android's version and certificate checks without another native build.
 fixture="$RUNNER_TEMP/previous-test-app"
@@ -36,6 +47,7 @@ platform=$(find "$ANDROID_HOME/platforms" -name android.jar | sort -V | tail -n 
 adb install "$fixture/previous.apk"
 adb install -r "$RUNNER_TEMP/universal.apk"
 launch_app "$test_app"
+report_installed_package "$test_app"
 
 # Install the Play-style splits alongside the public test app. The Play
 # bundle keeps its separate signing identity and application ID.
@@ -48,4 +60,5 @@ java -jar "$bundletool" build-apks --bundle="$aab" --output="$apk_set" \
     --ks-pass=pass:android --key-pass=pass:android --overwrite
 java -jar "$bundletool" install-apks --apks="$apk_set"
 launch_app "$play_app"
+report_installed_package "$play_app"
 adb shell pm path "$test_app" | grep -F 'package:'
