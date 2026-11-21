@@ -485,6 +485,32 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           script: bash scripts/smoke_android_packages.sh
 
+      - name: Record checksums for the retested Android packages
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/retested-android"
+          cp "$RUNNER_TEMP/universal.apk" "$RUNNER_TEMP/retested-android/NeuroMesh-universal-preview.apk"
+          cp build/app/outputs/bundle/release/app-release.aab "$RUNNER_TEMP/retested-android/NeuroMesh-Play-preview.aab"
+          cd "$RUNNER_TEMP/retested-android"
+          sha256sum -- *.apk *.aab > SHA256SUMS.txt
+          sha256sum --check --strict SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-universal-apk
+          path: ${{ runner.temp }}/retested-android/NeuroMesh-universal-preview.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-play-aab
+          path: ${{ runner.temp }}/retested-android/NeuroMesh-Play-preview.aab
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-checksums
+          path: ${{ runner.temp }}/retested-android/SHA256SUMS.txt
+          if-no-files-found: error
+
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
