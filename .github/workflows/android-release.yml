@@ -133,7 +133,7 @@ jobs:
           tar -xzf "$archive" -C "$RUNNER_TEMP/opencode" opencode
           NEUROMESH_TEST_OPENCODE_CLI="$RUNNER_TEMP/opencode/opencode" \
             flutter test --no-pub test/openai_server_service_test.dart
-          rm -rf "$RUNNER_TEMP/opencode"
+          rm -f "$archive"
 
       - name: Resolve Flutter Gradle plugin dependencies from Maven Central
         if: github.event_name != 'pull_request'

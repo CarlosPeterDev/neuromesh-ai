@@ -25,8 +25,25 @@ report_installed_package() {
         total=$((total + bytes))
     done < <(adb shell pm path "$app_id" | tr -d '\r' | sed -n 's/^package://p')
     test "$total" -gt 0
-    printf '%s installed APK files: %s bytes (excludes app data and extracted libraries)\n' "$app_id" "$total" | tee -a "$GITHUB_STEP_SUMMARY"
+    printf '%s installed APK files: %s bytes (excludes app data and extracted libraries)\n' "$app_id" "$total" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 }
+
+# A real OpenCode host stays in the CI runner. The emulator connects through
+# adb reverse so no agent runtime is needed inside either Android package.
+opencode_home="$RUNNER_TEMP/opencode-smoke-home"
+mkdir -p "$opencode_home"
+password=neuromesh-ci-loopback
+(
+    cd "$opencode_home"
+    HOME="$opencode_home" OPENCODE_SERVER_PASSWORD="$password" \
+        OPENCODE_DISABLE_MODELS_FETCH=true OPENCODE_DISABLE_AUTOUPDATE=true \
+        "$RUNNER_TEMP/opencode/opencode" serve --pure --hostname 127.0.0.1 --port 4096
+) > "$RUNNER_TEMP/opencode-android-smoke.log" 2>&1 &
+opencode_pid=$!
+trap 'adb reverse --remove tcp:4096 || true; kill "$opencode_pid" 2>/dev/null || true' EXIT
+curl --fail --silent --show-error --retry 6 --retry-connrefused --max-time 5 \
+    -u "opencode:$password" http://127.0.0.1:4096/global/health
+adb reverse tcp:4096 tcp:4096
 
 # Install a minimal older APK with the same test identity, then upgrade it.
 # This exercises Android's version and certificate checks without another native build.
@@ -48,6 +65,7 @@ adb install "$fixture/previous.apk"
 adb install -r "$RUNNER_TEMP/universal.apk"
 launch_app "$test_app"
 report_installed_package "$test_app"
+python scripts/smoke_opencode_android.py "$password"
 
 # Install the Play-style splits alongside the public test app. The Play
 # bundle keeps its separate signing identity and application ID.
@@ -61,4 +79,5 @@ java -jar "$bundletool" build-apks --bundle="$aab" --output="$apk_set" \
 java -jar "$bundletool" install-apks --apks="$apk_set"
 launch_app "$play_app"
 report_installed_package "$play_app"
+python scripts/smoke_opencode_android.py "$password"
 adb shell pm path "$test_app" | grep -F 'package:'
