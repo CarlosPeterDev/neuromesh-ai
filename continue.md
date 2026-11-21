@@ -6,6 +6,23 @@ NeuroMesh AI is a Flutter workspace for private local AI with optional cloud pro
 
 Read this file, check the current branch and working tree, and review the latest GitHub runs and open pull requests before choosing work. Update this file when the next task, release status, or known limitations change.
 
+## Combined OpenCode and Android preview
+
+Build `8554a20` combines the OpenCode terminal preview and the smaller Play AAB. All 221 Flutter tests and three build-configuration tests passed locally. The entire Flutter suite ran in a network namespace with only loopback available. It used the published Artemis GGUF and BF16 projector and the Kitten Nano and Kokoro voice models. OpenCode streamed from the local GGUF in Xfce Terminal, the genuine projector was recognized, and both voice models generated WAV audio.
+
+The combined v1.0.150 Actions run passed. Windows and Linux produced native packages and passed their desktop image-runtime tests. The Android 12 x86-64 emulator launched the universal APK, accepted its in-place reinstall, and launched a separate installation generated from the AAB. The development-signed AAB was 186,667,730 bytes. Bundletool measured a 105,701,927-byte ARM64 download. The Android APK signatures and the three published preview file checksums passed. These smoke tests cover startup. Physical Android devices and desktop installer operation need their own checks. [Combined preview PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/57) · [Package build and emulator results](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44851432639)
+
+## NeuroMesh 2.0 desktop OpenCode milestone
+
+- **Agents** discovers installed OpenCode and shows whether the local terminal preview is available. On Linux with OpenCode v1.19.6 and a supported terminal, it links the loaded model over a dedicated authenticated loopback endpoint. Provider configuration and CLI history are scoped to a temporary profile. [Setup, architecture, and upstream and distribution audit](docs/OPENCODE.md)
+- Local verification passed 217 Flutter tests and all three build-config tests. Four optional checks were skipped in the standard suite. The separate Linux smoke test passed with Xfce Terminal, real OpenCode and Artemis GGUF in a loopback-only network namespace. [Implementation and checks](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/54/checks)
+- The preview exposes text completions. Next is the agent session API and native Chat UI, followed by structured tool support and approval tests. Windows and macOS launch, physical cluster operation through the bridge, Android runtime distribution, and a release from this branch remain pending.
+- The v1.0.139 AAB was 324,350,971 bytes. Meeting the 200 MB raw AAB requirement needs an Android packaging pass and a separate raw artifact check. The existing preview assets are pre-releases.
+
+## Automatic GitHub Releases
+
+Every push to `main` starts the Android, Linux, and Windows release workflow. The publish job verifies the build outputs and SHA-256 digests, then publishes one versioned GitHub Release with individual installer downloads. GitHub marks the newest eligible version **Latest**, and the Android updater uses GitHub’s Latest release endpoint with a fallback for the historical channel. Development-signed packages carry a development label and the `-dev` filename suffix. [Latest release](https://github.com/CarlosPeterDev/neuromesh-ai/releases/latest)
+
 ## Release and verification
 
 - **v1.0.139** was published from `b97a515d23a8d18ca2ad7dc0c2b3192038960398`. It includes tool discovery, Android shared-folder access, clickable replies, the narration fixes, and local Kitten and Kokoro synthesis. The Android 12 emulator passed installation and reinstallation. All six installers match the checksums on both release pages. The GitHub APKs use a temporary preview signer. [Release](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/tag/v1.0.139) · [ARM64 APK](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/download/v1.0.139/NeuroMesh-AI-v1.0.139-arm64-dev.apk) · [Build and publication](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44796547105)
@@ -19,6 +36,10 @@ Read this file, check the current branch and working tree, and review the latest
 - The release workflow passed analysis, tests, APK signature and architecture checks, Play bundle checks, Android emulator install and reinstall, desktop packaging and native image-runtime checks. The standalone APKs and AAB include the required Alpine launcher libraries. All six asset digests match the release checksum manifest on both release pages. [Workflow](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44532641823)
 - All 164 Flutter tests passed locally, including search retries, HTML attachment follow-ups, small-context trimming, model-helper classification, cluster allocation, and Linux command confirmation. Physical ARM64 Alpine startup, voice playback, model-helper combinations, cluster performance, Windows command execution and SSH VM sessions still need device tests.
 - Earlier tested releases were v1.0.100, v1.0.107, and v1.0.111. [Release history](https://github.com/carlospeter582011-prog/neuromesh-ai/releases)
+
+## Play AAB size
+
+The v1.0.139 bundle was 324,350,971 bytes, including 124,471,709 bytes of native debug metadata. Android release packaging omits that metadata and the two largest browser-only speech payloads. Gradle generated a development-signed v1.0.146 AAB of 186,664,083 bytes. The corrected workflow check passed on that exact bundle and measured an ARM64 split download of 105,699,551 bytes. The signature, manifest, and stripped Flutter binaries passed verification. Bundletool generated splits for all three supported ABIs. The normal build now checks the final signed AAB against the 200 MB target and separately measures the ARM64 split download. Local Flutter checks passed 210 tests with three optional fixture tests skipped. [Play preparation](docs/PLAY_STORE.md) · [Packaging PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/56) · [Measured Gradle artifact](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44848498057/artifacts/14684554372)
 
 ## Where to work
 

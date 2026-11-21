@@ -13,7 +13,7 @@ CI signs release builds only when these repository secrets exist (Settings → S
 
 Create a key once with (`keytool -genkey -v -keystore release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias neuromesh`), then `base64 -w0 release.jks`. **Back the keystore up safely: Google Play updates require the same key forever.**
 
-Without these secrets CI produces *development-signed* builds, published as pre-releases and named accordingly. Do not distribute them as production releases.
+Without these secrets CI labels the versioned GitHub Release **Development build** and gives the Android upload files a `-dev` suffix. GitHub can mark that release **Latest** for repository downloads. Use the production upload key for a Play release.
 
 
 ### Persistent GitHub APK updates

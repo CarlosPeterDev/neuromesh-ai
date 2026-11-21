@@ -6,8 +6,17 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      play_bundle_only:
+        description: Build and verify a development-signed Play AAB artifact
+        type: boolean
+        default: false
+      preview_only:
+        description: Test Android and desktop packages with development signing and upload them to Actions
+        type: boolean
+        default: false
 
-# Serialize runs by ref so releases cannot move the latest tag concurrently.
+# Serialize main release builds so publication and Latest selection agree.
 concurrency:
   group: android-release-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -16,10 +25,10 @@ permissions:
   contents: read
 
 env:
-  NEUROMESH_REPORT_ENDPOINT: ${{ vars.NEUROMESH_REPORT_ENDPOINT }}
-  NEUROMESH_REPORT_BOT_TOKEN: ${{ secrets.NEUROMESH_REPORT_BOT_TOKEN }}
-  NEUROMESH_REPORT_CHAT_ID: ${{ secrets.NEUROMESH_REPORT_CHAT_ID }}
-  REQUIRE_DEVELOPER_REPORT_DELIVERY: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
+  NEUROMESH_REPORT_ENDPOINT: ${{ !inputs.preview_only && !inputs.play_bundle_only && vars.NEUROMESH_REPORT_ENDPOINT || '' }}
+  NEUROMESH_REPORT_BOT_TOKEN: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.NEUROMESH_REPORT_BOT_TOKEN || '' }}
+  NEUROMESH_REPORT_CHAT_ID: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.NEUROMESH_REPORT_CHAT_ID || '' }}
+  REQUIRE_DEVELOPER_REPORT_DELIVERY: ${{ !inputs.preview_only && !inputs.play_bundle_only && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
   BASE_VERSION: "1.0"   # MAJOR.MINOR; patch comes from the CI run number
   ANDROID_VERSION_CODE_BASE: 5000   # Exceed legacy split-ABI APK version codes (including 4072)
 
@@ -70,10 +79,10 @@ jobs:
       - name: Prepare signing
         id: sign
         env:
-          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KS_B64: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.ANDROID_KEYSTORE_BASE64 || '' }}
+          KS_PASS: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
+          KEY_ALIAS: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.ANDROID_KEY_ALIAS || '' }}
+          KEY_PASS: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.ANDROID_KEY_PASSWORD || '' }}
         run: |
           if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
             echo "$KS_B64" | base64 -d > android/release.jks
@@ -95,7 +104,7 @@ jobs:
               echo "storeFile=$GITHUB_WORKSPACE/android/release.jks"
             } > android/key.properties
             echo "production=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::No signing secrets: building DEVELOPMENT-signed artifacts (published as pre-release)."
+            echo "::warning::Building DEVELOPMENT-signed artifacts."
           fi
 
       - name: Private developer report configuration
@@ -160,11 +169,31 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.sign.outputs.production == 'true' && 'false' || 'true' }}
+          BUILD_NAME: ${{ steps.ver.outputs.name }}
+          BUILD_NUMBER: ${{ steps.ver.outputs.code }}
         run: |
-          V='--build-name=${{ steps.ver.outputs.name }} --build-number=${{ steps.ver.outputs.code }}'
+          set -euo pipefail
           M=android/app/src/main/AndroidManifest.xml
           sed -i -E '/MANAGE_EXTERNAL_STORAGE|REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|WRITE_EXTERNAL_STORAGE|READ_EXTERNAL_STORAGE/d' "$M"
-          flutter build appbundle --release "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json" --dart-define=PLAY_BUILD=true $V
+          # Flutter 3.38's appbundle command expects a bundled libflutter.so.sym
+          # even when AGP strips the library and intentionally omits the metadata.
+          flutter build apk --release --config-only --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
+          dart_defines=$(python - "$RUNNER_TEMP/neuromesh-report-defines.json" <<'PYTHON'
+          import base64
+          import json
+          import sys
+
+          with open(sys.argv[1]) as file:
+              defines = json.load(file)
+          defines['PLAY_BUILD'] = 'true'
+          print(','.join(base64.b64encode(f'{key}={value}'.encode()).decode()
+                         for key, value in defines.items()))
+          PYTHON
+          )
+          cd android
+          ./gradlew -q :app:bundleRelease -Ptarget-platform=android-arm,android-arm64,android-x64 \
+            -Ptarget=lib/main.dart -Pbase-application-name=android.app.Application \
+            -Ptree-shake-icons=true "-Pdart-defines=$dart_defines"
 
       - name: Play policy and size check
         id: play_size
@@ -173,6 +202,19 @@ jobs:
           set -e
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/bundletool.jar" https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar
           AAB=build/app/outputs/bundle/release/app-release.aab
+          python scripts/check_play_bundle.py "$AAB"
+          jarsigner -verify "$AAB" > "$RUNNER_TEMP/bundle-signature.txt"
+          grep -Fx 'jar verified.' "$RUNNER_TEMP/bundle-signature.txt"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            for library in libapp.so libflutter.so; do
+              unzip -p "$AAB" "base/lib/$abi/$library" > "$RUNNER_TEMP/bundle-library.so"
+              readelf --wide --sections "$RUNNER_TEMP/bundle-library.so" > "$RUNNER_TEMP/bundle-sections.txt"
+              if grep -Eq '[[:space:]]\.(z?debug_[[:alnum:]_]+|symtab)[[:space:]]' "$RUNNER_TEMP/bundle-sections.txt"; then
+                echo "::error::Unstripped library: $abi/$library"; exit 1
+              fi
+            done
+          done
+          java -jar "$RUNNER_TEMP/bundletool.jar" validate --bundle="$AAB" > "$RUNNER_TEMP/bundle-validation.txt"
           # 1) The merged manifest must not contain restricted permissions.
           java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle="$AAB" > "$RUNNER_TEMP/manifest.xml"
           if grep -E 'MANAGE_EXTERNAL_STORAGE|REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|SYSTEM_ALERT_WINDOW|READ_SMS|READ_CALL_LOG|QUERY_ALL_PACKAGES|ACCESS_BACKGROUND_LOCATION' "$RUNNER_TEMP/manifest.xml"; then
@@ -185,11 +227,11 @@ jobs:
           EOF2
           java -jar "$RUNNER_TEMP/bundletool.jar" build-apks --bundle="$AAB" --output="$RUNNER_TEMP/out.apks" --device-spec="$RUNNER_TEMP/spec.json" --overwrite
           SIZE=$(java -jar "$RUNNER_TEMP/bundletool.jar" get-size total --apks="$RUNNER_TEMP/out.apks" --device-spec="$RUNNER_TEMP/spec.json" | tail -1 | awk -F, '{print $2}' | tr -dc 0-9)
-          AABSZ=$(stat -c%s "$AAB")
-          echo "AAB file: $((AABSZ/1048576)) MB"
-          echo "Download size on an arm64 phone after Play splitting: $((SIZE/1048576)) MB (Play limit: 200 MB per module)"
-          echo "split_mb=$((SIZE/1048576))" >> "$GITHUB_OUTPUT"
-          echo "aab_mb=$((AABSZ/1048576))" >> "$GITHUB_OUTPUT"
+          AABSZ=$(stat -Lc%s "$AAB")
+          test -n "$SIZE"
+          echo "Download size on an arm64 phone after Play splitting: $SIZE bytes"
+          LC_ALL=C awk -v raw_bytes="$AABSZ" -v split_bytes="$SIZE" \
+            'BEGIN {printf "aab_mb=%.2f\nsplit_mb=%.2f\n", raw_bytes/1e6, split_bytes/1e6}' >> "$GITHUB_OUTPUT"
           if [ "$SIZE" -gt 198000000 ]; then
             echo "::error::Over the Play 200 MB limit"; exit 1
           fi
@@ -197,13 +239,13 @@ jobs:
 
       - name: Configure persistent GitHub APK signer
         id: standalone_sign
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !inputs.play_bundle_only
         env:
-          UPDATE_KEYSTORE: ${{ secrets.ANDROID_UPDATE_KEYSTORE_BASE64 }}
-          UPDATE_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEYSTORE_PASSWORD }}
-          UPDATE_ALIAS: ${{ secrets.ANDROID_UPDATE_KEY_ALIAS }}
-          UPDATE_KEY_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEY_PASSWORD }}
-          UPDATE_CERT: ${{ vars.ANDROID_UPDATE_CERT_SHA256 }}
+          UPDATE_KEYSTORE: ${{ !inputs.preview_only && secrets.ANDROID_UPDATE_KEYSTORE_BASE64 || '' }}
+          UPDATE_PASSWORD: ${{ !inputs.preview_only && secrets.ANDROID_UPDATE_KEYSTORE_PASSWORD || '' }}
+          UPDATE_ALIAS: ${{ !inputs.preview_only && secrets.ANDROID_UPDATE_KEY_ALIAS || '' }}
+          UPDATE_KEY_PASSWORD: ${{ !inputs.preview_only && secrets.ANDROID_UPDATE_KEY_PASSWORD || '' }}
+          UPDATE_CERT: ${{ !inputs.preview_only && vars.ANDROID_UPDATE_CERT_SHA256 || '' }}
         run: |
           set -euo pipefail
           if [ -n "$UPDATE_KEYSTORE$UPDATE_PASSWORD$UPDATE_ALIAS$UPDATE_KEY_PASSWORD$UPDATE_CERT" ]; then
@@ -227,10 +269,10 @@ jobs:
           fi
 
       - name: Standalone APKs from the normal release configuration
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !inputs.play_bundle_only
         env:
           NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.standalone_sign.outputs.channel == 'preview' && 'true' || 'false' }}
-          UPDATE_CERT: ${{ vars.ANDROID_UPDATE_CERT_SHA256 }}
+          UPDATE_CERT: ${{ !inputs.preview_only && vars.ANDROID_UPDATE_CERT_SHA256 || '' }}
         run: |
           set -euo pipefail
           git show HEAD:android/app/src/main/AndroidManifest.xml > android/app/src/main/AndroidManifest.xml
@@ -262,7 +304,7 @@ jobs:
           rm -rf "$RUNNER_TEMP/vksdk"
 
       - name: Collect and verify artifacts
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !inputs.play_bundle_only
         run: |
           set -e
           V='${{ steps.ver.outputs.name }}'
@@ -277,14 +319,14 @@ jobs:
           unzip -tq dist/*.aab
 
       - name: Enable emulator acceleration
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !inputs.play_bundle_only
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
       - name: Android 12 clean install and upgrade smoke test
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 31
@@ -296,6 +338,64 @@ jobs:
             adb install "$RUNNER_TEMP/universal.apk"
             adb shell pm path com.neuromesh.ai | grep -F 'package:'
             adb install -r "$RUNNER_TEMP/universal.apk"
+
+      - name: Android preview launch and Play split smoke test
+        if: inputs.preview_only && !inputs.play_bundle_only
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: bash scripts/smoke_android_packages.sh
+
+      - name: Preview Android checksums
+        if: inputs.preview_only && !inputs.play_bundle_only
+        run: |
+          cd dist
+          sha256sum -- *.apk *.aab > SHA256SUMS.txt
+          sha256sum --check --strict SHA256SUMS.txt
+
+      - name: Upload ARM64 preview APK
+        if: inputs.preview_only && !inputs.play_bundle_only
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-apk
+          path: dist/*-arm64-dev.apk
+          if-no-files-found: error
+
+      - name: Upload universal preview APK
+        if: inputs.preview_only && !inputs.play_bundle_only
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-universal-apk
+          path: dist/*-universal-dev.apk
+          if-no-files-found: error
+
+      - name: Upload preview Play AAB
+        if: inputs.preview_only && !inputs.play_bundle_only
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-play-aab
+          path: dist/*-dev.aab
+          if-no-files-found: error
+
+      - name: Upload preview Android checksums
+        if: inputs.preview_only && !inputs.play_bundle_only
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-checksums
+          path: dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Upload verified Play bundle
+        if: inputs.play_bundle_only
+        uses: actions/upload-artifact@v4
+        with:
+          name: play-aab-size-check
+          path: build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
 
       - name: Keep package evidence if a validation fails
         if: failure()
@@ -309,7 +409,7 @@ jobs:
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
         with:
           name: neuromesh-ai-${{ steps.ver.outputs.name }}
           path: dist/*
@@ -318,7 +418,7 @@ jobs:
   # Windows and Linux desktop builds. They bundle llama.cpp's llama-server (CPU)
   # next to the app; the AI's shell commands use the computer's own shell.
   desktop:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && !inputs.play_bundle_only
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -462,7 +562,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
     needs: [build, desktop]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -477,6 +577,8 @@ jobs:
       AAB_MB: ${{ needs.build.outputs.aab_mb }}
       SPLIT_MB: ${{ needs.build.outputs.split_mb }}
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           pattern: neuromesh-ai-*
@@ -516,78 +618,5 @@ jobs:
           sha256sum -- *.apk *.aab *.exe *.deb *.AppImage > SHA256SUMS.txt
           sha256sum --check SHA256SUMS.txt
 
-      - name: Publish GitHub releases
-        if: github.ref == 'refs/heads/main'
-        run: |
-          set -euo pipefail
-          signing_label="production-signed"
-          version_flags=(--latest)
-          channel_flags=(--latest=false)
-          replace_channel=true
-          channel_exists=false
-          if existing=$(gh release view latest --json name,isDraft --jq '[.isDraft, .name] | @tsv'); then
-            channel_exists=true
-            IFS=$'\t' read -r draft title <<< "$existing"
-            if [[ "$title" =~ \(v([0-9]+\.[0-9]+\.[0-9]+)\)$ ]]; then
-              channel_version="${BASH_REMATCH[1]}"
-              newest=$(printf '%s\n' "$VERSION" "$channel_version" | sort -V | tail -1)
-              if [[ "$newest" != "$VERSION" ]]; then
-                replace_channel=false
-                version_flags=(--latest=false)
-              elif [[ "$channel_version" == "$VERSION" && "$draft" == "false" ]]; then
-                replace_channel=false
-              fi
-            fi
-          fi
-          if [[ "$PRODUCTION_SIGNED" != "true" ]]; then
-            signing_label="DEVELOPMENT-signed (not production-ready)"
-            version_flags=(--prerelease --latest=false)
-            channel_flags+=(--prerelease)
-          fi
-
-          cat > release-notes.txt <<EOF
-          NeuroMesh AI v$VERSION
-          - Build date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-          - Commit: $GITHUB_SHA
-          - Android signing: $signing_label
-          - GitHub APK signing channel: $STANDALONE_CHANNEL
-          - Android APK signer SHA-256: $APK_SIGNER
-          - Play AAB: $AAB_MB MB file, $SPLIT_MB MB download on an arm64 phone after Play splitting (limit 200 MB)
-          - Verify any installer using SHA256SUMS.txt.
-          EOF
-
-          tag="v$VERSION"
-          asset_dir=dist
-          if existing=$(gh release view "$tag" --json isDraft,targetCommitish --jq '[.isDraft, .targetCommitish] | @tsv'); then
-            IFS=$'\t' read -r draft target <<< "$existing"
-            if [[ "$target" != "$GITHUB_SHA" ]]; then
-              echo "::error::Existing $tag release targets $target, expected $GITHUB_SHA"
-              exit 1
-            fi
-            if [[ "$draft" == "true" ]]; then
-              gh release upload "$tag" dist/* --clobber
-              gh release edit "$tag" --draft=false --notes-file release-notes.txt "${version_flags[@]}"
-            elif [[ "$replace_channel" == "true" ]]; then
-              # Use the published bytes on reruns, including the original APK signer.
-              asset_dir=published
-              patterns=()
-              for asset in dist/*; do
-                patterns+=(--pattern "${asset##*/}")
-              done
-              gh release download "$tag" --dir "$asset_dir" "${patterns[@]}"
-              (cd "$asset_dir" && sha256sum --check --strict SHA256SUMS.txt)
-              gh release view "$tag" --json body --jq '.body' > release-notes.txt
-            fi
-          else
-            gh release create "$tag" dist/* --target "$GITHUB_SHA" \
-              --title "NeuroMesh AI v$VERSION" --notes-file release-notes.txt "${version_flags[@]}"
-          fi
-
-          if [[ "$replace_channel" == "false" ]]; then
-            exit 0
-          fi
-          if [[ "$channel_exists" == "true" ]]; then
-            gh release delete latest --cleanup-tag --yes
-          fi
-          gh release create latest "$asset_dir"/* --target "$GITHUB_SHA" \
-            --title "NeuroMesh AI latest (v$VERSION)" --notes-file release-notes.txt "${channel_flags[@]}"
+      - name: Publish and verify the versioned GitHub Release
+        run: bash scripts/publish_github_release.sh

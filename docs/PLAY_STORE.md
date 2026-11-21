@@ -11,3 +11,11 @@ Everything here is free except the one-time Play developer registration fee.
 7. **Store listing.** Name, short description, full description, 512x512 icon, feature graphic, at least 2 phone screenshots.
 8. **Target API level and 64-bit.** The build already targets a recent API and ships arm64.
 9. **AdMob (optional).** Not included. If you add ads, update the privacy policy and the Data safety form, and consider whether ads fit a privacy-first app.
+
+## Bundle size
+
+The release workflow verifies that the signed AAB is smaller than 200,000,000 bytes and separately measures the ARM64 download after Play splits the bundle. The bundle retains ARM64, ARMv7 and x86-64. Android release packaging omits native debug metadata and two browser-only voice payloads. Native Android voice libraries and phoneme data remain part of the bundle. The workflow uses Flutter to configure the project and Gradle to package the AAB. It then checks the packaged Flutter ELF binaries directly because Flutter 3.38 expects symbol metadata in the upload file.
+
+For a packaging check, run **Android release** from GitHub Actions with **Build and verify a development-signed Play AAB artifact** enabled. The workflow uploads the verified bundle to the run without publishing a GitHub Release or using the production signing key. A locally built bundle can be checked with `python scripts/check_play_bundle.py build/app/outputs/bundle/release/app-release.aab`.
+
+Enable **Test Android and desktop packages with development signing and upload them to Actions** to build all current packages together. This preview also checks startup from the universal APK and from Play-style split APKs on the Android emulator. The APKs, AAB, and Android checksum manifest are separate workflow artifacts.

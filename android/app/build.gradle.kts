@@ -77,6 +77,9 @@ android {
 
     buildTypes {
         release {
+            // Keep the upload bundle small. The native libraries still ship,
+            // while AGP's duplicate symbol files stay out of the bundle.
+            ndk.debugSymbolLevel = "NONE"
             // Flutter supplies ABI defaults on build types, which override
             // defaultConfig. Replace those defaults only for the ARM64 APK;
             // AAB builds retain the full supported ABI set.
@@ -93,6 +96,15 @@ android {
             isShrinkResources = false
         }
     }
+}
+
+// Flutter 3.38 copies dependency assets marked platforms: [web] into Android
+// releases. These packages use native libraries and assets on Android.
+tasks.withType<Copy>().matching { it.name == "copyFlutterAssetsRelease" }.configureEach {
+    exclude(
+        "flutter_assets/packages/piper_phonemize/assets/web/piper-phonemize-wasm-main.data",
+        "flutter_assets/packages/sherpa_onnx_web/assets/sherpa-onnx-wasm-web.wasm",
+    )
 }
 
 dependencies {
