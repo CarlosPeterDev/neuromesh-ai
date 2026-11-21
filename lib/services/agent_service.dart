@@ -1568,7 +1568,14 @@ class AgentService extends GetxService {
     } else {
       fittedHistory.add({'role': 'user', 'content': prompt});
     }
-    if (isToolResult && contextSize > 0) {
+    if (isToolResult &&
+        contextSize > 0 &&
+        contextTokens(system) +
+                fittedHistory.fold<int>(
+                    0,
+                    (total, message) =>
+                        total + contextTokens(message['content'] ?? '')) >
+            budget) {
       final mandatory = fittedHistory.length >= 2
           ? fittedHistory.sublist(fittedHistory.length - 2)
           : fittedHistory;

@@ -92,6 +92,23 @@ void main() {
       expect(jsonDecode(turn.prompt)['tool_results'][0]['id'], 'step_1');
       expect(turn.history[1], call);
       expect(turn.history.last['_nm_results'], 'true');
+      final earlier = {
+        'role': 'user',
+        'content': 'Earlier verified output: astronomy.txt'
+      };
+      final ample = AgentService.fitTurn(
+          baseSystem: 'Safety rules.',
+          system: 'Safety rules.',
+          prompt: result,
+          history: [
+            earlier,
+            call,
+            {'role': 'user', 'content': result, '_nm_results': 'true'}
+          ],
+          contextSize: 4096,
+          request: 'Read astronomy');
+      expect(ample.history.first, earlier);
+
       expect(
           () => AgentService.fitTurn(
               baseSystem: 'Safety rules.',
