@@ -1,3 +1,4 @@
+import '../utils/reasoning_support.dart';
 import 'dart:async';
 
 import 'package:flutter/services.dart' show PlatformException;
@@ -51,6 +52,7 @@ class InferenceService extends GetxService {
   final isGpuAccelerated = false.obs;
   final loadedModelRuntime = ''.obs;
   final supportsThinking = false.obs;
+  final reasoningSupport = ReasoningSupport.unknown.obs;
   final supportsToolSchema = false.obs;
   final loadedBackend = ''.obs;
 
@@ -227,6 +229,7 @@ class InferenceService extends GetxService {
       loadedModelName.value = requestedModelName;
       loadedModelRuntime.value = result.runtime;
       supportsThinking.value = result.supportsThinking;
+      reasoningSupport.value = result.reasoningSupport;
       supportsToolSchema.value = result.supportsToolSchema;
       if (result.runtime == 'llama' || result.runtime == 'litert') {
         _sessionNativeRuntime = result.runtime;
@@ -312,6 +315,7 @@ class InferenceService extends GetxService {
     loadedModelName.value = '';
     loadedModelRuntime.value = '';
     supportsThinking.value = false;
+    reasoningSupport.value = ReasoningSupport.unknown;
     supportsToolSchema.value = false;
     loadedBackend.value = '';
     gpuLayersUsed.value = 0;

@@ -519,8 +519,12 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       _callVoice = voiceModelById('pocket-tts-clone');
     } else {
       final model = _hive.getSetting<String>(_kTtsId);
-      if (model == 'pocket-tts-clone' && _store.installed.contains(model)) {
-        _callVoice = voiceModelById('pocket-tts-clone');
+      final saved = model == null ? null : voiceModelById(model);
+      if (saved != null &&
+          _store.installed.contains(saved.id) &&
+          (saved.lang == _lang || saved.lang == 'multi' || saved.clone)) {
+        _callVoice = saved;
+        if (saved.clone) _lang = 'en';
       }
     }
     _bargeIn = _hive.getSetting<bool>(_kBargeIn, defaultValue: true) ?? true;
@@ -593,7 +597,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
             Get.find<VoiceCloneStore>().active.value.isNotEmpty)) {
       return chosen;
     }
-    return _installed(VoiceKind.tts, lang: lang);
+    return chosen == null ? _installed(VoiceKind.tts, lang: lang) : null;
   }
 
   Future<void> _start() async {
@@ -623,9 +627,14 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         await _voice.loadStt(stt, language: _lang);
       }
       final tts = _ttsChoice(_lang);
+      if (_callVoice != null && tts == null)
+        throw StateError(
+            'Selected voice is unavailable. Choose an installed voice and a valid saved reference.');
       if (tts != null &&
-          WorkloadPlacement.forWorkload(PhoneWorkload.speech) == null &&
-          !_hive.getSetting<bool>(_kSystemTts, defaultValue: false)!) {
+          (_callVoice != null ||
+              WorkloadPlacement.forWorkload(PhoneWorkload.speech) == null) &&
+          (_callVoice != null ||
+              !_hive.getSetting<bool>(_kSystemTts, defaultValue: false)!)) {
         if (!_voice.ttsLoadedFor(tts)) await _voice.loadTts(tts);
         if (tts.clone && !_voice.hasCloneVoice) {
           await Get.find<VoiceCloneStore>().restoreActive();
@@ -814,6 +823,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       caption(sentence);
       _set(_CallState.thinking, 'Preparing voice…');
       try {
+        if (_callVoice != null && _ttsChoice(_lang) == null)
+          throw StateError('Selected voice is unavailable.');
         await _voice.speak(
           sentence,
           systemLang: language,
@@ -824,7 +835,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         );
       } catch (error) {
         if (shouldStop()) break;
-        if (language == null) {
+        if (language == null && _callVoice?.clone != true) {
           language = fallbackLanguage;
           _set(_CallState.thinking, 'Switching to system voice…');
           try {
@@ -1233,13 +1244,13 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     });
   }
 
-  Future<void> _toggleLang() async {
+  Future<void> _toggleLang({bool preserveVoice = false}) async {
     final next = _lang == 'en' ? 'ar' : 'en';
     await _hive.setSetting(_kLang, next);
     if (!mounted) return;
     setState(() {
       _lang = next;
-      _callVoice = null;
+      if (!preserveVoice) _callVoice = null;
     });
     final stt = _installed(VoiceKind.stt);
     if (stt != null &&
@@ -1272,10 +1283,6 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     final cloneModel = voiceModelById('pocket-tts-clone');
     final canClone =
         cloneModel != null && _store.installed.contains(cloneModel.id);
-    if (voices.isEmpty && _lang != 'en') {
-      await Get.to(() => const VoiceModelsView());
-      return;
-    }
     final current = _ttsChoice(_lang);
     var model = voices.contains(current) ? current! : voices.firstOrNull;
     var speaker = model == null ? 0 : VoiceService.savedSpeaker(model);
@@ -1286,20 +1293,31 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         builder: (context, update) => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (clones.voices.isNotEmpty && canClone) ...[
+            if (clones.voices.isNotEmpty) ...[
               for (final name in clones.voices)
                 ListTile(
                   leading: const Icon(Icons.record_voice_over_outlined),
                   title: Text(name),
-                  subtitle: const Text('Cloned voice'),
+                  subtitle: Text(canClone
+                      ? 'Cloned voice · English'
+                      : 'Install the voice cloning engine first'),
                   selected:
                       clones.active.value == name && current == cloneModel,
-                  onTap: () async {
-                    await clones.select(name);
-                    if (context.mounted) {
-                      Navigator.of(context).pop((cloneModel, 0));
-                    }
-                  },
+                  onTap: !canClone
+                      ? null
+                      : () async {
+                          try {
+                            await clones.select(name);
+                            if (context.mounted)
+                              Navigator.of(context).pop((cloneModel, 0));
+                          } catch (error) {
+                            if (context.mounted)
+                              ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                                  SnackBar(
+                                      content: Text(
+                                          'Could not select saved voice: $error')));
+                          }
+                        },
                 ),
             ],
             TextButton.icon(
@@ -1355,9 +1373,12 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     await VoiceService.saveSpeaker(chosen, index);
     await _hive.setSetting(_kTtsId, chosen.id);
     if (!mounted) return;
+    await _hive.setSetting(_kSystemTts, false);
+    if (!mounted) return;
+    setState(() => _callVoice = chosen);
     final switchedLanguage = chosen.clone && _lang != 'en';
     if (switchedLanguage) {
-      await _toggleLang();
+      await _toggleLang(preserveVoice: true);
     }
     if (mounted) setState(() => _callVoice = chosen);
   }
@@ -1450,9 +1471,10 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                 Get.find<InferenceService>().loadedModelName.value.isEmpty
                     ? 'NeuroMesh AI'
                     : Get.find<InferenceService>().loadedModelName.value),
-            subtitle: Text(_ttsChoice(_lang)?.clone == true
-                ? Get.find<VoiceCloneStore>().active.value
-                : _ttsChoice(_lang)?.title ?? 'Voice call'),
+            onTap: _busy || _speaking ? null : _chooseCallVoice,
+            trailing: const Icon(Icons.edit_outlined),
+            subtitle: Text(
+                'Voice: ${_ttsChoice(_lang)?.clone == true ? Get.find<VoiceCloneStore>().active.value : _ttsChoice(_lang)?.title ?? 'System / automatic'}'),
           ),
           if (_cam != null && _cam!.value.isInitialized)
             SizedBox(

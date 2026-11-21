@@ -2,6 +2,8 @@
 /// (Web). All methods are no-ops that return appropriate errors.
 library;
 
+import '../utils/reasoning_support.dart';
+
 bool get supportsLocalInference => false;
 
 bool get isRunning32Bit => false;
@@ -17,6 +19,7 @@ class LoadResult {
   final String backend;
   final bool supportsThinking;
   final bool supportsToolSchema;
+  final ReasoningSupport reasoningSupport;
   LoadResult({
     required this.success,
     required this.message,
@@ -26,6 +29,7 @@ class LoadResult {
     this.backend = '',
     this.supportsThinking = false,
     this.supportsToolSchema = false,
+    this.reasoningSupport = ReasoningSupport.unknown,
   });
 }
 

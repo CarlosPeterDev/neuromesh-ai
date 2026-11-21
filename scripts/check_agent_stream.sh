@@ -16,4 +16,10 @@ c++ -std=c++17 -O2 "$root/tool/verify_agent_stream.cpp" \
   -I"$source/vendor" -I"$source/vendor/nlohmann" -L"$build/bin" \
   -Wl,-rpath,"$build/bin" -Wl,-rpath-link,"$build/bin" \
   -lllama-common -lllama -lggml -lggml-base -o "$build/verify_agent_stream"
+c++ -std=c++17 -O2 "$root/tool/verify_reasoning_templates.cpp" \
+  -I"$source/common" -I"$source/include" -I"$source/ggml/include" \
+  -I"$source/vendor" -I"$source/vendor/nlohmann" -L"$build/bin" \
+  -Wl,-rpath,"$build/bin" -Wl,-rpath-link,"$build/bin" \
+  -lllama-common -lllama -lggml -lggml-base -o "$build/verify_reasoning_templates"
+"$build/verify_reasoning_templates"
 "$build/verify_agent_stream" "$model"

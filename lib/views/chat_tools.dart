@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/ui.dart';
 import '../controllers/chat_controller.dart';
 import '../widgets/agent_steps.dart';
+import '../widgets/device_access_status.dart';
 import '../services/agent_service.dart';
 import '../services/inference_service.dart';
 import '../services/cloud_service.dart';
@@ -57,6 +58,7 @@ class _ChatToolsViewState extends State<ChatToolsView> {
       appBar:
           appScreenBar(context, title: 'Tools & permissions', showBack: true),
       body: ListView(padding: kPagePadding, children: [
+        const DeviceAccessStatus(),
         // ── when tools are used ──
         const SectionHeader('How the AI decides'),
         Obx(() =>

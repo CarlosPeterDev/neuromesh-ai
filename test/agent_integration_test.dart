@@ -352,12 +352,55 @@ void main() {
         result.trace.join(), contains('duplicate discovery was not executed'));
   });
 
+  test('a missing preferred clone returns an error without substituting audio',
+      () async {
+    await Get.find<HiveService>()
+        .setSetting('voice_tts_id', 'pocket-tts-clone');
+    final result = await agent.executeTool(
+        const ParsedToolCall(
+            'text_to_speech', {'text': 'Hello', 'name': 'hello.wav'}, ''),
+        (_, __, ___) async => true);
+    expect(result, contains('unavailable'));
+    expect(await agent.dir.list().length, 0);
+  });
+
+  test('compact schemas retain property names and literal validation data',
+      () async {
+    final schema = <String, dynamic>{
+      'type': 'object',
+      'properties': {
+        'description': {
+          'type': 'string',
+          'enum': ['literal ' * 40]
+        },
+        'default': {
+          'type': 'string',
+          'enum': ['one', 'two']
+        }
+      },
+      'required': ['description', 'default'],
+      'additionalProperties': false
+    };
+    agent.addTool(AgentTool(
+        'compact_test', 'Compact schema fixture', '{}', (_) async => 'ok',
+        schema: schema));
+    await agent.executeTool(
+        const ParsedToolCall('search_tools', {'query': 'compact_test'}, ''),
+        (_, __, ___) async => true);
+    final offered = agent
+        .nativeSchemasForTurn(8192)
+        .singleWhere((s) => s['function']['name'] == 'compact_test');
+    expect(offered['function']['parameters'], schema);
+  });
+
   test('core native tools are direct and other schemas expand after discovery',
       () async {
     final before = agent.nativeSchemasForTurn(2048);
     expect(before.map((s) => s['function']['name']), contains('search_tools'));
     expect(
         before.map((s) => s['function']['name']), contains('generate_image'));
+    expect(
+        before.map((s) => s['function']['name']), contains('text_to_speech'));
     await agent.executeTool(
         const ParsedToolCall('search_tools', {'query': 'calculator'}, ''),
         (_, __, ___) async => true);

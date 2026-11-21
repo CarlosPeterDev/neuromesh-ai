@@ -1454,7 +1454,7 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeChatC
         const auto caps = common_chat_templates_get_caps(templates.get());
         const bool tools = caps.count("supports_tools") && caps.at("supports_tools") &&
             caps.count("supports_tool_calls") && caps.at("supports_tool_calls");
-        return 4 | (common_chat_templates_support_enable_thinking(templates.get()) ? 1 : 0) | (tools ? 2 : 0);
+        return 4 | neuromesh_reasoning_flags(templates.get()) | (tools ? 2 : 0);
     } catch (...) { return 0; }
 }
 
@@ -1465,8 +1465,9 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeForma
     try {
         auto templates = common_chat_templates_init(g_model, "");
         common_chat_templates_inputs inputs;
-        inputs.enable_thinking = thinking == JNI_TRUE && common_chat_templates_support_enable_thinking(templates.get());
-        inputs.chat_template_kwargs["enable_thinking"] = inputs.enable_thinking ? "true" : "false";
+        const bool canToggle=(neuromesh_reasoning_flags(templates.get()) & 1) != 0;
+        inputs.enable_thinking = canToggle ? thinking == JNI_TRUE : true;
+        if(canToggle)inputs.chat_template_kwargs["enable_thinking"] = inputs.enable_thinking ? "true" : "false";
         const jchar* schemaChars=env->GetStringChars(schemas,nullptr);
         const std::u16string schemaUtf16(reinterpret_cast<const char16_t*>(schemaChars),env->GetStringLength(schemas));
         env->ReleaseStringChars(schemas,schemaChars);

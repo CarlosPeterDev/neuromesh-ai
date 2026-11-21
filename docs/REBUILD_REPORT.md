@@ -191,3 +191,6 @@ M	test/pollinations_image_service_test.dart
 M	test/voice_test.dart
 A	tool/verify_model_thinking.cpp
 ```
+
+
+The subsequent model/voice repair is described in [Model and voice follow-up](verification/MODEL_AND_VOICE_FOLLOWUP.md), with current evidence and release status in [continue.md](../continue.md).

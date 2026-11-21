@@ -240,6 +240,21 @@ class VoiceService extends GetxService {
     }
   }
 
+  Future<List<Map<String, String>>> availableSystemVoices() async {
+    if (!Platform.isAndroid) return const [];
+    await detectSystemFileTts();
+    if (!systemFileTtsAvailable.value) return const [];
+    final voices = await _system!.getVoices;
+    if (voices is! List) return const [];
+    return voices
+        .whereType<Map>()
+        .where(isOfflineSystemVoice)
+        .where((v) => v['name'] is String && v['locale'] is String)
+        .map((v) =>
+            {'name': v['name'] as String, 'locale': v['locale'] as String})
+        .toList();
+  }
+
   Future<Uint8List> _systemWav(String text, String language, String voice) =>
       _withTts(() async {
         await detectSystemFileTts();
@@ -622,6 +637,7 @@ class VoiceService extends GetxService {
       String speaker = ''}) async {
     if (text.trim().isEmpty || text.length > 50000)
       throw ArgumentError('Speech needs 1 to 50,000 characters.');
+    if (modelId == 'system') return _systemWav(text, lang, speaker);
     final requested = _requestedModel(VoiceKind.tts, modelId);
     final worker = allowWorker && requested == null && speaker.trim().isEmpty
         ? WorkloadPlacement.forWorkload(PhoneWorkload.speech)
@@ -663,6 +679,50 @@ class VoiceService extends GetxService {
         o += p.length;
       }
       return encodeWav(all, rate);
+    });
+  }
+
+  Future<Uint8List> synthesizeClonedToWav(
+      String text, Float32List reference, int rate) async {
+    if (text.trim().isEmpty ||
+        text.length > 50000 ||
+        reference.isEmpty ||
+        rate <= 0) {
+      throw ArgumentError(
+          'Valid text and a saved voice reference are required.');
+    }
+    final model = voiceModelById('pocket-tts-clone');
+    if (model == null ||
+        !Get.isRegistered<VoiceModelStore>() ||
+        !Get.find<VoiceModelStore>().installed.contains(model.id)) {
+      throw StateError('Install the local cloning model first.');
+    }
+    return _withTts(() async {
+      final previousReference = _cloneRef, previousRate = _cloneRate;
+      try {
+        await _loadTts(model);
+        setCloneVoice(reference, rate);
+        final parts = <Float32List>[];
+        var outputRate = 24000;
+        for (final chunk in speechChunks(text)) {
+          final audio = synthesize(chunk);
+          if (audio == null || audio.samples.isEmpty)
+            throw StateError('The clone model returned no audio.');
+          parts.add(audio.samples);
+          outputRate = audio.rate;
+        }
+        final samples =
+            Float32List(parts.fold<int>(0, (size, p) => size + p.length));
+        var offset = 0;
+        for (final part in parts) {
+          samples.setRange(offset, offset + part.length, part);
+          offset += part.length;
+        }
+        return encodeWav(samples, outputRate);
+      } finally {
+        _cloneRef = previousReference;
+        _cloneRate = previousRate;
+      }
     });
   }
 

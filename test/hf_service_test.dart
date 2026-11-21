@@ -14,7 +14,12 @@ void main() {
         seen = req.url;
         return http.Response(
           jsonEncode([
-            {'id': 'unsloth/DeepSeek-R1-GGUF', 'downloads': 10, 'likes': 2, 'gated': false},
+            {
+              'id': 'unsloth/DeepSeek-R1-GGUF',
+              'downloads': 10,
+              'likes': 2,
+              'gated': false
+            },
             {'id': 'x/gated-one', 'gated': 'manual'},
           ]),
           200,
@@ -29,6 +34,30 @@ void main() {
     expect(repos.first.name, 'DeepSeek-R1-GGUF');
     expect(repos.first.gated, false);
     expect(repos.last.gated, true);
+  });
+
+  test('author filter reaches API and rejects unrelated owners', () async {
+    late Uri seen;
+    final svc = HfService(client: MockClient((req) async {
+      seen = req.url;
+      return http.Response(
+          jsonEncode([
+            {'id': 'Example/model-GGUF'},
+            {'id': 'other/model-GGUF'}
+          ]),
+          200);
+    }));
+    final result = await svc.searchModels('', author: ' Example ');
+    expect(seen.queryParameters['author'], 'Example');
+    expect(result.map((r) => r.id), ['Example/model-GGUF']);
+  });
+
+  test('author rejects paths before network access', () async {
+    final svc = HfService(
+        client:
+            MockClient((_) async => throw StateError('Network must not run')));
+    await expectLater(svc.searchModels('', author: '../author/model'),
+        throwsA(isA<HfException>()));
   });
 
   test('searchModels maps the task filter to a pipeline tag', () async {
@@ -49,15 +78,24 @@ void main() {
     expect(seen[3].queryParameters.containsKey('pipeline_tag'), false);
   });
 
-  test('listGgufFiles drops split shards and projector files, sorts by size', () async {
+  test('listGgufFiles drops split shards and projector files, sorts by size',
+      () async {
     final svc = HfService(
       client: MockClient((req) async => http.Response(
             jsonEncode([
-              {'type': 'file', 'path': 'm-Q8_0.gguf', 'lfs': {'size': 800}},
+              {
+                'type': 'file',
+                'path': 'm-Q8_0.gguf',
+                'lfs': {'size': 800}
+              },
               {'type': 'file', 'path': 'm-Q4_K_M.gguf', 'size': 400},
               {'type': 'file', 'path': 'big-00001-of-00002.gguf', 'size': 9000},
               {'type': 'file', 'path': 'mmproj-F16.gguf', 'size': 100},
-              {'type': 'file', 'path': 'Qwen3.8-27B-FastMTP-32K.gguf', 'size': 903453952},
+              {
+                'type': 'file',
+                'path': 'Qwen3.8-27B-FastMTP-32K.gguf',
+                'size': 903453952
+              },
               {'type': 'file', 'path': 'README.md', 'size': 1},
               {'type': 'directory', 'path': 'sub'},
             ]),
@@ -65,7 +103,8 @@ void main() {
           )),
     );
     final files = await svc.listGgufFiles('a/b');
-    expect(files.map((f) => f.filename).toList(), ['m-Q4_K_M.gguf', 'm-Q8_0.gguf']);
+    expect(files.map((f) => f.filename).toList(),
+        ['m-Q4_K_M.gguf', 'm-Q8_0.gguf']);
     expect(files.first.quant, 'Q4_K_M');
   });
 
@@ -77,7 +116,8 @@ void main() {
   });
 
   test('errors become readable messages', () async {
-    final svc = HfService(client: MockClient((_) async => http.Response('no', 500)));
+    final svc =
+        HfService(client: MockClient((_) async => http.Response('no', 500)));
     expect(svc.searchModels('x'), throwsA(isA<HfException>()));
   });
 

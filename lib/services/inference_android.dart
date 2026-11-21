@@ -1,3 +1,4 @@
+import '../utils/reasoning_support.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/services.dart';
@@ -30,6 +31,7 @@ class LoadResult {
   final String backend;
   final bool supportsThinking;
   final bool supportsToolSchema;
+  final ReasoningSupport reasoningSupport;
   LoadResult({
     required this.success,
     required this.message,
@@ -39,6 +41,7 @@ class LoadResult {
     this.backend = '',
     this.supportsThinking = false,
     this.supportsToolSchema = false,
+    this.reasoningSupport = ReasoningSupport.unknown,
   });
 }
 
@@ -257,6 +260,7 @@ class InferenceEngine {
           templateCapabilities.contains('metadata-thinking-supported'),
       supportsToolSchema:
           templateCapabilities.contains('metadata-tools-supported'),
+      reasoningSupport: ReasoningSupport.fromTemplates(templateCapabilities),
       runtime: 'llama',
       backend: gpuLayers > 0 ? 'gpu' : 'cpu',
     );

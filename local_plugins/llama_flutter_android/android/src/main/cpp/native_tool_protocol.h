@@ -78,3 +78,19 @@ inline std::string neuromesh_preview_native(const std::string& output, const com
     }
     return visible+message.content;
 }
+
+// Probe formatted metadata, not model names. Some reasoning templates have no
+// off switch; passing a false flag to them would misrepresent their behavior.
+inline int neuromesh_reasoning_flags(const common_chat_templates* templates) {
+    common_chat_templates_inputs input;
+    input.enable_thinking=true;
+    input.chat_template_kwargs["enable_thinking"]="true";
+    input.reasoning_format=COMMON_REASONING_FORMAT_AUTO;
+    common_chat_msg user;user.role="user";user.content="Hello";input.messages.push_back(user);
+    const auto enabled=common_chat_templates_apply(templates,input);
+    if(!enabled.supports_thinking && enabled.thinking_start_tag.empty())return 0;
+    input.enable_thinking=false;
+    input.chat_template_kwargs["enable_thinking"]="false";
+    const auto disabled=common_chat_templates_apply(templates,input);
+    return enabled.prompt!=disabled.prompt ? 1 : 8;
+}

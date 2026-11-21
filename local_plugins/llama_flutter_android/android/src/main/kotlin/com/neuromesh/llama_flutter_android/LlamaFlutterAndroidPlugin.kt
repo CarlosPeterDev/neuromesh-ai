@@ -364,6 +364,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
             if (caps and 1L != 0L) add("metadata-thinking-supported")
             if (caps and 2L != 0L) add("metadata-tools-supported")
             if (caps and 4L != 0L) add("metadata-chat-supported")
+            if (caps and 8L != 0L) add("metadata-reasoning-always-on")
         }
     }
 

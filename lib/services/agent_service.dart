@@ -1,3 +1,4 @@
+import 'speech_voice_catalog.dart';
 import '../utils/output_links.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -575,9 +576,39 @@ class AgentService extends GetxService {
       },
     ),
     AgentTool(
+      'list_voices',
+      'List installed speaking voices and saved clones with exact voice_id values. Use this to choose a voice for text_to_speech. References stay on this device.',
+      '{"language":"optional language code","start":0}',
+      (args) async {
+        final voices = await SpeechVoiceCatalog()
+            .list(language: args['language'] as String? ?? '');
+        final start = (args['start'] as int? ?? 0).clamp(0, voices.length);
+        final end = (start + 12).clamp(0, voices.length);
+        return jsonEncode({
+          'voices': [
+            for (final voice in voices.sublist(start, end)) voice.toJson()
+          ],
+          'total': voices.length,
+          if (end < voices.length) 'next_start': end,
+          if (voices.isEmpty)
+            'message':
+                'No matching installed voices. Install a speaking model or offline system voice in Models → Voice.'
+        });
+      },
+      schema: {
+        'type': 'object',
+        'properties': {
+          'language': {'type': 'string'},
+          'start': {'type': 'integer', 'minimum': 0}
+        },
+        'additionalProperties': false
+      },
+      available: () => Get.isRegistered<VoiceService>(),
+    ),
+    AgentTool(
       'text_to_speech',
-      'Create a WAV in the workspace. Use models_status to choose a speaking model and exact speaker when the user requests a voice or asks you to choose. Omit overrides to use the user’s defaults. Show it with [📎 name](nmfile:name).',
-      '{"text":"optional text; supply text or source","source":"optional text filename or shared relative path","source_folder":"optional shared folder name for source","name":"output file name ending in .wav","language":"optional voice language such as en or ar","model_id":"optional installed speaking model ID","speaker":"optional speaker name from that model"}',
+      'Create a WAV in the workspace. Use list_voices to choose an available voice_id, including saved cloned voices, when the user asks for a voice or asks you to choose. Omit overrides to use the user’s defaults. Show it with [📎 name](nmfile:name).',
+      '{"text":"optional text; supply text or source","source":"optional text filename or shared relative path","source_folder":"optional shared folder name for source","name":"output file name ending in .wav","language":"optional voice language such as en or ar","model_id":"optional installed speaking model ID","speaker":"optional speaker name from that model","voice_id":"optional exact ID from list_voices"}',
       (args) async {
         var name = (args['name'] ?? 'speech.wav').toString();
         if (!name.toLowerCase().endsWith('.wav')) name = '$name.wav';
@@ -588,12 +619,27 @@ class AgentService extends GetxService {
             ? args['text'] as String
             : await _speechSource(
                 source as String, args['source_folder'] as String?);
-        final wav = await Get.find<VoiceService>().synthesizeToWav(
-          text,
-          lang: (args['language'] ?? '').toString(),
-          modelId: (args['model_id'] ?? '').toString(),
-          speaker: (args['speaker'] ?? '').toString(),
-        );
+        final voiceId = args['voice_id'] as String? ?? '';
+        final modelId = args['model_id'] as String? ?? '';
+        final speaker = args['speaker'] as String? ?? '';
+        if (voiceId.isNotEmpty && (modelId.isNotEmpty || speaker.isNotEmpty))
+          throw ArgumentError('Use voice_id or model_id/speaker, not both.');
+        final catalog = SpeechVoiceCatalog();
+        final useDefaultClone = modelId.isEmpty &&
+            speaker.isEmpty &&
+            _hive.getSetting<String>('voice_tts_id') == 'pocket-tts-clone';
+        final defaultClone = useDefaultClone ? catalog.selectedCloneId : null;
+        if (voiceId.isEmpty && useDefaultClone && defaultClone == null)
+          throw StateError(
+              'Your selected cloned voice is unavailable. Install its engine and select a valid saved reference.');
+        final selected = voiceId.isNotEmpty ? voiceId : defaultClone;
+        final wav = selected == null
+            ? await Get.find<VoiceService>().synthesizeToWav(text,
+                lang: args['language'] as String? ?? '',
+                modelId: modelId,
+                speaker: speaker)
+            : await catalog.synthesize(text, selected,
+                language: args['language'] as String? ?? '');
         final f = await _newOutputFile(name);
         if (decodeWav(wav)?.samples.isNotEmpty != true)
           throw StateError('TTS returned no valid PCM audio.');
@@ -1048,7 +1094,35 @@ class AgentService extends GetxService {
   /// Native templates receive real schemas. Core available actions are shown directly; the rest expand only after
   /// model-directed discovery. This avoids sending the entire catalog for greetings.
   List<Map<String, dynamic>> nativeSchemasForTurn(int contextSize) {
-    final budget = (contextSize ~/ 4).clamp(120, 4000);
+    final budget = (contextSize ~/ 3).clamp(160, 4000);
+    // Remove annotation verbosity only. All validation assertions are retained.
+    dynamic compact(dynamic value, [int depth = 0]) {
+      if (value is List)
+        return value.map((v) => compact(v, depth + 1)).toList();
+      if (value is! Map) return value;
+      return <String, dynamic>{
+        for (final entry in value.entries)
+          if (!(entry.key == 'description' &&
+              entry.value is String &&
+              depth > 2))
+            entry.key.toString():
+                entry.key == 'properties' && entry.value is Map
+                    ? <String, dynamic>{
+                        for (final property in (entry.value as Map).entries)
+                          property.key.toString():
+                              compact(property.value, depth + 1)
+                      }
+                    : const {'const', 'enum', 'default', 'examples'}
+                            .contains(entry.key)
+                        ? entry.value
+                        : entry.key == 'description' &&
+                                entry.value is String &&
+                                (entry.value as String).length > 180
+                            ? '${(entry.value as String).substring(0, 177)}...'
+                            : compact(entry.value, depth + 1)
+      };
+    }
+
     final selected = <Map<String, dynamic>>[];
     final ids = [
       'search_tools',
@@ -1060,9 +1134,10 @@ class AgentService extends GetxService {
     ];
     for (final id in ids.toSet()) {
       final tool = registry.find(id);
-      if (tool != null &&
-          contextTokens(jsonEncode([...selected, tool.nativeSchema])) <= budget)
-        selected.add(tool.nativeSchema);
+      if (tool == null) continue;
+      final schema = compact(tool.nativeSchema) as Map<String, dynamic>;
+      if (contextTokens(jsonEncode([...selected, schema])) <= budget)
+        selected.add(schema);
     }
     if (selected.isEmpty)
       throw StateError(
@@ -1139,7 +1214,8 @@ class AgentService extends GetxService {
           (!Platform.isAndroid || !Get.isRegistered<DeviceBridge>())) continue;
       if (t.name == 'text_to_speech' &&
           (!Get.isRegistered<VoiceService>() ||
-              !Get.find<VoiceService>().canSynthesizeFiles)) continue;
+              !(Get.find<VoiceService>().canSynthesizeFiles ||
+                  SpeechVoiceCatalog().hasClone))) continue;
       if (t.name == 'transcribe_audio' &&
           (!Get.isRegistered<VoiceService>() ||
               !Get.find<VoiceService>().canTranscribeFiles)) continue;

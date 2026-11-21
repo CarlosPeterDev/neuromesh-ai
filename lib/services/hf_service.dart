@@ -166,7 +166,14 @@ class HfService {
       bool images = false,
       bool vision = false,
       String? task,
-      String sort = 'downloads'}) async {
+      String sort = 'downloads',
+      String author = ''}) async {
+    author = author.trim();
+    if (author.isNotEmpty &&
+        !RegExp(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$').hasMatch(author)) {
+      throw HfException(
+          'Enter an author or organization name, not a model path.');
+    }
     // [task]: 'text' | 'vision' | 'embedding' (null = any). [vision] is kept
     // for older callers.
     final pipeline = images
@@ -184,6 +191,7 @@ class HfService {
       'direction': '-1',
       'limit': '$limit',
       if (query.trim().isNotEmpty) 'search': query.trim(),
+      if (author.isNotEmpty) 'author': author,
     };
     // `expand` replaces the default field set, so name everything we read.
     // `gguf` carries the architecture used to hide models we can't run.
@@ -206,7 +214,10 @@ class HfService {
     return data
         .whereType<Map<String, dynamic>>()
         .map(HfRepo.fromJson)
-        .where((r) => r.id.isNotEmpty)
+        .where((r) =>
+            r.id.isNotEmpty &&
+            (author.isEmpty ||
+                r.id.split('/').first.toLowerCase() == author.toLowerCase()))
         .toList();
   }
 

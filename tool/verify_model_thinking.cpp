@@ -6,6 +6,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+#include <cstdlib>
 
 static std::string generate(llama_model* model, const std::string& prompt) {
     auto cp = llama_context_default_params();
@@ -20,7 +21,10 @@ static std::string generate(llama_model* model, const std::string& prompt) {
     if (llama_decode(ctx,llama_batch_get_one(tokens.data(),tokens.size()))) throw std::runtime_error("Prompt decode failed");
     auto sampler = llama_sampler_init_greedy();
     std::string output;
-    for(int i=0;i<384;++i) {
+    const char* limit=std::getenv("NEUROMESH_TEST_MAX_TOKENS");
+    const int max_tokens=limit ? std::stoi(limit) : 384;
+    if(max_tokens<1 || max_tokens>1536)throw std::runtime_error("Test token budget must be 1..1536");
+    for(int i=0;i<max_tokens;++i) {
         auto token=llama_sampler_sample(sampler,ctx,-1);
         if(llama_vocab_is_eog(vocab,token))break;
         char piece[256];
@@ -39,7 +43,7 @@ int main(int argc,char** argv) {
         auto model=llama_model_load_from_file(argv[1],mp);
         if(!model)throw std::runtime_error("Model load failed");
         auto templates=common_chat_templates_init(model,"");
-        if(!common_chat_templates_support_enable_thinking(templates.get()))throw std::runtime_error("Model does not support enable_thinking");
+        if(neuromesh_reasoning_flags(templates.get())!=1)throw std::runtime_error("Model template has no detected thinking toggle");
         common_chat_templates_inputs input;
         common_chat_msg message;message.role="user";message.content="What is 12 times 13? Answer briefly.";
         input.messages.push_back(message);

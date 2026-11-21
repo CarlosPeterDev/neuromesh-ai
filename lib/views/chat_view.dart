@@ -1,3 +1,4 @@
+import '../utils/reasoning_support.dart';
 import '../widgets/composer_actions.dart';
 import '../widgets/scroll_to_end.dart';
 import '../widgets/chat_math.dart';
@@ -670,8 +671,14 @@ class ChatView extends GetView<ChatController> {
                   }),
                   Obx(() {
                     final settings = Get.find<SettingsController>();
+                    final inference = Get.find<InferenceService>();
+                    final reasoning = inference.reasoningSupport.value;
+                    final known = inference.isModelLoaded.value;
                     return ComposerActions(
-                      thinking: settings.normalThinking.value,
+                      thinking: reasoning == ReasoningSupport.alwaysOn ||
+                          ((!known ||
+                                  reasoning == ReasoningSupport.toggleable) &&
+                              settings.normalThinking.value),
                       hasContent:
                           controller.inputText.value.trim().isNotEmpty ||
                               controller.selectedFileName.value != null ||
@@ -680,14 +687,15 @@ class ChatView extends GetView<ChatController> {
                       loading: controller.isLoading.value,
                       listening: controller.isListening.value,
                       onThink: () {
+                        if (known && reasoning != ReasoningSupport.toggleable) {
+                          showToast('Think mode', reasoning.explanation);
+                          return;
+                        }
                         settings
                             .setNormalThinking(!settings.normalThinking.value);
-                        if (!Get.find<InferenceService>()
-                            .supportsThinking
-                            .value) {
-                          showToast('Think mode',
-                              'Thinking requires a compatible loaded model template.');
-                        }
+                        if (!known)
+                          showToast('Think preference',
+                              'Used when a loaded model supports a reasoning toggle.');
                       },
                       onMicrophone: controller.toggleListening,
                       onVoice: () => Get.to(() => const VoiceCallView()),
