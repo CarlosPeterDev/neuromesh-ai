@@ -1,5 +1,11 @@
 # Verification evidence — 2026-11-21
 
+Current application source `d20af8b`: **261 Flutter tests passed / 4 optional fixture skips**, analysis zero errors/warnings (311 informational findings), three Python checks, actionlint, JNI syntax (11 deprecation warnings), generic plain/toggle/always-on templates, real compatible-model thinking/calculator and Artemis streaming/native selection/greeting checks passed. Live Hugging Face author filtering returned three matching repositories. Final targeted voice/catalog/store/orchestration tests passed 22 tests. Physical Android voice/clone/SAF/JNI checks remain unverified. Artemis's optional reasoning probe did not close within 384 or 1024 tokens; that failed check is retained.
+
+[Full preview 44947885204](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/44947885204) passed AAB, ARM64/universal APK, signatures, Play policy/size, emulator test-APK upgrade/Play coexistence, hashes, both desktops and native model gates. Play arm64 download: **71,235,465 bytes**. [Publication 44950588829](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/44950588829) verified and published separate [v1.0.196 assets](https://github.com/CarlosPeterDev/neuromesh-ai/releases/tag/v1.0.196-agent-preview). Remote package digests and sizes match. Production Latest stays v1.0.158.
+
+The earlier evidence below describes v1.0.189; its local extracted APKs/AAB predate the streaming/media/model/voice follow-up.
+
 Application source: `1bd94d3` on `repair/model-directed-agent`.
 
 | Check | Actual result |

@@ -1,8 +1,8 @@
 # NeuroMesh architecture repair — implementation and evidence
 
-This is an implemented repair branch, **not a production-ready release**. Baseline: `bc0acc8`. The remaining Android device verification gaps below are material. No release was published.
+This is an implemented repair branch, **not a production-ready release**. Baseline: `bc0acc8`. The remaining Android device verification gaps below are material. A development prerelease was published; production Latest remains unchanged.
 
-1. **Root causes.** `ChatController` preselected web/image/TTS actions from words before inference. `AgentService` also had direct file/TTS shortcuts, automatic research, keyword nudges and plain-answer file saving. Cloud chat did not run the agent loop. Parameter signatures were prose without validation. Android chat formatting guessed from filenames instead of applying GGUF metadata. SAF writes lacked read-back verification and nested parent creation skipped its final component. Obsolete diffusion code remained after its downloader was disabled. The old microphone control became Send, and voice calling stayed outside the composer. See [pre-edit audit](ARCHITECTURE_REPAIR.md).
+1. **Root causes.** `ChatController` preselected web/image/TTS actions from words before inference. `AgentService` also had direct file/TTS shortcuts, automatic research, keyword nudges and plain-answer file saving. Cloud chat did not run the agent loop. Parameter signatures were prose without validation. Android chat formatting guessed from filenames instead of applying GGUF metadata. SAF writes lacked read-back verification and nested parent creation skipped its final component. Obsolete diffusion code remained after its downloader was disabled. The old microphone control became Send, and voice calling stayed outside the composer. Later findings included buffered final-only agent replies, stripped voice transcripts that lost media links, a share sheet mislabeled as audio saving, whole-second timing, initial schemas omitting TTS, and a runtime thinking-support function that did not prove an off switch. See [pre-edit audit](ARCHITECTURE_REPAIR.md).
 
 2. **Modified components.** Chat submission/history, the agent loop and tool dispatch, native/cloud inference transport, SAF Kotlin/Dart bridge, speech synthesis, provider image validation, composer/actions, navigation/settings/model UI, diagnostics, backup preferences, relay foreground-service setup, native dependencies, CI and tests. The complete changed-file inventory follows below. Working GGUF/LiteRT, model/helper management, speech recognition/playback and distributed text/voice code remain; physical distributed inference was not verified here.
 
@@ -12,19 +12,19 @@ This is an implemented repair branch, **not a production-ready release**. Baseli
 
 5. **Agent controller.** Each enabled chat turn reaches the LLM before optional tool execution. Local and cloud chat use the same bounded loop. The loop accepts direct answers or validated tagged calls; native Android GGUF, OpenAI-compatible, Google and Anthropic tool responses are normalized into that protocol. Android uses actual embedded-template tool metadata and llama.cpp common/chat parsers; other local backends retain the validated structured adapter. Google preserves opaque thought signatures across tool turns. Internal history markers prevent ordinary quoted tool examples from becoming executable native history. Model-authored plans, IDs/dependencies, up to eight calls per batch, structured untrusted results, progress traces, completed output links, step/model/total limits, safe read retries, cancellation and repeated-call stopping are implemented. Pending approval cannot start an action after cancellation or a superseding task. Tool-result JSON and its matching call remain intact during context fitting; context/inference failures preserve completed output links. Batches execute serially to avoid conflicting workspace mutations. Failed prerequisites prevent dependent execution. Malformed output gets at most two repair attempts. Tool timeouts can leave an already-started operation finishing; the controller explicitly reports that uncertainty and never retries mutations automatically.
 
-6. **Registry.** Central metadata exposes identifiers, descriptions, JSON input/output schemas, permissions, availability, dependencies and execution handlers. Built-in legacy signatures are translated to JSON Schema; MCP keeps its actual input schema. Validation rejects missing/unknown fields and invalid JSON types before approvals or handlers. Unsupported schema assertions disable the tool instead of weakening validation. Workspace listings do not follow symlinks, and copy/archive outputs reject existing destinations. Android network status, refreshed persisted read/write shared-folder grants, registered services, installed voice models/system engine and image-edit credentials affect discovery. Execution rechecks the actual tool set and policy. The old raw HTTP `callTool` policy bypass is removed. Tools cover workspace/shared files, verified export/share, real WAV synthesis, online Pollinations images, web retrieval, memory, schedules and existing optional sandbox/MCP capabilities when available.
+6. **Registry.** Central metadata exposes identifiers, descriptions, JSON input/output schemas, permissions, availability, dependencies and execution handlers. Built-in legacy signatures are translated to JSON Schema; MCP keeps its actual input schema. Validation rejects missing/unknown fields and invalid JSON types before approvals or handlers. Unsupported schema assertions disable the tool instead of weakening validation. Workspace listings do not follow symlinks, and copy/archive outputs reject existing destinations. Android network status, refreshed persisted read/write shared-folder grants, registered services, installed voice models/system engine and image-edit credentials affect discovery. Execution rechecks the actual tool set and policy. The old raw HTTP `callTool` policy bypass is removed. An installed-voice catalog exposes exact TTS voice IDs, including valid local clones, without exposing reference audio or paths. Tools cover workspace/shared files, verified export/share, real WAV synthesis, online Pollinations images, web retrieval, memory, schedules and existing optional sandbox/MCP capabilities when available.
 
 7. **Executed examples.** Deterministic integration tests scripted a model to create an astronomy text file, read that file into WAV synthesis, generate Moon/Saturn/Orion images with three distinct prompts, select web search and return all outputs. Workspace files, WAV decoding and PNG decoding were real; the model, synthesis samples, provider and web service were mocks. A separate mock-SAF test exported the actual text bytes and returned a document URI. Dependency-failure, denial, cancellation, invalid arguments, unavailable tools and limits were tested. These do not establish live compound-task planning quality. A separate real Qwen3 GGUF test selected a native calculator call, supplied validated arguments, consumed the actual arithmetic result through native tool roles/IDs, and produced a grounded final answer. A direct greeting produced no tool call. This narrow live test does not establish general small-model reliability. A real anonymous Pollinations request separately returned the included 768×768 JPEG. A live Qwen probe selected three distinct Moon/Saturn/Orion image calls without keyword routing. Executing those prompts through the actual provider service saved and SHA-verified Moon; Saturn/Orion were rejected with 429 and, on the next attempt, 503. No three-image live completion is claimed. Explicit short Retry-After limits now receive a bounded cancellable retry; 503 errors remain truthful failures.
 
-8. **Think mode.** Android now uses bundled llama.cpp common/chat and the embedded GGUF Jinja template with `enable_thinking`; filename-selected Qwen direct formatting is removed. Native metadata reports thinking and tool-schema capabilities. Prefilled reasoning delimiters are surfaced for parsing, without inserting thought text. A real Qwen3-0.6B Q8_0 host test used the same GGUF in both modes: distinct prompts, correct answer in both, reasoning closed in enabled mode and absent in disabled mode. Model SHA-256: `9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031`. This does **not** verify the Android JNI/UI path, Qwen3.5 or PocketPal parity. Incompatible templates are not promised reasoning support. The toggle persists through SettingsController/Hive and shows a compatibility notice.
+8. **Think mode.** Android now uses bundled llama.cpp common/chat and the embedded GGUF Jinja template with `enable_thinking`; filename-selected Qwen direct formatting is removed. Native metadata reports thinking and tool-schema capabilities. Prefilled reasoning delimiters are surfaced for parsing, without inserting thought text. A real Qwen3-0.6B Q8_0 host test used the same GGUF in both modes: distinct prompts, correct answer in both, reasoning closed in enabled mode and absent in disabled mode. Model SHA-256: `9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031`. This does **not** verify the Android JNI/UI path, Qwen3.5 or PocketPal parity. Incompatible templates are not promised reasoning support. The toggle persists through SettingsController/Hive and shows a compatibility notice. The follow-up detector compares actual enabled/disabled formatted prompts and parser metadata, independent of model names or authors; it distinguishes toggleable, always-on, absent and unknown support. Plain/toggleable/always-on native template fixtures and the compatible-model on/off CI regression passed with this detector. The separate Artemis reasoning probe did not close within either 384 or 1024 tokens; this is failed verification for those weights, not a promise of universal completion. PocketPal reference details and MIT attribution are in the follow-up evidence.
 
-9. **Composer.** Think is inside the composer with bright active/subdued inactive states. Microphone remains separate and present with text. Empty input shows Voice Mode; text/attachments show Send in its place; generation shows Stop. The existing `adjustResize` behavior remains. Widget tests exercise 320×640, 640×320, 800×1200 and 1200×800 sizes, typing/clearing and independent controls. Real keyboards, device rotation and navigation require device checks.
+9. **Composer.** Think is inside the composer with bright active/subdued inactive states. Microphone remains separate and present with text. Empty input shows Voice Mode; text/attachments show Send in its place; generation shows Stop. The existing `adjustResize` behavior remains. Widget tests exercise 320×640, 640×320, 800×1200 and 1200×800 sizes, typing/clearing and independent controls. Real keyboards, device rotation and navigation require device checks. Actual readable native/cloud reply content now streams, with tool arguments buffered until complete. Voice-call results persist with their full media links before playback finishes. Images open a shared viewer with explicit Save and Share buttons; audio Save invokes actual Save As with readback verification. The call header exposes voice selection, preserves a selected clone across its required English language switch and reports unavailable clones without substituting another voice. Author filtering is in the model browser; active setup explains permissions and links the existing controls with live Android microphone/camera grant status.
 
-10. **Tests actually run.** Flutter analysis completed with zero errors/warnings; informational lint findings remain. Full Flutter suite: **229 passed, 4 optional tests skipped**, including native transport, discovery expansion, cancellation during approval, context preservation, compound orchestration, files, composer and removal coverage. Python build-configuration checks: **3 passed**. Bundled `llama-common` host build passed. Real-GGUF thinking and native calculator round-trip inference passed. Android NDK ARM64 JNI syntax checking passed with nine deprecation warnings. The actual ARM64 common library also built with the application's global hidden-visibility flags, and all six checked JNI-required chat symbols were exported. Pollinations catalog/OpenAPI and anonymous generation were exercised live; the returned JPEG decoded at 768×768. The image test invocation passed six tests including this real response artifact; other responses were mocked. Logs are under [verification](verification/). The CI Android 12 emulator installation/upgrade/Play-split coexistence smoke test passed. The separate SAF/TTS/GGUF capability integration tests are compiled by analysis but were **not executed**.
+10. **Tests actually run.** Flutter analysis completed with zero errors/warnings; informational lint findings remain. Full Flutter suite: **261 passed, 4 optional tests skipped**, including native transport, discovery expansion, cancellation during approval, context preservation, compound orchestration, files, composer and removal coverage. Python build-configuration checks: **3 passed**. Bundled `llama-common` host build passed. Real-GGUF thinking and native calculator round-trip inference passed. Android NDK ARM64 JNI syntax checking passed with 11 deprecation warnings. The actual ARM64 common library also built with the application's global hidden-visibility flags, and all six checked JNI-required chat symbols were exported. Pollinations catalog/OpenAPI and anonymous generation were exercised live; the returned JPEG decoded at 768×768. The image test invocation passed six tests including this real response artifact; other responses were mocked. Logs are under [verification](verification/). The CI Android 12 emulator installation/upgrade/Play-split coexistence smoke test passed. The separate SAF/TTS/GGUF capability integration tests are compiled by analysis but were **not executed**. New deterministic tests cover cloud/native stream framing, voice catalog selection, invalid clone paths and symlinks, real reference WAV readback, media Save/Share controls, author filtering, permission explanation and retained schema constraints. A live HF author query returned three correctly owned repositories.
 
 11. **Remaining issues/unverified work.** Actual Android SAF providers, revoked permissions, Android TTS engine output, audio playback, JNI thinking/native tools, phone/tablet keyboard behavior and physical clustering need device verification. Anonymous image generation is provider-rate-limited and sometimes returned 503 during the live multi-image probe; availability is external and not guaranteed. Image editing/key authentication and real cloud native transports were not live tested; their transport tests use mocks. Full live compound-task planning remains unverified. Small local models may emit invalid structured calls; validation and bounded repair stop actions safely but cannot guarantee planning quality. Android tests need a pre-granted test folder, installed offline TTS voice and compatible GGUF. SAF test folders are deliberately left empty rather than deleting a directory outside the file-only deletion API. Local Gradle exhausted the 8 GB workspace while transforming dependencies, so full packaging uses CI. No ARM device/emulator is attached locally; the CI x86 emulator verified packaging, not the ARM GGUF JNI or granted-folder/TTS workflows. These limitations prevent declaring the assignment fully verified or production ready.
 
-12. **Build/release status.** Final source `1bd94d3` passed [preview run 44937058470](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/44937058470): Android AAB and ARM64/universal APK builds, signatures/package checks, Play manifest policy and size checks, Android 12 emulator test-APK upgrade/Play-split coexistence smoke test, checksums, Linux/Windows packaging and real-GGUF thinking/native-tool inference. Version: `1.0.189`. The measured Play arm64 download is **71,183,445 bytes**. Separate preview artifacts are available for ARM64 APK, universal APK, AAB and checksums. The extracted individual files are in `/workspace/artifacts/`; their archive digests and all three package checksums were verified locally. Both APKs include the common native library and shared C++ runtime; 185 checked C++ runtime imports resolve. They use development/test signing; the standalone test APK has a separate application identity and is not a production update. Production automation still publishes individual APK/AAB Release assets with digest checks and Latest selection, gated on critical checks. No production release, merge or Latest update was performed; keep [PR #62](https://github.com/CarlosPeterDev/neuromesh-ai/pull/62) in draft until actual capability/device verification passes. The earlier Android linker failure (`44919250711`) was caused by global hidden visibility hiding `llama-common` chat symbols; the library now overrides visibility and links the shared C++ runtime. Full CI application linking passed. The local Gradle attempt remained disk-limited; successful packages were produced by CI.
+12. **Build/release status.** Updated application source `d20af8b` passed [PR checks](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/44947885470); its [full preview build](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/44947885204) passed: AAB, ARM64/universal APKs, signatures, policy/size/checksums, emulator test-APK upgrade/Play coexistence, Windows/Linux and native inference gates. Version 1.0.196 has a measured Play arm64 download of 71,235,465 bytes. [v1.0.196-agent-preview](https://github.com/CarlosPeterDev/neuromesh-ai/releases/tag/v1.0.196-agent-preview) was published by [run 44950588829](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/44950588829), with individually downloadable APKs/AAB/checksums and verified remote sizes/digests. Production Latest remains v1.0.158. Previously packaged source `1bd94d3` passed [preview run 44937058470](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/44937058470): Android AAB and ARM64/universal APK builds, signatures/package checks, Play manifest policy and size checks, Android 12 emulator test-APK upgrade/Play-split coexistence smoke test, checksums, Linux/Windows packaging and real-GGUF thinking/native-tool inference. Version: `1.0.189`. The measured Play arm64 download is **71,183,445 bytes**. Separate preview artifacts are available for ARM64 APK, universal APK, AAB and checksums. The extracted individual files are in `/workspace/artifacts/`; their archive digests and all three package checksums were verified locally. Both APKs include the common native library and shared C++ runtime; 185 checked C++ runtime imports resolve. They use development/test signing; the standalone test APK has a separate application identity and is not a production update. Production automation still publishes individual APK/AAB Release assets with digest checks and Latest selection, gated on critical checks. No production release, merge or Latest update was performed; keep [PR #62](https://github.com/CarlosPeterDev/neuromesh-ai/pull/62) in draft until actual capability/device verification passes. The earlier Android linker failure (`44919250711`) was caused by global hidden visibility hiding `llama-common` chat symbols; the library now overrides visibility and links the shared C++ runtime. Full CI application linking passed. The local Gradle attempt remained disk-limited; successful packages were produced by CI.
 
 Prerelease follow-up: [v1.0.189-agent-preview](https://github.com/CarlosPeterDev/neuromesh-ai/releases/tag/v1.0.189-agent-preview) now provides individually downloadable ARM64 APK, universal APK, AAB and checksums. The [publication job](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/44941279798) reused the successful preview artifacts and verified their local hashes and uploaded sizes/digests before publishing. It remains a development/test prerelease; production Latest was left at v1.0.158.
 
@@ -52,7 +52,9 @@ M	continue.md
 A	docs/ARCHITECTURE_REPAIR.md
 D	docs/OPENCODE.md
 A	docs/REBUILD_REPORT.md
+A	docs/verification/MODEL_AND_VOICE_FOLLOWUP.md
 A	docs/verification/README.md
+A	docs/verification/SHA256SUMS.txt
 A	docs/verification/pollinations-live.jpg
 A	integration_test/android_capabilities_test.dart
 M	ios/Podfile.lock
@@ -76,6 +78,7 @@ M	lib/services/cloud_service.dart
 M	lib/services/cluster_backup.dart
 M	lib/services/crash_reporting_service.dart
 M	lib/services/diagnostics_service.dart
+M	lib/services/hf_service.dart
 D	lib/services/image_generation_notification_service.dart
 D	lib/services/image_generation_notification_service_native.dart
 D	lib/services/image_generation_notification_service_web.dart
@@ -85,27 +88,40 @@ M	lib/services/inference_stub.dart
 D	lib/services/local_image_service.dart
 D	lib/services/local_image_service_native.dart
 D	lib/services/local_image_service_web.dart
+A	lib/services/native_agent_stream.dart
 M	lib/services/openai_server_service_io.dart
 D	lib/services/opencode_adapter.dart
 D	lib/services/opencode_adapter_io.dart
 D	lib/services/opencode_adapter_stub.dart
+A	lib/services/output_file_service.dart
 M	lib/services/pollinations_image_service.dart
 A	lib/services/relay_background_service.dart
 M	lib/services/relay_service.dart
 D	lib/services/sd_isolate_processor.dart
+A	lib/services/speech_voice_catalog.dart
 A	lib/services/tool_registry.dart
 M	lib/services/user_files.dart
+M	lib/services/voice_clone_store.dart
 M	lib/services/voice_service.dart
+A	lib/utils/output_links.dart
+A	lib/utils/reasoning_support.dart
 D	lib/views/agent_hub_view.dart
 M	lib/views/chat_tools.dart
 M	lib/views/chat_view.dart
+M	lib/views/hf_browser.dart
 M	lib/views/home_view.dart
 M	lib/views/model_view.dart
 M	lib/views/settings_view.dart
+M	lib/views/setup_view.dart
 M	lib/views/voice_views.dart
 D	lib/views/web_image_gen_test_view.dart
+M	lib/widgets/agent_steps.dart
+M	lib/widgets/chat_bubble.dart
 A	lib/widgets/composer_actions.dart
+A	lib/widgets/device_access_status.dart
 M	lib/widgets/home_empty_state.dart
+M	lib/widgets/image_viewer.dart
+A	lib/widgets/model_access_notice.dart
 M	local_plugins/llama_flutter_android/android/CMakeLists.txt
 M	local_plugins/llama_flutter_android/android/src/main/cpp/jni_wrapper.cpp
 M	local_plugins/llama_flutter_android/android/src/main/cpp/llama.cpp/common/CMakeLists.txt
@@ -176,20 +192,33 @@ D	local_plugins/sd_flutter_android/test/sd_flutter_android_method_channel_test.d
 D	local_plugins/sd_flutter_android/test/sd_flutter_android_test.dart
 M	pubspec.lock
 M	pubspec.yaml
+A	scripts/check_agent_stream.sh
 A	scripts/check_model_thinking.sh
+A	scripts/publish_preview_release.sh
 A	test/agent_integration_test.dart
+M	test/agent_steps_test.dart
 M	test/agent_test.dart
 A	test/architecture_removal_test.dart
 M	test/chat_submission_test.dart
 A	test/composer_actions_test.dart
+A	test/generated_output_test.dart
+M	test/hf_service_test.dart
 M	test/memory_policy_test.dart
+A	test/model_access_notice_test.dart
+A	test/native_agent_stream_test.dart
 A	test/native_tool_transport_test.dart
 M	test/openai_server_service_test.dart
 D	test/opencode_adapter_test.dart
 D	test/opencode_live_smoke_test.dart
+A	test/output_links_test.dart
 M	test/pollinations_image_service_test.dart
+A	test/reasoning_support_test.dart
+A	test/speech_voice_catalog_test.dart
+A	test/voice_clone_store_test.dart
 M	test/voice_test.dart
+A	tool/verify_agent_stream.cpp
 A	tool/verify_model_thinking.cpp
+A	tool/verify_reasoning_templates.cpp
 ```
 
 
