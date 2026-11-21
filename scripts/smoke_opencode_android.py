@@ -56,14 +56,16 @@ def open_agents():
     while time.monotonic() < deadline:
         try:
             root = screen()
-            agents = find(root, "Agents")
-            if agents is not None:
-                tap(agents)
-                return
             skip = find(root, "Skip for now")
+            if skip is None:
+                skip = find(root, "Skip")
             if skip is not None:
                 tap(skip)
             else:
+                agents = find(root, "Agents")
+                if agents is not None:
+                    tap(agents)
+                    return
                 scroll()
         except (ElementTree.ParseError, subprocess.SubprocessError):
             pass

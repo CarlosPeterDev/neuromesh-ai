@@ -14,6 +14,10 @@ The server-connected implementation passed all 229 Flutter tests and six Python 
 
 The earlier standalone-installer preview v2.0.163 passed the prior Android 12 emulator startup and upgrade checks. Its APK still bundled PRoot. That preview measured 186,486,424 bytes for the Play AAB and 105,544,824 bytes for the ARM64 split download. GitHub still lists v1.0.158 as Latest. [Earlier preview build](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/44899858262) · [Latest release](https://github.com/CarlosPeterDev/neuromesh-ai/releases/latest)
 
+## Chat and first-run model recommendations
+
+Chat now has a composer-level voice/video picker, a Think/Direct chip for compatible local Qwen GGUF models, and a full-screen camera with transcript and call controls. The drawer offers direct access to saved chats, roles, models, benchmarking and the model quiz. New installs see a skippable welcome followed by use-case and preference questions. Recommendations use device RAM and free storage and require an explicit download choice. Existing sessions and setup preferences are retained. Physical camera, microphone and mobile inference still need a device test.
+
 ## Combined OpenCode and Android preview
 
 Build `8554a20` combines the OpenCode terminal preview and the smaller Play AAB. All 221 Flutter tests and three build-configuration tests passed locally. The entire Flutter suite ran in a network namespace with only loopback available. It used the published Artemis GGUF and BF16 projector and the Kitten Nano and Kokoro voice models. OpenCode streamed from the local GGUF in Xfce Terminal, the genuine projector was recognized, and both voice models generated WAV audio.

@@ -367,7 +367,12 @@ enum _CallState { starting, listening, thinking, speaking, error }
 /// Hands-free voice conversation with the loaded local model.
 class VoiceCallView extends StatefulWidget {
   final bool useSelectedClone;
-  const VoiceCallView({super.key, this.useSelectedClone = false});
+  final bool startWithCamera;
+  const VoiceCallView({
+    super.key,
+    this.useSelectedClone = false,
+    this.startWithCamera = false,
+  });
 
   @override
   State<VoiceCallView> createState() => _VoiceCallViewState();
@@ -522,7 +527,11 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     }
     _bargeIn = _hive.getSetting<bool>(_kBargeIn, defaultValue: true) ?? true;
     _wake = (_hive.getSetting<String>(_kWakePhrase) ?? '').trim().toLowerCase();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _start());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_start());
+      if (widget.startWithCamera) unawaited(_toggleCamera());
+    });
   }
 
   @override
@@ -1374,6 +1383,127 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       _set(_CallState.listening, _listeningText());
   }
 
+  Widget _videoCall(CameraController camera, Color activity) {
+    final preview = camera.value.previewSize!;
+    final portrait = MediaQuery.orientationOf(context) == Orientation.portrait;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(fit: StackFit.expand, children: [
+        ClipRect(
+          child: FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: portrait ? preview.height : preview.width,
+              height: portrait ? preview.width : preview.height,
+              child: CameraPreview(camera),
+            ),
+          ),
+        ),
+        const IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+                gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Color(0x66000000),
+                Colors.transparent,
+                Color(0xBD000000)
+              ],
+              stops: [0, 0.56, 1],
+            )),
+          ),
+        ),
+        SafeArea(
+          minimum: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Column(children: [
+            Row(children: [
+              _videoAction(
+                'Back to voice call',
+                Icons.videocam_off_outlined,
+                _camBusy ? null : _toggleCamera,
+              ),
+              const Spacer(),
+              if (_callCameras
+                  .any((entry) => entry.lensDirection == _otherCamera))
+                _videoAction(
+                  'Switch camera',
+                  Icons.cameraswitch_outlined,
+                  _camBusy || camera.value.isTakingPicture
+                      ? null
+                      : () => _openCallCamera(_otherCamera),
+                ),
+              const SizedBox(width: 8),
+              _videoAction('Show transcript', Icons.closed_caption_outlined,
+                  () {
+                showModalBottomSheet<void>(
+                  context: context,
+                  showDragHandle: true,
+                  builder: (_) => ListView(
+                    padding: const EdgeInsets.all(20),
+                    children: [
+                      Text('Call transcript',
+                          style: Theme.of(context).textTheme.titleLarge),
+                      for (final line in _lines)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: SelectableText(
+                              '${line.me ? 'You' : 'NeuroMesh'}: ${line.text}'),
+                        ),
+                    ],
+                  ),
+                );
+              }),
+            ]),
+            const Spacer(),
+            if (_attachedFile case final name?)
+              InputChip(
+                label: Text(name, overflow: TextOverflow.ellipsis),
+                onPressed: _busy ? null : _sendAttachment,
+                onDeleted:
+                    _busy ? null : () => setState(() => _attachedFile = null),
+              ),
+            if (_speaking && !_interrupted)
+              TextButton(
+                onPressed: _interrupt,
+                style: TextButton.styleFrom(foregroundColor: Colors.white),
+                child: const Text('Interrupt and talk'),
+              ),
+            Text(_status,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white)),
+            const SizedBox(height: 14),
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              _videoAction('Attach a file', Icons.attach_file,
+                  _busy || _addingFile ? null : _attachFile),
+              Icon(Icons.graphic_eq_rounded, size: 38, color: activity),
+              _videoAction(
+                  _muted ? 'Unmute' : 'Mute',
+                  _muted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                  () => setState(() => _muted = !_muted)),
+              _videoAction(
+                  'End call', Icons.call_end_rounded, () => Get.back<void>(),
+                  background: const Color(0xFFB13141)),
+            ]),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _videoAction(String label, IconData icon, VoidCallback? action,
+          {Color background = const Color(0xCC161923)}) =>
+      IconButton.filled(
+        tooltip: label,
+        style: IconButton.styleFrom(
+          foregroundColor: Colors.white,
+          backgroundColor: background,
+          minimumSize: const Size.square(48),
+        ),
+        onPressed: action,
+        icon: Icon(icon),
+      );
+
   @override
   Widget build(BuildContext context) {
     final color = switch (_state) {
@@ -1383,6 +1513,10 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       _CallState.error => Colors.red,
       _ => Colors.grey,
     };
+    if (_cam case final camera?
+        when camera.value.isInitialized && camera.value.previewSize != null) {
+      return _videoCall(camera, color);
+    }
     return Scaffold(
       appBar: AppBar(
           title: Text(_chat.currentSession?.title ?? 'Voice call',
@@ -1439,12 +1573,6 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                 ? Get.find<VoiceCloneStore>().active.value
                 : _ttsChoice(_lang)?.title ?? 'Voice call'),
           ),
-          if (_cam != null && _cam!.value.isInitialized)
-            SizedBox(
-                height: 150,
-                child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: CameraPreview(_cam!))),
           Expanded(
             child: ListView(
                 controller: _callScroll,
