@@ -20,6 +20,10 @@ Read this file, check the current branch and working tree, and review the latest
 - All 164 Flutter tests passed locally, including search retries, HTML attachment follow-ups, small-context trimming, model-helper classification, cluster allocation, and Linux command confirmation. Physical ARM64 Alpine startup, voice playback, model-helper combinations, cluster performance, Windows command execution and SSH VM sessions still need device tests.
 - Earlier tested releases were v1.0.100, v1.0.107, and v1.0.111. [Release history](https://github.com/carlospeter582011-prog/neuromesh-ai/releases)
 
+## Play AAB size
+
+The v1.0.139 bundle was 324,350,971 bytes, including 124,471,709 bytes of native debug metadata. Android release packaging omits that metadata and the two largest browser-only speech payloads. Gradle generated a development-signed v1.0.146 AAB of 186,664,083 bytes. The corrected workflow check passed on that exact bundle and measured an ARM64 split download of 105,699,551 bytes. The signature, manifest, and stripped Flutter binaries passed verification. Bundletool generated splits for all three supported ABIs. The normal build now checks the final signed AAB against the 200 MB target and separately measures the ARM64 split download. Local Flutter checks passed 210 tests with three optional fixture tests skipped. [Play preparation](docs/PLAY_STORE.md) · [Packaging PR](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/56) · [Measured Gradle artifact](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44848498057/artifacts/14684554372)
+
 ## Where to work
 
 | Area | Entry points and current behavior |
