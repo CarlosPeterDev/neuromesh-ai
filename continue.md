@@ -22,6 +22,8 @@ Chat now has a composer-level voice/video picker, a Think/Direct chip for compat
 
 The UI and model changes at `cadb454` passed all 235 Flutter tests together with local OpenCode, Artemis GGUF, vision, and voice fixtures in a loopback-only Linux environment. Six Python packaging checks passed. The Gemma 4 Kotlin templates also passed host checks for the direct and thinking prompt forms. A live Hugging Face query verified author filtering. The v2.0.172 preview job is rebuilding the APK and Play AAB with these changes. [Preview build](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/44905401985)
 
+Image requests such as “create or generate image” and requests for a new subject immediately after a successful image response now go directly through the existing image route. Audio, text files and unrelated tasks stay in normal chat. The agent ranks available tools by the user’s task and retries discovery if it misses an actionable request. The searchable catalog lists permitted available tools and can insert a selected tool into a draft for review. A live public Pollinations request returned a JPEG. The screenshot flows and fallback are covered by the local chat and agent tests.
+
 ## Combined OpenCode and Android preview
 
 Build `8554a20` combines the OpenCode terminal preview and the smaller Play AAB. All 221 Flutter tests and three build-configuration tests passed locally. The entire Flutter suite ran in a network namespace with only loopback available. It used the published Artemis GGUF and BF16 projector and the Kitten Nano and Kokoro voice models. OpenCode streamed from the local GGUF in Xfce Terminal, the genuine projector was recognized, and both voice models generated WAV audio.

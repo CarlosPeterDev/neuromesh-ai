@@ -733,7 +733,8 @@ class ChatView extends GetView<ChatController> {
                           filled: false,
                         ),
                         onSubmitted: (text) {
-                          if (!noModel || controller.canSendOnlineImage(text)) {
+                          if (!noModel ||
+                              controller.canSubmitWithoutModel(text)) {
                             controller.sendMessage();
                           } else {
                             Get.find<HomeController>().changeTab(1);
@@ -768,8 +769,8 @@ class ChatView extends GetView<ChatController> {
                       iconData = Icons.stop_rounded;
                       onTap = controller.toggleListening;
                     } else if (noModel &&
-                        !controller
-                            .canSendOnlineImage(controller.inputText.value)) {
+                        !controller.canSubmitWithoutModel(
+                            controller.inputText.value)) {
                       bgColor = Colors.transparent;
                       iconData = hasContent
                           ? Icons.memory_outlined

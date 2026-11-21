@@ -74,6 +74,32 @@ void main() {
     expect(cloud.calls, 0);
   });
 
+  test('a new image subject after a generated picture uses the image tool',
+      () async {
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    chat.textController.text = 'Create image of flying car';
+    await chat.sendMessage();
+    expect(chat.canSendOnlineImage('Now create a cute dog'), isTrue);
+    expect(chat.canSendOnlineImage('Now create a text file'), isFalse);
+    chat.textController.text = 'Now create a cute dog';
+    await chat.sendMessage();
+    expect(agent.imageCall?.arguments['prompt'], 'create a cute dog');
+    chat.textController.text =
+        'Create or generate image of a cute dog up of grass';
+    await chat.sendMessage();
+    expect(agent.imageCall?.arguments['prompt'],
+        'Create or generate image of a cute dog up of grass');
+    expect(cloud.calls, 0);
+  });
+
+  test('lists available tools without asking a language model', () async {
+    chat.textController.text = 'What tools can you use?';
+    await chat.sendMessage();
+    expect(chat.messages.last.content, contains('**generate_image**'));
+    expect(chat.messages.last.content, contains('**search_tools**'));
+    expect(cloud.calls, 0);
+  });
+
   test('vague image requests ask once and use the reply as the description',
       () async {
     await hive.setSetting(AppConstants.keyInferenceMode, 'local');

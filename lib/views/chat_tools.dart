@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../core/ui.dart';
 import '../controllers/chat_controller.dart';
+import '../controllers/home_controller.dart';
 import '../widgets/agent_steps.dart';
 import '../services/agent_service.dart';
 import '../services/mcp_client.dart';
@@ -18,6 +19,49 @@ import '../services/mcp_presets.dart';
 import '../services/user_files.dart';
 import '../utils/mcp_import.dart';
 import '../services/mcp_oauth.dart';
+
+class _ToolCatalog extends StatefulWidget {
+  const _ToolCatalog({required this.agent});
+  final AgentService agent;
+
+  @override
+  State<_ToolCatalog> createState() => _ToolCatalogState();
+}
+
+class _ToolCatalogState extends State<_ToolCatalog> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final tools = widget.agent.searchToolCatalog(_query);
+    return Scaffold(
+      appBar: appScreenBar(context, title: 'Available tools', showBack: true),
+      body: SafeArea(child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: TextField(
+            onChanged: (value) => setState(() => _query = value.trim().toLowerCase().replaceAll('_', ' ')),
+            decoration: appInputDecoration(context, hint: 'Find a tool by name or task', prefix: const Icon(Icons.search_rounded)),
+          ),
+        ),
+        Expanded(child: tools.isEmpty
+            ? const Center(child: Text('No available tools match.'))
+            : ListView.builder(
+                itemCount: tools.length,
+                itemBuilder: (context, index) {
+                  final tool = tools[index];
+                  return ListTile(
+                    title: Text(tool.name.replaceAll('_', ' ')),
+                    subtitle: Text(tool.description),
+                    trailing: const Icon(Icons.add_comment_outlined),
+                    onTap: () => Navigator.pop(context, tool),
+                  );
+                },
+              )),
+      ])),
+    );
+  }
+}
 
 /// Everything about what the chat AI may do: when it uses tools, what it
 /// remembers, which folders it can see, per-tool permissions and MCP
@@ -53,6 +97,15 @@ class _ChatToolsViewState extends State<ChatToolsView> {
       backgroundColor: t.bg,
       appBar: appScreenBar(context, title: 'Tools & permissions', showBack: true),
       body: ListView(padding: kPagePadding, children: [
+        AppGroup(children: [
+          AppRow(
+            icon: Icons.search_rounded,
+            title: 'Browse available tools',
+            subtitle: 'Search by what you want to do or select a tool',
+            chevron: true,
+            onTap: _openToolCatalog,
+          ),
+        ]),
         // ── when tools are used ──
         const SectionHeader('How the AI decides'),
         Obx(() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -244,6 +297,21 @@ class _ChatToolsViewState extends State<ChatToolsView> {
             ])),
       ]),
     );
+  }
+
+  Future<void> _openToolCatalog() async {
+    final tool = await Get.to<AgentTool>(() => _ToolCatalog(agent: _agent));
+    if (!mounted || tool == null) return;
+    final chat = Get.find<ChatController>();
+    final draft = chat.textController.text.trimRight();
+    final request = '${draft.isEmpty ? '' : '$draft\n'}Use ${tool.name} to ';
+    chat.textController.value = TextEditingValue(
+      text: request,
+      selection: TextSelection.collapsed(offset: request.length),
+    );
+    chat.inputText.value = request;
+    if (Get.isRegistered<HomeController>()) Get.find<HomeController>().changeTab(0);
+    Get.back<void>();
   }
 
   void _addNote() {
