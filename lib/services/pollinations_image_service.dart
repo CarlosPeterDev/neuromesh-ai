@@ -13,10 +13,12 @@ class ImageRequest {
   final ImageAction action;
   final String description;
 
-  static ImageRequest? parse(String value, {bool hasImage = false}) {
+  static ImageRequest? parse(String value,
+      {bool hasImage = false, bool followsGeneratedImage = false}) {
     final text = value.trim();
     final instruction = text.replaceFirst(
-        RegExp(r'^\s*(?:(?:ok|please|can you|could you|would you)\b[ ,.!]+)+',
+        RegExp(
+            r'^\s*(?:(?:ok|please|can you|could you|would you|now|next|also)\b[ ,.!]+)+',
             caseSensitive: false),
         '');
     final edit = RegExp(
@@ -25,7 +27,7 @@ class ImageRequest {
             dotAll: true)
         .hasMatch(instruction);
     final explicitCreation =
-        PollinationsImageService.explicitPrompt(text) != null;
+        PollinationsImageService.explicitPrompt(instruction) != null;
     final editExisting = RegExp(r'^(?:make|turn)\s+(?:this|the|my|attached)\b',
             caseSensitive: false)
         .hasMatch(instruction);
@@ -49,13 +51,27 @@ class ImageRequest {
         .hasMatch(instruction)) {
       return ImageRequest(ImageAction.create, text);
     }
+    if (followsGeneratedImage &&
+        !hasImage &&
+        RegExp(r'^(?:(?:create|generate|make|draw|render|paint)\s+(?:me\s+)?|another\s+one\s+of\s+)\S',
+                caseSensitive: false)
+            .hasMatch(instruction) &&
+        !RegExp(r'\b(?:text|audio|video|music|script|program|file|document|essay|story|poem|song|summary|description|prompt|report|schedule|reminder|table|spreadsheet|code|folder|list|calendar|presentation)\b|@',
+                caseSensitive: false)
+            .hasMatch(instruction)) {
+      return ImageRequest(ImageAction.create, instruction);
+    }
     final match = RegExp(
-      r'^(?:generate|create|make|render|design)\s+(?:me\s+)?(?:an?\s+)?(?:image|picture|photo|illustration|portrait|logo|poster|icon|banner|wallpaper)(?:\s+(.+))?[.!?]*$',
+      r'^(?:generate|create|make|render|design)(?:\s+(?:or|and)\s+(?:generate|create|make|render|design))?\s+(?:me\s+)?(?:an?\s+)?(?:image|picture|photo|illustration|portrait|logo|poster|icon|banner|wallpaper)(?:\s+(.+))?[.!?]*$',
       caseSensitive: false,
       dotAll: true,
     ).firstMatch(instruction);
     if (match == null) return null;
     final subject = match.group(1)?.trim() ?? '';
+    if (RegExp(
+            r'^(?:from|based on|using)\s+(?:this|the|my|our)\b|@(?:file|skill):',
+            caseSensitive: false)
+        .hasMatch(subject)) return null;
     return ImageRequest(
         ImageAction.create,
         RegExp(r'^(?:please|for me|something|anything|nice)?[.!?]*$',
@@ -79,7 +95,7 @@ class PollinationsImageService {
 
   static String? explicitPrompt(String text) {
     final request = RegExp(
-      r'^\s*(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:please\s+)?(?:generate|create|make|draw|render|paint)\s+(?:(?:an?|the|me an?)\s+)?(?:(?:ai[- ]generated|realistic|photorealistic)\s+)?(?:image|picture|photo|illustration|portrait)(?:\s+(?:of|showing|depicting|with)\b|\s*:\s*|\s+)(.+)$',
+      r'^\s*(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:please\s+)?(?:generate|create|make|draw|render|paint)(?:\s+(?:or|and)\s+(?:generate|create|make|draw|render|paint))?\s+(?:(?:an?|the|me an?)\s+)?(?:(?:ai[- ]generated|realistic|photorealistic)\s+)?(?:image|picture|photo|illustration|portrait)(?:\s+(?:of|showing|depicting|with)\b|\s*:\s*|\s+)(.+)$',
       caseSensitive: false,
       dotAll: true,
     ).firstMatch(text);

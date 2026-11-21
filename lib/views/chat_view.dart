@@ -16,6 +16,7 @@ import '../services/agent_service.dart' show stripToolTrace;
 import '../services/cluster_service.dart';
 import '../services/inference_service.dart';
 import '../utils/thought_parser.dart';
+import '../utils/thinking_mode.dart';
 import '../widgets/agent_steps.dart';
 import '../widgets/context_mentions.dart';
 import '../widgets/attachment_preview.dart';
@@ -37,6 +38,9 @@ Color _sep(BuildContext c) => Theme.of(c).brightness == Brightness.dark
     ? Colors.white.withValues(alpha: 0.08)
     : Colors.black.withValues(alpha: 0.08);
 
+String _chatLabel(BuildContext context, String english, String arabic) =>
+    Directionality.of(context) == TextDirection.rtl ? arabic : english;
+
 class ChatView extends GetView<ChatController> {
   const ChatView({super.key});
 
@@ -46,51 +50,62 @@ class ChatView extends GetView<ChatController> {
     Widget scaffold = Scaffold(
       backgroundColor: isDark ? Colors.black : Colors.white,
       appBar: _appBar(context, isDark),
-      body: Column(
-        children: [
-          _modelLoadingBar(context, isDark),
-          Expanded(child: Obx(() {
-            if (controller.currentSessionId.value.isEmpty ||
-                controller.messages.isEmpty) {
-              return _emptyState(context, isDark);
-            }
-            final streaming = controller.isStreaming.value;
-            final text = controller.streamingResponse.value;
-            final n = controller.messages.length;
-            return ScrollToEnd(
-              label: 'Go to latest message',
-              controller: controller.scrollController,
-              onJump: controller.followLatest,
-              child: NotificationListener<ScrollUpdateNotification>(
-                onNotification: (note) {
-                  if (note.dragDetails != null && streaming) {
-                    if ((note.scrollDelta ?? 0) < 0) {
-                      controller.pauseStreamingFollow();
-                    } else {
-                      controller.resumeStreamingFollowIfNearBottom();
-                    }
-                  }
-                  return false;
-                },
-                child: ListView.builder(
+      body: DecoratedBox(
+          decoration: BoxDecoration(
+              gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              isDark ? Colors.black : Colors.white,
+              isDark ? const Color(0xFF0B101C) : const Color(0xFFF4F7FC),
+            ],
+            stops: const [.45, 1],
+          )),
+          child: Column(
+            children: [
+              _modelLoadingBar(context, isDark),
+              Expanded(child: Obx(() {
+                if (controller.currentSessionId.value.isEmpty ||
+                    controller.messages.isEmpty) {
+                  return _emptyState(context, isDark);
+                }
+                final streaming = controller.isStreaming.value;
+                final text = controller.streamingResponse.value;
+                final n = controller.messages.length;
+                return ScrollToEnd(
+                  label: 'Go to latest message',
                   controller: controller.scrollController,
-                  padding: const EdgeInsets.only(top: 8, bottom: 8),
-                  itemCount: n + (streaming ? 1 : 0),
-                  itemBuilder: (_, i) {
-                    if (i == n && streaming) {
-                      return _streamBubble(context, text, isDark);
-                    }
-                    final message = controller.messages[i];
-                    return ChatBubble(
-                        key: ValueKey(message.id), message: message);
-                  },
-                ),
-              ),
-            );
-          })),
-          _inputBar(context, isDark),
-        ],
-      ),
+                  onJump: controller.followLatest,
+                  child: NotificationListener<ScrollUpdateNotification>(
+                    onNotification: (note) {
+                      if (note.dragDetails != null && streaming) {
+                        if ((note.scrollDelta ?? 0) < 0) {
+                          controller.pauseStreamingFollow();
+                        } else {
+                          controller.resumeStreamingFollowIfNearBottom();
+                        }
+                      }
+                      return false;
+                    },
+                    child: ListView.builder(
+                      controller: controller.scrollController,
+                      padding: const EdgeInsets.only(top: 8, bottom: 8),
+                      itemCount: n + (streaming ? 1 : 0),
+                      itemBuilder: (_, i) {
+                        if (i == n && streaming) {
+                          return _streamBubble(context, text, isDark);
+                        }
+                        final message = controller.messages[i];
+                        return ChatBubble(
+                            key: ValueKey(message.id), message: message);
+                      },
+                    ),
+                  ),
+                );
+              })),
+              _inputBar(context, isDark),
+            ],
+          )),
     );
 
     if (Platform.isIOS) {
@@ -131,14 +146,19 @@ class ChatView extends GetView<ChatController> {
         final text = isDark ? Colors.white : Colors.black;
         // Home: a quiet wordmark — the model card below carries the status.
         if (controller.messages.isEmpty) {
-          return Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Text('NeuroMesh AI',
-                style: GoogleFonts.inter(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 18,
-                    letterSpacing: -0.5,
-                    color: text)),
+          return InkWell(
+            onTap: () => _showModelSheet(context),
+            borderRadius: BorderRadius.circular(12),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text('NeuroMesh AI',
+                  style: GoogleFonts.inter(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 18,
+                      letterSpacing: -0.5,
+                      color: text)),
+              Icon(Icons.expand_more_rounded,
+                  size: 18, color: Theme.of(context).hintColor),
+            ]),
           );
         }
         final sid = controller.currentSessionId.value;
@@ -200,10 +220,6 @@ class ChatView extends GetView<ChatController> {
             tooltip: 'Tools & permissions',
             icon: const Icon(Icons.handyman_outlined, size: 20),
             onPressed: () => Get.to(() => const ChatToolsView())),
-        IconButton(
-            tooltip: 'Voice call',
-            icon: const Icon(Icons.call_outlined, size: 20),
-            onPressed: () => Get.to(() => const VoiceCallView())),
         Obx(() {
           // Already on a blank chat — a "new chat" button would only create
           // empty sessions.
@@ -616,6 +632,31 @@ class ChatView extends GetView<ChatController> {
                 ),
               );
             }),
+            Obx(() {
+              final settings = Get.find<SettingsController>();
+              final inference = Get.find<InferenceService>();
+              final name = inference.loadedModelName.value;
+              final supportsThinking =
+                  settings.inferenceMode.value == 'local' &&
+                      inference.isModelLoaded.value &&
+                      inference.loadedModelRuntime.value != 'litert' &&
+                      ThinkingMode.forModel(name) != ThinkingMode.unsupported;
+              if (!supportsThinking) return const SizedBox.shrink();
+              final thinking = settings.normalThinking.value;
+              return Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: FilterChip(
+                  avatar: const Icon(Icons.psychology_outlined, size: 18),
+                  label: Text(thinking
+                      ? _chatLabel(context, 'Think', 'التفكير')
+                      : _chatLabel(context, 'Direct answer', 'إجابة مباشرة')),
+                  selected: thinking,
+                  onSelected: controller.isLoading.value
+                      ? null
+                      : settings.setNormalThinking,
+                ),
+              );
+            }),
             // Composer: one rounded surface holding the field and its actions.
             Container(
                 padding: const EdgeInsets.all(5),
@@ -623,7 +664,7 @@ class ChatView extends GetView<ChatController> {
                   color: isDark
                       ? const Color(0xFF141416)
                       : const Color(0xFFF5F5F7),
-                  borderRadius: BorderRadius.circular(24),
+                  borderRadius: BorderRadius.circular(30),
                   border: Border.all(
                       color: isDark
                           ? Colors.white.withValues(alpha: 0.09)
@@ -692,7 +733,8 @@ class ChatView extends GetView<ChatController> {
                           filled: false,
                         ),
                         onSubmitted: (text) {
-                          if (!noModel || controller.canSendOnlineImage(text)) {
+                          if (!noModel ||
+                              controller.canSubmitWithoutModel(text)) {
                             controller.sendMessage();
                           } else {
                             Get.find<HomeController>().changeTab(1);
@@ -727,8 +769,8 @@ class ChatView extends GetView<ChatController> {
                       iconData = Icons.stop_rounded;
                       onTap = controller.toggleListening;
                     } else if (noModel &&
-                        !controller
-                            .canSendOnlineImage(controller.inputText.value)) {
+                        !controller.canSubmitWithoutModel(
+                            controller.inputText.value)) {
                       bgColor = Colors.transparent;
                       iconData = hasContent
                           ? Icons.memory_outlined
@@ -776,9 +818,53 @@ class ChatView extends GetView<ChatController> {
                       ),
                     );
                   }),
+                  Padding(
+                    padding: const EdgeInsetsDirectional.only(start: 5),
+                    child: IconButton.filledTonal(
+                      tooltip: _chatLabel(
+                          context,
+                          'Start a voice or video call',
+                          'ابدأ مكالمة صوتية أو فيديو'),
+                      icon: const Icon(Icons.graphic_eq_rounded, size: 20),
+                      onPressed: () => _showCallOptions(context),
+                    ),
+                  ),
                 ])),
           ])),
     );
+  }
+
+  Future<void> _showCallOptions(BuildContext context) async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    final vision = Get.find<InferenceService>().isVisionLoaded.value;
+    final video = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            leading: const Icon(Icons.graphic_eq_rounded),
+            title: Text(_chatLabel(context, 'Voice call', 'مكالمة صوتية')),
+            onTap: () => Navigator.pop(sheet, false),
+          ),
+          ListTile(
+            leading: const Icon(Icons.videocam_outlined),
+            title: Text(_chatLabel(context, 'Video call', 'مكالمة فيديو')),
+            subtitle: vision
+                ? null
+                : Text(_chatLabel(
+                    context,
+                    'Load a model with vision to use your camera',
+                    'حمّل نموذجًا يدعم الرؤية لاستخدام الكاميرا')),
+            enabled: vision,
+            onTap: vision ? () => Navigator.pop(sheet, true) : null,
+          ),
+        ]),
+      ),
+    );
+    if (video != null && context.mounted) {
+      Get.to(() => VoiceCallView(startWithCamera: video));
+    }
   }
 
   /// Local mode with no text or image model loaded (cloud never counts).

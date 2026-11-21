@@ -235,6 +235,35 @@ void main() {
     expect(await search('TTS'), isNot(contains('text_to_speech:')));
   });
 
+  test('retries by looking up the capability when a model skips a tool',
+      () async {
+    Get.put(HiveService());
+    addTearDown(Get.reset);
+    final agent = AgentService();
+    var turns = 0;
+    final result = await agent.runToolLoop(
+      prompt: 'Could you calculate the sum of 2 and 3?',
+      history: const [],
+      confirm: (_, __, ___) async => false,
+      onVisible: (_) {},
+      onStatus: (_) {},
+      cancelled: () => false,
+      generate: (prompt, _, __) async {
+        switch (++turns) {
+          case 1:
+            return 'I cannot use a calculator.';
+          case 2:
+            expect(prompt, contains('calculator:'));
+            return '<tool_call>{"name":"calculator","arguments":{"expression":"2+3"}}</tool_call>';
+          default:
+            return 'The sum is 5.';
+        }
+      },
+    );
+    expect(result.answer, 'The sum is 5.');
+    expect(result.trace, hasLength(2));
+  });
+
   test('shared folder changes require approval and stay on the selected tree',
       () async {
     final dir = await Directory.systemTemp.createTemp('shared_folder');

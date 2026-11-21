@@ -110,6 +110,7 @@ void main() {
       'Create an image using @file:private.txt',
     ]) {
       expect(PollinationsImageService.explicitPrompt(question), isNull);
+      expect(ImageRequest.parse(question), isNull);
     }
   });
 

@@ -166,6 +166,7 @@ class HfService {
       bool images = false,
       bool vision = false,
       String? task,
+      String? author,
       String sort = 'downloads'}) async {
     // [task]: 'text' | 'vision' | 'embedding' (null = any). [vision] is kept
     // for older callers.
@@ -177,7 +178,9 @@ class HfService {
             'text' => 'text-generation',
             _ => vision ? 'image-text-to-text' : null,
           };
+    final publisher = author?.trim().replaceFirst(RegExp(r'^@'), '') ?? '';
     final params = <String, String>{
+      if (publisher.isNotEmpty) 'author': publisher,
       'filter': images ? 'text-to-image' : 'gguf',
       'sort': sort,
       if (pipeline != null) 'pipeline_tag': pipeline,

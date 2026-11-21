@@ -8,6 +8,7 @@ import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import '../core/build_flavor.dart';
 import 'agent_service.dart';
 import 'device_bridge.dart';
 import 'hive_service.dart';
@@ -33,7 +34,20 @@ class SandboxService extends GetxService {
 
   String _libDir = '';
 
-  static bool get supported => !kIsWeb && Platform.isAndroid;
+  static String _legacyLibDir = '';
+  static bool get supported => _legacyLibDir.isNotEmpty;
+
+  static Future<void> detectLegacyLauncher(DeviceBridge bridge) async {
+    if (kIsWeb || !Platform.isAndroid || kPlayBuild) return;
+    try {
+      final directory = await bridge.nativeLibDir();
+      if (directory.isNotEmpty && _hasLauncher(directory)) {
+        _legacyLibDir = directory;
+      }
+    } on Exception {
+      // Older or unbundled installations can use the app without Alpine.
+    }
+  }
 
   Future<Directory> _root() async {
     final base = await getApplicationSupportDirectory();
@@ -51,19 +65,19 @@ class SandboxService extends GetxService {
   }
 
   Future<void> _initialize() async {
-    _libDir = await Get.find<DeviceBridge>().nativeLibDir();
+    _libDir = _legacyLibDir;
     installed.value =
         await File('${(await _root()).path}/rootfs/bin/busybox').exists();
   }
 
-  bool get hasProot =>
-      _libDir.isNotEmpty &&
-      [
+  bool get hasProot => _libDir.isNotEmpty && _hasLauncher(_libDir);
+
+  static bool _hasLauncher(String directory) => [
         'libproot.so',
         'libproot_loader.so',
         'libtalloc.so',
         'libandroid-shmem.so'
-      ].every((name) => File('$_libDir/$name').existsSync());
+      ].every((name) => File('$directory/$name').existsSync());
 
   Future<bool> runtimeAvailable() async {
     if (!supported) return false;
@@ -229,11 +243,39 @@ class SandboxService extends GetxService {
 
   Future<String> _run(String command,
       {required int timeoutSec, required String workingDirectory}) async {
+    final p = await _start(['/bin/sh', '-c', command],
+        workingDirectory: workingDirectory);
+    final out = StringBuffer();
+    void add(List<int> b) {
+      if (out.length < 60000) out.write(utf8.decode(b, allowMalformed: true));
+    }
+
+    p.stdin.close();
+    final streams = [p.stdout.forEach(add), p.stderr.forEach(add)];
+    var timedOut = false;
+    final code =
+        await p.exitCode.timeout(Duration(seconds: timeoutSec), onTimeout: () {
+      timedOut = true;
+      p.kill(ProcessSignal.sigkill);
+      return -1;
+    });
+    await Future.wait(streams)
+        .timeout(const Duration(seconds: 2), onTimeout: () => []);
+    var text = out.toString().trim();
+    if (text.length > 6000) {
+      text =
+          '${text.substring(0, 2500)}\n… (output cut) …\n${text.substring(text.length - 3200)}';
+    }
+    return '${timedOut ? '[timed out after $timeoutSec s]\n' : ''}${text.isEmpty ? '(no output)' : text}\n[exit code $code]';
+  }
+
+  Future<Process> _start(List<String> command,
+      {required String workingDirectory,
+      Map<String, String> environment = const {}}) async {
     await _initializing;
-    if (!installed.value)
-      return 'Error: the Linux sandbox is not installed. Install Alpine Linux from the terminal.';
-    if (!hasProot)
-      return 'The Alpine launcher is incomplete. Install a newer ARM64 build of NeuroMesh AI.';
+    if (!supported || !installed.value || !hasProot) {
+      throw StateError('Install the Alpine runtime before using its commands.');
+    }
     final root = await _root();
     final work = (await Get.find<AgentService>().filesDir()).path;
     final libs = '${root.path}/lib';
@@ -258,9 +300,7 @@ class SandboxService extends GetxService {
       '/sys',
       '-b',
       '$work:/workspace',
-      '/bin/sh',
-      '-c',
-      command,
+      ...command,
     ];
     final env = {
       'PROOT_LOADER': '$_libDir/libproot_loader.so',
@@ -276,35 +316,8 @@ class SandboxService extends GetxService {
       'PIP_DISABLE_PIP_VERSION_CHECK': '1',
       'NPM_CONFIG_PREFIX': '/root/.npm-global',
     };
-    Process p;
-    try {
-      p = await Process.start('$_libDir/libproot.so', args,
-          environment: env, includeParentEnvironment: false);
-    } catch (e) {
-      return 'Error: could not start the sandbox: $e';
-    }
-    final out = StringBuffer();
-    void add(List<int> b) {
-      if (out.length < 60000) out.write(utf8.decode(b, allowMalformed: true));
-    }
-
-    p.stdin.close();
-    final streams = [p.stdout.forEach(add), p.stderr.forEach(add)];
-    var timedOut = false;
-    final code =
-        await p.exitCode.timeout(Duration(seconds: timeoutSec), onTimeout: () {
-      timedOut = true;
-      p.kill(ProcessSignal.sigkill);
-      return -1;
-    });
-    await Future.wait(streams)
-        .timeout(const Duration(seconds: 2), onTimeout: () => []);
-    var text = out.toString().trim();
-    if (text.length > 6000) {
-      text =
-          '${text.substring(0, 2500)}\n… (output cut) …\n${text.substring(text.length - 3200)}';
-    }
-    return '${timedOut ? '[timed out after $timeoutSec s]\n' : ''}${text.isEmpty ? '(no output)' : text}\n[exit code $code]';
+    return Process.start('$_libDir/libproot.so', args,
+        environment: {...env, ...environment}, includeParentEnvironment: false);
   }
 }
 

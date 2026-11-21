@@ -1109,15 +1109,16 @@ class ChatController extends GetxController {
           ? Get.find<WebSearchService>()
           : null;
       final hasAttachedImage = imagePath != null || imageBase64 != null;
-      var imageRequest = fileName == null || fileType == 'image'
-          ? ImageRequest.parse(visibleText, hasImage: hasAttachedImage)
-          : null;
       final earlierMessages =
           messages.reversed.where((message) => message.id != userMsg.id);
       final priorReply = earlierMessages
           .where((message) => message.role == 'assistant')
           .firstOrNull
           ?.content;
+      final imageRequest = fileName == null || fileType == 'image'
+          ? _imageRequestFor(visibleText, priorReply,
+              hasImage: hasAttachedImage)
+          : null;
       final priorRequest = earlierMessages
           .where((message) => message.role == 'user')
           .firstOrNull
@@ -1135,16 +1136,8 @@ class ChatController extends GetxController {
       final priorSpeech = narratesPriorReply
           ? spokenAnswer(stripToolTrace(priorReply ?? ''))
           : null;
-      if (imageRequest == null &&
-          priorReply != null &&
-          priorReply.startsWith('To create your image')) {
-        imageRequest = ImageRequest(ImageAction.create, visibleText);
-      } else if (imageRequest == null &&
-          priorReply != null &&
-          priorReply.startsWith('To edit your image')) {
-        imageRequest = ImageRequest(ImageAction.edit, visibleText);
-      }
       final searchRequested = !narratesPriorReply &&
+          !AgentService.asksForToolCatalog(visibleText) &&
           imageRequest == null &&
           (explicitSearch ||
               (evidenceName == null &&
@@ -1251,6 +1244,16 @@ class ChatController extends GetxController {
           (skillContext?.documents.isEmpty ?? true);
       if (unavailableEvidence != null) {
         rawResponse = unavailableEvidence;
+      } else if (AgentService.asksForToolCatalog(visibleText)) {
+        final tools = contextAgent.availableToolCatalog;
+        rawResponse = tools.isEmpty
+            ? 'There are no tools available in this chat.'
+            : [
+                'Tools available in this chat:',
+                '',
+                for (final tool in tools)
+                  '- **${tool.name}** — ${tool.description}'
+              ].join('\n');
       } else if (imageRequest != null) {
         final request = imageRequest;
         final source = request.action == ImageAction.edit
@@ -1655,19 +1658,39 @@ class ChatController extends GetxController {
     }
   }
 
+  ImageRequest? _imageRequestFor(String text, String? priorReply,
+      {required bool hasImage}) {
+    final preceding = stripToolTrace(priorReply ?? '').trimLeft();
+    final parsed = ImageRequest.parse(text,
+        hasImage: hasImage,
+        followsGeneratedImage:
+            preceding.startsWith('Generated online with Pollinations') ||
+                preceding.startsWith('Edited online with Pollinations'));
+    if (parsed != null) return parsed;
+    if (preceding.startsWith('To create your image')) {
+      return ImageRequest(ImageAction.create, text);
+    }
+    if (preceding.startsWith('To edit your image')) {
+      return ImageRequest(ImageAction.edit, text);
+    }
+    return null;
+  }
+
+  bool canSubmitWithoutModel(String text) =>
+      AgentService.asksForToolCatalog(text) || canSendOnlineImage(text);
+
   bool canSendOnlineImage(String text) {
     if (text.trim().isEmpty) return false;
-    if (ImageRequest.parse(text,
+    if (selectedFileName.value != null && selectedFileType.value != 'image')
+      return false;
+    final previous = messages.reversed
+        .where((message) => message.role == 'assistant')
+        .firstOrNull
+        ?.content;
+    return _imageRequestFor(text, previous,
             hasImage: selectedImageBase64.value != null ||
                 selectedImagePath.value != null) !=
-        null) return true;
-    final previous = messages.reversed
-            .where((message) => message.role == 'assistant')
-            .firstOrNull
-            ?.content ??
-        '';
-    return previous.startsWith('To create your image') ||
-        previous.startsWith('To edit your image');
+        null;
   }
 
   Future<String?> _recentImageForEdit(

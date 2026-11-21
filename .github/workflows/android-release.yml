@@ -15,6 +15,10 @@ on:
         description: Test Android and desktop packages with development signing and upload them to Actions
         type: boolean
         default: false
+      smoke_run_id:
+        description: Retest Android APK and AAB artifacts from a completed preview run
+        type: string
+        default: ''
 
 # Serialize main release builds so publication and Latest selection agree.
 concurrency:
@@ -29,11 +33,12 @@ env:
   NEUROMESH_REPORT_BOT_TOKEN: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.NEUROMESH_REPORT_BOT_TOKEN || '' }}
   NEUROMESH_REPORT_CHAT_ID: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.NEUROMESH_REPORT_CHAT_ID || '' }}
   REQUIRE_DEVELOPER_REPORT_DELIVERY: ${{ !inputs.preview_only && !inputs.play_bundle_only && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
-  BASE_VERSION: "1.0"   # MAJOR.MINOR; patch comes from the CI run number
+  BASE_VERSION: "2.0"   # MAJOR.MINOR; patch comes from the CI run number
   ANDROID_VERSION_CODE_BASE: 5000   # Exceed legacy split-ABI APK version codes (including 4072)
 
 jobs:
   build:
+    if: inputs.smoke_run_id == ''
     runs-on: ubuntu-latest
     timeout-minutes: 120
     outputs:
@@ -119,28 +124,21 @@ jobs:
       - name: Test
         run: |
           python -m unittest discover -s scripts -p 'test_report_build_config.py'
+          python -m unittest discover -s scripts -p 'test_check_play_bundle.py'
           flutter test
 
-      - name: Fetch proot (Termux build for Android)
-        if: github.event_name != 'pull_request'
+      - name: OpenCode local-provider protocol smoke test on Linux
         run: |
-          set -e
-          BASE=https://packages.termux.dev/apt/termux-main
-          mkdir -p proot_dl && cd proot_dl
-          curl -fsSL --retry 3 "$BASE/dists/stable/main/binary-aarch64/Packages" -o Packages
-          debfor() { awk -v p="$1" 'BEGIN{RS="";FS="\n"} $1=="Package: " p {for(i=1;i<=NF;i++) if($i ~ /^Filename: /){sub("Filename: ","",$i); print $i}}' Packages | head -1; }
-          for pkg in proot libtalloc libandroid-shmem; do
-            f=$(debfor $pkg); test -n "$f" || { echo "package $pkg not found"; exit 1; }
-            curl -fsSL --retry 3 "$BASE/$f" -o $pkg.deb
-            mkdir -p x_$pkg && (cd x_$pkg && ar x ../$pkg.deb && tar -xf data.tar.* )
-          done
-          J=../android/app/src/main/jniLibs/arm64-v8a
-          mkdir -p $J
-          cp "$(find x_proot -type f -name proot | head -1)" $J/libproot.so
-          cp "$(find x_proot -type f -path '*libexec/proot/loader' | head -1)" $J/libproot_loader.so
-          cp "$(find x_libtalloc -type f -name 'libtalloc.so*' | head -1)" $J/libtalloc.so
-          cp "$(find x_libandroid-shmem -type f -name libandroid-shmem.so | head -1)" $J/libandroid-shmem.so
-          ls -la $J
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/opencode"
+          archive="$RUNNER_TEMP/opencode/archive.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" \
+            https://github.com/anomalyco/opencode/releases/download/v1.19.6/opencode-linux-x64.tar.gz
+          echo "47734e08968b30cc22a0bffb6d9feeed76ad4aa743213a12122040392d09a057  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP/opencode" opencode
+          NEUROMESH_TEST_OPENCODE_CLI="$RUNNER_TEMP/opencode/opencode" \
+            flutter test --no-pub test/openai_server_service_test.dart
+          rm -f "$archive"
 
       - name: Resolve Flutter Gradle plugin dependencies from Maven Central
         if: github.event_name != 'pull_request'
@@ -313,11 +311,7 @@ jobs:
           grep -F "package: name='$package_id' " "$RUNNER_TEMP/arm64-package.txt"
           grep -F "package: name='$package_id' " "$RUNNER_TEMP/universal-package.txt"
           sed 's/[[:space:]]*$//' "$RUNNER_TEMP/arm64-package.txt" | grep -Fx "native-code: 'arm64-v8a'"
-          for library in libproot.so libproot_loader.so libtalloc.so libandroid-shmem.so; do
-            unzip -l build/app/outputs/bundle/release/app-release.aab "base/lib/arm64-v8a/$library"
-            unzip -l "$RUNNER_TEMP/arm64.apk" "lib/arm64-v8a/$library"
-            unzip -l "$RUNNER_TEMP/universal.apk" "lib/arm64-v8a/$library"
-          done
+          python scripts/check_play_bundle.py --apk "$RUNNER_TEMP/arm64.apk" "$RUNNER_TEMP/universal.apk"
           # The compiler is no longer needed; leave room for the emulator image.
           rm -rf "$RUNNER_TEMP/vksdk"
 
@@ -427,6 +421,7 @@ jobs:
             build/app/outputs/flutter-apk/*.apk
             build/app/outputs/bundle/release/*.aab
             ${{ runner.temp }}/*signature.txt
+            ${{ runner.temp }}/neuromesh-android-smoke.png
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
@@ -436,10 +431,99 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  retest-android-preview:
+    if: github.event_name == 'workflow_dispatch' && inputs.smoke_run_id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: android-*
+          run-id: ${{ inputs.smoke_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/prior-android-preview
+
+      - name: Prepare verified Android test packages
+        run: |
+          set -euo pipefail
+          archive_dir="$RUNNER_TEMP/prior-android-preview"
+          apk=$(find "$archive_dir" -type f \( -name '*-universal-dev.apk' -o -name 'app-release.apk' \) -print -quit)
+          aab=$(find "$archive_dir" -type f -name '*.aab' -print -quit)
+          test -n "$apk" && test -n "$aab"
+          mkdir -p build/app/outputs/bundle/release
+          cp "$apk" "$RUNNER_TEMP/universal.apk"
+          cp "$aab" build/app/outputs/bundle/release/app-release.aab
+          python scripts/check_play_bundle.py --apk "$apk"
+          python scripts/check_play_bundle.py "$aab"
+          aapt=$(find "$ANDROID_HOME/build-tools" -name aapt | sort -V | tail -1)
+          "$aapt" dump badging "$apk" > "$RUNNER_TEMP/retest-package.txt"
+          grep -F "package: name='com.neuromesh.ai.test' " "$RUNNER_TEMP/retest-package.txt"
+          version_code=$(sed -n "s/^package:.*versionCode='\([0-9]*\)'.*/\1/p" "$RUNNER_TEMP/retest-package.txt")
+          test -n "$version_code"
+          echo "ANDROID_BUILD_NUMBER=$version_code" >> "$GITHUB_ENV"
+          bash scripts/create_public_test_keystore.sh "$RUNNER_TEMP/neuromesh-test-signing.p12"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/bundletool.jar" https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar
+          mkdir -p "$RUNNER_TEMP/opencode"
+          archive="$RUNNER_TEMP/opencode/archive.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" https://github.com/anomalyco/opencode/releases/download/v1.19.6/opencode-linux-x64.tar.gz
+          echo "47734e08968b30cc22a0bffb6d9feeed76ad4aa743213a12122040392d09a057  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP/opencode" opencode
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: bash scripts/smoke_android_packages.sh
+
+      - name: Record checksums for the retested Android packages
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/retested-android"
+          cp "$RUNNER_TEMP/universal.apk" "$RUNNER_TEMP/retested-android/NeuroMesh-universal-preview.apk"
+          cp build/app/outputs/bundle/release/app-release.aab "$RUNNER_TEMP/retested-android/NeuroMesh-Play-preview.aab"
+          cd "$RUNNER_TEMP/retested-android"
+          sha256sum -- *.apk *.aab > SHA256SUMS.txt
+          sha256sum --check --strict SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-universal-apk
+          path: ${{ runner.temp }}/retested-android/NeuroMesh-universal-preview.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-play-aab
+          path: ${{ runner.temp }}/retested-android/NeuroMesh-Play-preview.aab
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-checksums
+          path: ${{ runner.temp }}/retested-android/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: android-preview-emulator-evidence
+          path: |
+            ${{ runner.temp }}/neuromesh-android-smoke.png
+            ${{ runner.temp }}/opencode-android-smoke.log
+          if-no-files-found: ignore
+
   # Windows and Linux desktop builds. They bundle llama.cpp's llama-server (CPU)
   # next to the app; the AI's shell commands use the computer's own shell.
   desktop:
-    if: github.event_name != 'pull_request' && !inputs.play_bundle_only
+    if: github.event_name != 'pull_request' && !inputs.play_bundle_only && inputs.smoke_run_id == ''
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:

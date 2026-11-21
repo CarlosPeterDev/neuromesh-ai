@@ -829,7 +829,7 @@ class AgentService extends GetxService {
     ),
     AgentTool(
       'search_tools',
-      'Find available tools by capability or name. Use this when you are unsure what can do a task, then call the matching tool.',
+      'Find tools by the user’s goal, capability, or name. Leave query empty to list all available tools.',
       '{"query":"task or capability to look up"}',
       (args) => _searchTools((args['query'] ?? '').toString()),
     ),
@@ -1022,21 +1022,40 @@ class AgentService extends GetxService {
     }
   }
 
-  String _searchTools(String query) {
+  List<AgentTool> get availableToolCatalog =>
+      _discoverableTools().toList()..sort((a, b) => a.name.compareTo(b.name));
+
+  List<AgentTool> searchToolCatalog(String query) => query.trim().isEmpty
+      ? availableToolCatalog
+      : _rankedTools(query).map((match) => match.$1).toList();
+
+  static bool asksForToolCatalog(String text) => RegExp(
+        r'^\s*(?:please\s+)?(?:(?:show|list)(?:\s+me)?(?:\s+all)?(?:\s+the)?\s+(?:available\s+)?tools|(?:what|which)\s+tools\s+(?:can|do)\s+you\s+(?:use|have))\s*[.!?]*$|^\s*(?:اعرض|أظهر|اذكر)\s+(?:كل\s+)?الأدوات[.!؟\s]*$',
+        caseSensitive: false,
+      ).hasMatch(text);
+
+  List<(AgentTool, int)> _rankedTools(String query) {
     String normalize(String text) => text
         .toLowerCase()
         .replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), ' ')
         .trim();
 
     final normalized = normalize(query);
-    if (normalized.isEmpty)
-      return 'Error: give the task or tool name to search.';
+    if (normalized.isEmpty) return [];
     final expanded = normalized.replaceAllMapped(
-        RegExp(r'\b(tts|stt|remove|calculate|arithmetic|sum)\b'),
+        RegExp(
+            r'\b(tts|stt|narrate|dictate|aloud|remove|calculate|arithmetic|sum|draw|illustrate|render|unpack)\b|ارسم|صورة|احسب|انطق|فرغ'),
         (match) => switch (match[0]) {
-              'tts' => 'text to speech wav',
-              'stt' => 'transcribe audio',
+              'tts' || 'narrate' || 'aloud' || 'انطق' => 'text to speech wav',
+              'stt' || 'dictate' || 'فرغ' => 'transcribe audio',
               'remove' => 'delete',
+              'draw' ||
+              'illustrate' ||
+              'render' ||
+              'ارسم' ||
+              'صورة' =>
+                'generate image',
+              'unpack' => 'unzip files archive',
               _ => 'calculator',
             });
     const common = {
@@ -1089,6 +1108,14 @@ class AgentService extends GetxService {
       final score = b.$2.compareTo(a.$2);
       return score == 0 ? a.$1.name.compareTo(b.$1.name) : score;
     });
+    return matches;
+  }
+
+  String _searchTools(String query) {
+    if (query.trim().isEmpty) {
+      return availableToolCatalog.map((tool) => tool.name).join(', ');
+    }
+    final matches = _rankedTools(query);
     if (matches.isEmpty) {
       return 'No available tool matched. Try a more specific capability or exact name.';
     }
@@ -1286,6 +1313,11 @@ class AgentService extends GetxService {
         if (_intent.hasMatch(text) ||
             _gVoiceAction.hasMatch(text) ||
             _askingToAct.hasMatch(text)) return true;
+        if (asksForToolCatalog(text) ||
+            (!_notFactual.hasMatch(text) &&
+                _rankedTools(text).any((match) => match.$2 >= 8))) {
+          return true;
+        }
         if (needsResearch(text)) return true;
         for (final s in servers.where((s) => s.enabled)) {
           if (text.toLowerCase().contains(s.name.toLowerCase())) return true;
@@ -1404,6 +1436,10 @@ class AgentService extends GetxService {
         if (_isSandboxTool(t.name)) on.add(t.name);
       }
     }
+    on.addAll(_rankedTools(r)
+        .where((match) => match.$2 >= 5)
+        .take(3)
+        .map((match) => match.$1.name));
     return on;
   }
 
@@ -1440,6 +1476,10 @@ class AgentService extends GetxService {
           'text_to_speech',
           'transcribe_audio'
         ],
+        ..._rankedTools(request)
+            .where((match) => match.$2 >= 5)
+            .take(3)
+            .map((match) => match.$1.name),
         'write_file',
         'tool_help',
         'read_file',
@@ -1665,6 +1705,7 @@ class AgentService extends GetxService {
     var last = '';
     final sources = <WebResult>[];
     var ranTool = false;
+    var searchedTools = false;
     var nudges = 0;
     var contextCalls = 0;
     var contextMisses = 0;
@@ -1758,6 +1799,27 @@ class AgentService extends GetxService {
           hist.add({'role': 'assistant', 'content': last});
           current =
               'Answer the original request directly. If an action is required, call the relevant tool. Ask only for information needed to proceed.';
+          hist.add({'role': 'user', 'content': current});
+          continue;
+        }
+        if (!ranTool &&
+            !searchedTools &&
+            (_askingToAct.hasMatch(request) ||
+                _intent.hasMatch(request) ||
+                _gVoiceAction.hasMatch(request)) &&
+            _allBuiltIns.any((tool) => tool.name == 'search_tools') &&
+            _rankedTools(request).any((match) => match.$2 >= 5)) {
+          searchedTools = true;
+          onVisible('');
+          onStatus('Finding a tool for your request…');
+          final args = <String, dynamic>{'query': request};
+          final result = _searchTools(request);
+          trace.add(stepLine(
+              'search_tools', args, 'Finding available tools', result));
+          onTrace?.call(List.of(trace));
+          hist.add({'role': 'assistant', 'content': last});
+          current =
+              'Tools for the original request:\n$result\n\nUse a matching tool to do the original task. If more information is required, ask one specific question.';
           hist.add({'role': 'user', 'content': current});
           continue;
         }

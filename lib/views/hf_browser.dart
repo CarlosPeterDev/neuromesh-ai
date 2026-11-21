@@ -42,6 +42,7 @@ class _HfBrowserState extends State<HfBrowser> {
   bool _loading = false;
   String? _error;
   String _query = '';
+  String _author = '';
   int _limit = 30;
   int _seq = 0;
   int _rawCount = 0;
@@ -82,7 +83,7 @@ class _HfBrowserState extends State<HfBrowser> {
       (_task != 'any' ? 1 : 0) +
       (_quant != 'any' ? 1 : 0) +
       (_sort != 'downloads' ? 1 : 0) +
-      (_onlyFav ? 1 : 0);
+      (_onlyFav ? 1 : 0) + (_author.isNotEmpty ? 1 : 0);
 
   void _applyFilters() {
     _limit = 30;
@@ -150,6 +151,7 @@ class _HfBrowserState extends State<HfBrowser> {
       final repos = await _hf.searchModels(_query,
           limit: (_size != 'any' || _onlyFav) ? _limit * 2 : _limit,
           images: widget.images,
+          author: _author,
           task: _task == 'any' ? null : _task,
           sort: _sort);
       if (!mounted || seq != _seq) return;
@@ -284,6 +286,7 @@ class _HfBrowserState extends State<HfBrowser> {
                   _task = 'any';
                   _quant = 'any';
                   _onlyFav = false;
+                  _author = '';
                 });
                 Navigator.pop(ctx);
                 _applyFilters();
@@ -293,6 +296,35 @@ class _HfBrowserState extends State<HfBrowser> {
         );
       });
     });
+  }
+
+  Future<void> _searchByAuthor() async {
+    var author = _author;
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Search by author'),
+        content: TextFormField(
+          initialValue: _author,
+          autofocus: true,
+          decoration: const InputDecoration(
+              hintText: 'Hugging Face username or organization'),
+          onChanged: (value) => author = value,
+          onFieldSubmitted: (value) => Navigator.pop(dialog, value),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialog, ''),
+              child: const Text('Clear')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialog, author),
+              child: const Text('Apply')),
+        ],
+      ),
+    );
+    if (selected == null || !mounted) return;
+    setState(() => _author = selected.trim().replaceFirst(RegExp(r'^@'), ''));
+    _applyFilters();
   }
 
   void _openRepo(HfRepo repo) {
@@ -337,6 +369,11 @@ class _HfBrowserState extends State<HfBrowser> {
                 label: _activeFilters > 0 ? 'Filters · $_activeFilters' : 'Filters',
                 selected: _activeFilters > 0,
                 onTap: _openFilters),
+            _chip(
+                icon: Icons.person_search_outlined,
+                label: _author.isEmpty ? 'Author' : '@$_author',
+                selected: _author.isNotEmpty,
+                onTap: _searchByAuthor),
             if (!widget.images) ...[
               _chip(
                   icon: Icons.star_rounded,

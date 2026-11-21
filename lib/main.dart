@@ -125,6 +125,7 @@ void main() {
     Get.put(DeviceBridge(), permanent: true);
     Get.put(SchedulerService(), permanent: true);
     registerDesktopShell(Get.find<AgentService>());
+    await SandboxService.detectLegacyLauncher(Get.find<DeviceBridge>());
     if (SandboxService.supported) {
       Get.put(SandboxService(), permanent: true);
       registerSandboxShell(Get.find<AgentService>());

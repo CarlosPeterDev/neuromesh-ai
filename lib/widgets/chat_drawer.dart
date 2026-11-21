@@ -10,6 +10,9 @@ import 'tonal_button.dart';
 import '../core/haptics.dart';
 import '../core/nav_hub.dart';
 import '../views/voice_views.dart';
+import '../views/model_quiz_view.dart';
+import '../views/perf_views.dart';
+import '../views/roles_view.dart';
 
 /// Two-bar "sidebar" glyph — the long bar over a short one reads as a list
 /// rather than the generic hamburger.
@@ -257,6 +260,61 @@ class _ChatDrawerState extends State<ChatDrawer> {
                 tooltip: 'New chat',
                 onPressed: _newChat,
                 icon: Icon(Icons.edit_square, size: 21, color: accent),
+              ),
+            ]),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+            child: Wrap(spacing: 6, runSpacing: 2, children: [
+              ActionChip(
+                avatar: const Icon(Icons.chat_bubble_outline, size: 17),
+                label: Text(Directionality.of(context) == TextDirection.rtl ? 'دردشة' : 'Chat'),
+                onPressed: () {
+                  _close();
+                  Get.find<HomeController>().changeTab(0);
+                },
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.layers_outlined, size: 17),
+                label: Text(Directionality.of(context) == TextDirection.rtl ? 'النماذج' : 'Models'),
+                onPressed: () {
+                  _close();
+                  Get.find<HomeController>().changeTab(1);
+                },
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.groups_outlined, size: 17),
+                label: Text(Directionality.of(context) == TextDirection.rtl ? 'الأدوار' : 'Roles'),
+                onPressed: () {
+                  _close();
+                  Get.to(() => const RolesView());
+                },
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.speed_rounded, size: 17),
+                label: Text(Directionality.of(context) == TextDirection.rtl ? 'اختبار الأداء' : 'Benchmark'),
+                onPressed: () async {
+                  _close();
+                  Get.snackbar('Benchmark', 'Measuring the loaded model…');
+                  final result = await runBenchmark();
+                  Get.dialog<void>(AlertDialog(
+                    title: const Text('Benchmark'),
+                    content: SelectableText(result),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Get.back<void>(),
+                          child: const Text('Done')),
+                    ],
+                  ));
+                },
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.tune, size: 17),
+                label: Text(Directionality.of(context) == TextDirection.rtl ? 'ابحث عن نموذج' : 'Find a model'),
+                onPressed: () {
+                  _close();
+                  Get.to(() => const ModelQuizView());
+                },
               ),
             ]),
           ),
