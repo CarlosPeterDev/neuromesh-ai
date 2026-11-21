@@ -6,6 +6,10 @@ NeuroMesh AI is a Flutter workspace for private local AI with optional cloud pro
 
 Read this file, check the current branch and working tree, and review the latest GitHub runs and open pull requests before choosing work. Update this file when the next task, release status, or known limitations change.
 
+## Android 2.0 OpenCode preview
+
+The standalone ARM64 APK branch adds an optional checksum-verified OpenCode installer, a local-only provider, native Chat and a PTY terminal, persisted session selection and read-only workspace tools. CI 2.0 excludes the PRoot launcher from the Play AAB and adds a real OpenCode Linux protocol test. The current Android 12 CI emulator is x86-64. Completing Android validation requires a compatible ARM64 device, an installation and update exercise, a model connected through Chat and Terminal, and a multi-device inference run. Native permissions, edit and diff previews, and the separately authorized ADB module remain open. [Design and verification](docs/OPENCODE.md#android-20-standalone-preview) · [Tracking issue](https://github.com/CarlosPeterDev/neuromesh-ai/issues/60)
+
 ## Combined OpenCode and Android preview
 
 Build `8554a20` combines the OpenCode terminal preview and the smaller Play AAB. All 221 Flutter tests and three build-configuration tests passed locally. The entire Flutter suite ran in a network namespace with only loopback available. It used the published Artemis GGUF and BF16 projector and the Kitten Nano and Kokoro voice models. OpenCode streamed from the local GGUF in Xfce Terminal, the genuine projector was recognized, and both voice models generated WAV audio.
