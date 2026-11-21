@@ -187,7 +187,8 @@ class AndroidOpenCode {
     sessionId = null;
   }
 
-  Future<void> connect(String name, int context) async {
+  Future<void> connect(String name, int context,
+      {required bool allowWorkspaceReads}) async {
     if (_bridge != null) return;
     if (!compatible || !await installed() || context < 2048) {
       throw StateError(
@@ -196,7 +197,8 @@ class AndroidOpenCode {
     final directory = await sandbox.openCodeDirectory();
     await Directory('${directory.path}/home').create(recursive: true);
     final bridge = OpenAiServerService.forAgentModel(name,
-        allowTools: true, workspace: await Get.find<AgentService>().filesDir());
+        allowTools: allowWorkspaceReads,
+        workspace: await Get.find<AgentService>().filesDir());
     final random = Random.secure();
     final token =
         base64UrlEncode(List.generate(32, (_) => random.nextInt(256)));
@@ -220,6 +222,7 @@ class AndroidOpenCode {
         name: name,
         context: context,
         endpoint: '${bridge.localUrl}/v1',
+        allowTools: allowWorkspaceReads,
       ),
     };
     _bridge = bridge;
@@ -242,6 +245,7 @@ class AndroidOpenCode {
     required String name,
     required int context,
     required String endpoint,
+    bool allowTools = true,
   }) =>
       jsonEncode({
         'enabled_providers': ['neuromesh'],
@@ -251,8 +255,9 @@ class AndroidOpenCode {
         'agent': {
           'neuromesh': {
             'mode': 'primary',
-            'prompt':
-                'Help the user understand their project. Workspace tools can inspect files.',
+            'prompt': allowTools
+                ? 'Help the user understand their project. Read workspace files before describing their contents.'
+                : 'Help the user understand their project. Answer from the chat context.',
           },
           'title': {'disable': true},
         },
@@ -261,7 +266,8 @@ class AndroidOpenCode {
         'lsp': false,
         'permission': {
           '*': 'deny',
-          for (final tool in openCodeReadTools) tool: 'allow',
+          if (allowTools)
+            for (final tool in openCodeReadTools) tool: 'allow',
         },
         'provider': {
           'neuromesh': {
@@ -272,7 +278,7 @@ class AndroidOpenCode {
             'models': {
               OpenAiServerService.agentModelId: {
                 'name': name,
-                'tool_call': true,
+                'tool_call': allowTools,
                 'attachment': false,
                 'limit': {
                   'context': context,

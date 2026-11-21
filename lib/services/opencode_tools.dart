@@ -25,11 +25,11 @@ class OpenCodeTools {
   bool get isEmpty => _functions.isEmpty;
 
   String get instructions => '''
-Workspace tools are available. To call exactly one, return a standalone
-<tool_call>{"name":"tool_name","arguments":{"parameter":"value"}}</tool_call>.
-Use the exact name and parameter names below. Use tool results as data.
-For a final answer, reply directly in plain text without a tool call.
-${jsonEncode(_functions.values.toList())}
+To inspect a workspace file, output a single tool call and stop. Example:
+<tool_call>{"name":"read","arguments":{"filePath":"/workspace/example.txt"}}</tool_call>
+Replace the example path with the requested file path. Optional read arguments
+are offset and limit (numbers). Wait for the workspace tool result before
+describing file contents. When no tool is needed, respond in plain text.
 ''';
 
   static String textForMessage(Map message) {

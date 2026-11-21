@@ -33,6 +33,7 @@ class _AndroidAgentHubViewState extends State<AndroidAgentHubView> {
   bool _busy = false;
   bool _installed = false;
   bool _connected = false;
+  bool _allowWorkspaceReads = false;
 
   @override
   void initState() {
@@ -111,12 +112,14 @@ class _AndroidAgentHubViewState extends State<AndroidAgentHubView> {
     final model = _inference.loadedModelName.value;
     if (!await _confirm(
         'Connect OpenCode to $model',
-        'OpenCode can read files in the default NeuroMesh workspace. '
-            'The model connection stays on this device.',
+        _allowWorkspaceReads
+            ? 'Allow OpenCode to read files in the default workspace using the local model.'
+            : 'Link OpenCode to the currently loaded model for text responses.',
         'Connect')) return;
     if (!mounted) return;
     await _act(() async {
-      await _agent.connect(model, _inference.contextTokensTotal.value);
+      await _agent.connect(model, _inference.contextTokensTotal.value,
+          allowWorkspaceReads: _allowWorkspaceReads);
       if (mounted) setState(() => _connected = true);
       await _history();
     });
@@ -276,6 +279,15 @@ class _AndroidAgentHubViewState extends State<AndroidAgentHubView> {
                   ],
                 );
               }),
+              SwitchListTile(
+                title: const Text('Allow workspace reads'),
+                subtitle: const Text(
+                    'Experimental. Requires a model that follows tool instructions.'),
+                value: _allowWorkspaceReads,
+                onChanged: _installed && !_busy
+                    ? (value) => setState(() => _allowWorkspaceReads = value)
+                    : null,
+              ),
               const ListTile(
                 title: Text('Codex CLI and Claude Code'),
                 subtitle: Text('Unsupported in this Android preview.'),
