@@ -31,6 +31,8 @@
 #include "mtmd-helper.h"
 #include "utf8_token_stream.h"
 #include "llama.cpp/common/chat.h"
+#include "native_tool_protocol.h"
+static common_chat_params g_native_chat_params;
 #define LOG_TAG "LlamaJNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -1453,13 +1455,19 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeChatC
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeFormatChat(
-        JNIEnv* env, jobject, jobjectArray roles, jobjectArray contents, jboolean thinking) {
+        JNIEnv* env, jobject, jobjectArray roles, jobjectArray contents, jboolean thinking, jstring schemas) {
     if (!g_model || !llama_model_chat_template(g_model, nullptr)) return nullptr;
     try {
         auto templates = common_chat_templates_init(g_model, "");
         common_chat_templates_inputs inputs;
         inputs.enable_thinking = thinking == JNI_TRUE && common_chat_templates_support_enable_thinking(templates.get());
         inputs.chat_template_kwargs["enable_thinking"] = inputs.enable_thinking ? "true" : "false";
+        const jchar* schemaChars=env->GetStringChars(schemas,nullptr);
+        const std::u16string schemaUtf16(reinterpret_cast<const char16_t*>(schemaChars),env->GetStringLength(schemas));
+        env->ReleaseStringChars(schemas,schemaChars);
+        const auto schemaText=std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t>{}.to_bytes(schemaUtf16);
+        inputs.tools=common_chat_tools_parse_oaicompat(common_json::parse(schemaText));
+        std::vector<std::pair<std::string,std::string>> history;
         const auto count = env->GetArrayLength(roles);
         for (jsize i = 0; i < count; ++i) {
             auto role = static_cast<jstring>(env->GetObjectArrayElement(roles, i));
@@ -1472,14 +1480,33 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeForma
             };
             common_chat_msg msg;
             msg.role = toUtf8(role); msg.content = toUtf8(content);
-            inputs.messages.push_back(msg);
+            history.emplace_back(msg.role,msg.content);
             env->DeleteLocalRef(role); env->DeleteLocalRef(content);
         }
+        if(inputs.tools.empty()) {
+            for(const auto& entry:history){common_chat_msg msg;msg.role=entry.first;msg.content=entry.second;inputs.messages.push_back(msg);}
+        } else inputs.messages=neuromesh_native_messages(history);
         const auto params = common_chat_templates_apply(templates.get(), inputs);
+        g_native_chat_params=params;
         const auto utf16 = std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>{}.from_bytes(params.prompt);
         return env->NewString(reinterpret_cast<const jchar*>(utf16.data()), utf16.size());
     } catch (const std::exception& e) {
         env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), e.what());
         return nullptr;
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeNormalizeTools(JNIEnv* env,jobject,jstring response) {
+    try {
+        const jchar* chars=env->GetStringChars(response,nullptr);
+        std::u16string text(reinterpret_cast<const char16_t*>(chars),env->GetStringLength(response));
+        env->ReleaseStringChars(response,chars);
+        auto convert=std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t>{};
+        const auto output=neuromesh_normalize_native(convert.to_bytes(text),g_native_chat_params);
+        const auto utf16=convert.from_bytes(output);
+        return env->NewString(reinterpret_cast<const jchar*>(utf16.data()),utf16.size());
+    } catch(const std::exception& e) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),e.what());return nullptr;
     }
 }

@@ -2,6 +2,7 @@
 // Android method channels, real workspace files and real WAV/PNG encoding.
 // These are not live model, Pollinations, Android SAF, or Android TTS tests.
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import 'package:image/image.dart' as img;
 import 'package:hive/hive.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:neuromesh_ai/services/agent_service.dart';
+import 'package:neuromesh_ai/services/agent_tools.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
 import 'package:neuromesh_ai/services/pollinations_image_service.dart';
 import 'package:neuromesh_ai/services/tool_registry.dart';
@@ -67,6 +69,27 @@ void main() {
 
   String call(String name, Map<String, dynamic> args) =>
       encodeModelCalls([ModelToolCall(name, args)]);
+
+  test('a later inference failure preserves verified output links', () async {
+    var turns = 0;
+    final result = await agent.runToolLoop(
+        prompt: 'Save astronomy',
+        history: [],
+        confirm: (_, __, ___) async => true,
+        onVisible: (_) {},
+        onStatus: (_) {},
+        cancelled: () => false,
+        generate: (_, __, ___) async {
+          if (turns++ == 0)
+            return call('write_file',
+                {'name': 'astronomy.txt', 'content': 'Stars form in nebulae.'});
+          throw StateError('context exhausted');
+        });
+    expect(await File('${agent.dir.path}/astronomy.txt').readAsString(),
+        'Stars form in nebulae.');
+    expect(result.answer, contains('context exhausted'));
+    expect(result.answer, contains('nmfile:astronomy.txt'));
+  });
 
   test('direct questions and image/audio/file keywords execute no tools',
       () async {
@@ -217,29 +240,34 @@ void main() {
   });
 
   test('model-authored plan blocks dependent work after failure', () async {
-    var dependentCalls = 0;
-    agent.addTool(AgentTool(
-        'fail_step', 'Fails', '{}', (_) => 'Error: provider unavailable'));
-    agent.addTool(
-        AgentTool('dependent_step', 'Must wait for success', '{}', (_) {
-      dependentCalls++;
-      return 'ok';
-    }));
-    final result = await run([
-      encodeModelCalls([
-        const ModelToolCall('fail_step', {}, id: 'draft'),
-        const ModelToolCall('dependent_step', {},
-            id: 'audio', dependsOn: ['draft']),
-      ], plan: [
-        'Create the draft',
-        'Narrate the completed draft'
-      ]),
-      'Both steps are incomplete.',
-    ]);
-    expect(result.plan, hasLength(2));
-    expect(result.markdown, contains('Plan:'));
-    expect(result.trace.last, contains('dependencies are incomplete'));
-    expect(dependentCalls, 0);
+    for (final failure in [
+      'Error: provider unavailable',
+      'Tool error: rejected',
+      'HTTP 500 failure'
+    ]) {
+      var dependentCalls = 0;
+      agent.addTool(AgentTool('fail_step', 'Fails', '{}', (_) => failure));
+      agent.addTool(
+          AgentTool('dependent_step', 'Must wait for success', '{}', (_) {
+        dependentCalls++;
+        return 'ok';
+      }));
+      final result = await run([
+        encodeModelCalls([
+          const ModelToolCall('fail_step', {}, id: 'draft'),
+          const ModelToolCall('dependent_step', {},
+              id: 'audio', dependsOn: ['draft']),
+        ], plan: [
+          'Create the draft',
+          'Narrate the completed draft'
+        ]),
+        'Both steps are incomplete.',
+      ]);
+      expect(result.plan, hasLength(2));
+      expect(result.markdown, contains('Plan:'));
+      expect(result.trace.last, contains('dependencies are incomplete'));
+      expect(dependentCalls, 0);
+    }
   });
 
   test(
@@ -265,6 +293,71 @@ void main() {
     expect(agent.registry.find('read_user_file'), isNotNull);
     expect(agent.registry.find('write_user_file'), isNull);
     expect(agent.registry.find('export_file'), isNull);
+  });
+
+  test(
+      'an approved action cannot start after cancellation or a superseding run',
+      () async {
+    final entered = Completer<void>();
+    final approval = Completer<bool>();
+    var generated = false;
+    final pending = agent.runToolLoop(
+        prompt: 'Write a file',
+        history: [],
+        confirm: (_, __, ___) {
+          entered.complete();
+          return approval.future;
+        },
+        onVisible: (_) {},
+        onStatus: (_) {},
+        cancelled: () => false,
+        generate: (_, __, ___) async {
+          if (generated) return 'done';
+          generated = true;
+          return call(
+              'write_file', {'name': 'late.txt', 'content': 'must not write'});
+        });
+    await entered.future;
+    agent.cancel();
+    await run(['A new request superseded the action.']);
+    approval.complete(true);
+    final result = await pending;
+    expect(result.answer, contains('Cancelled'));
+    expect(await agent.dir.list().length, 0);
+  });
+
+  test('small native catalogs expand after model-directed discovery', () async {
+    final before = agent.nativeSchemasForTurn(2048);
+    expect(before.map((s) => s['function']['name']), contains('search_tools'));
+    expect(before.map((s) => s['function']['name']),
+        isNot(contains('generate_image')));
+    await agent.executeTool(
+        const ParsedToolCall('search_tools', {'query': 'generate_image'}, ''),
+        (_, __, ___) async => true);
+    final after = agent.nativeSchemasForTurn(2048);
+    expect(after.map((s) => s['function']['name']), contains('generate_image'));
+  });
+
+  test(
+      'unsupported schema assertions disable a tool instead of weakening validation',
+      () async {
+    var invoked = false;
+    agent.addTool(AgentTool('unsupported', 'Requires a reference', '{}', (_) {
+      invoked = true;
+      return 'ok';
+    }, schema: {
+      'type': 'object',
+      'properties': {
+        'value': {r'$ref': '#/unknown'}
+      }
+    }));
+    expect(agent.registry.find('unsupported'), isNull);
+    expect(
+        await agent.executeTool(
+            const ParsedToolCall('unsupported', {'value': 'anything'}, ''),
+            (_, __, ___) async => true),
+        contains('Error:'));
+    expect(invoked, isFalse);
   });
 
   test('all advertised built-ins have valid schemas', () {

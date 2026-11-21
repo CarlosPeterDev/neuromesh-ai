@@ -674,7 +674,9 @@ class ChatView extends GetView<ChatController> {
                       thinking: settings.normalThinking.value,
                       hasContent:
                           controller.inputText.value.trim().isNotEmpty ||
-                              controller.selectedFileName.value != null,
+                              controller.selectedFileName.value != null ||
+                              controller.selectedImagePath.value != null ||
+                              controller.selectedImageBase64.value != null,
                       loading: controller.isLoading.value,
                       listening: controller.isListening.value,
                       onThink: () {

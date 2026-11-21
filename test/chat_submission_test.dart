@@ -307,6 +307,7 @@ class _TestNarrationInference extends InferenceService {
     String? systemPrompt,
     List<Map<String, String>>? conversationHistory,
     String source = 'chat',
+    List<Map<String, dynamic>> nativeTools = const [],
     String? imagePath,
     String? audioPath,
     int? maxTokens,

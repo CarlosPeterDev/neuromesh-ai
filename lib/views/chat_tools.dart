@@ -100,7 +100,7 @@ class _ChatToolsViewState extends State<ChatToolsView> {
               : !inference.isModelLoaded.value
                   ? 'Load a local model before using the assistant.'
                   : inference.supportsToolSchema.value
-                      ? 'The loaded model template advertises tool support. This local binding currently uses validated structured output; native local tool transport is not enabled.'
+                      ? 'The loaded model template supports native tools. NeuroMesh passes function schemas through that template and validates parsed calls before execution. Small contexts discover additional schemas as needed.'
                       : 'This model does not advertise tool support. Structured tool output is unverified; malformed responses stop execution safely. Use Off for direct chat.';
           return Padding(
               padding: const EdgeInsets.only(top: 8),

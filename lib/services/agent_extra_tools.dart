@@ -17,7 +17,13 @@ import 'voice_service.dart';
 void registerExtraTools(AgentService agent) {
   String nameOf(File f) => f.path.split('/').last;
 
-  Future<File> newFile(String name) => agent.newWorkspaceFile(name);
+  Future<File> newFile(String name) async {
+    final file = await agent.newWorkspaceFile(name);
+    if (await file.exists()) {
+      throw StateError('The destination already exists. Choose a new name.');
+    }
+    return file;
+  }
 
   String size(int b) => b > 1048576
       ? '${(b / 1048576).toStringAsFixed(1)} MB'
@@ -192,7 +198,9 @@ void registerExtraTools(AgentService agent) {
       final q = (args['query'] ?? '').toString().toLowerCase().trim();
       if (q.isEmpty) return 'Error: empty query.';
       final out = <String>[];
-      for (final e in (await agent.filesDir()).listSync().whereType<File>()) {
+      for (final e in (await agent.filesDir())
+          .listSync(followLinks: false)
+          .whereType<File>()) {
         final n = nameOf(e);
         if (n.toLowerCase().contains(q)) out.add('$n  (name matches)');
         if (e.lengthSync() > 2 * 1048576) continue;

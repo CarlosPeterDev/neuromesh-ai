@@ -17,6 +17,18 @@ import 'hive_service.dart';
 import 'voice_models.dart';
 import 'workload_placement.dart';
 
+/// Android voice catalog entries must explicitly allow offline synthesis.
+bool isOfflineSystemVoice(Map voice) {
+  final network = voice['network_required'];
+  final offline = network == '0' || network == 0 || network == false;
+  final features = '${voice['features'] ?? ''}'.toLowerCase();
+  return offline &&
+      !features.contains('notinstalled') &&
+      !features.contains('networktts') &&
+      voice['name'] is String &&
+      voice['locale'] is String;
+}
+
 /// Pure helper: float samples in [-1,1] to a 16-bit mono WAV file body.
 Uint8List encodeWav(Float32List samples, int sampleRate) {
   final data = ByteData(44 + samples.length * 2);
@@ -222,7 +234,7 @@ class VoiceService extends GetxService {
       systemFileTtsAvailable.value = engine is String &&
           engine.isNotEmpty &&
           voices is List &&
-          voices.isNotEmpty;
+          voices.whereType<Map>().any(isOfflineSystemVoice);
     } catch (_) {
       systemFileTtsAvailable.value = false;
     }
@@ -237,8 +249,7 @@ class VoiceService extends GetxService {
         final tts = _system!;
         final voices = (await tts.getVoices as List)
             .whereType<Map>()
-            .where((v) =>
-                v['network_required'] != '1' && v['network_required'] != true)
+            .where(isOfflineSystemVoice)
             .toList();
         final matches = voices
             .where((v) =>
@@ -254,10 +265,11 @@ class VoiceService extends GetxService {
         final chosen = matches.first;
         if (await tts.setLanguage(chosen['locale'] as String) != 1)
           throw StateError('TTS language is unavailable.');
-        await tts.setVoice({
-          'name': chosen['name'] as String,
-          'locale': chosen['locale'] as String
-        });
+        if (await tts.setVoice({
+              'name': chosen['name'] as String,
+              'locale': chosen['locale'] as String
+            }) !=
+            1) throw StateError('The offline TTS voice could not be selected.');
         await tts.awaitSynthCompletion(true);
         final temp = await Directory.systemTemp.createTemp('neuromesh-tts-');
         final file = File('${temp.path}/speech.wav');

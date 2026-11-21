@@ -58,6 +58,54 @@ void main() {
       expect(imported.first['role'], 'user');
     });
 
+    test('tool result envelopes and their native call survive fitting intact',
+        () {
+      final result = jsonEncode({
+        'tool_results': [
+          {
+            'id': 'step_1',
+            'name': 'read_file',
+            'status': 'ok',
+            'content': 'astronomy'
+          }
+        ],
+        'untrusted': true
+      });
+      final call = {
+        'role': 'assistant',
+        'content':
+            '<tool_call>{"name":"read_file","arguments":{"name":"a.txt"}}</tool_call>',
+        '_nm_tools': 'true'
+      };
+      final turn = AgentService.fitTurn(
+          baseSystem: 'Safety rules.',
+          system: 'Safety rules.',
+          prompt: result,
+          history: [
+            {'role': 'user', 'content': 'old ' * 500},
+            call,
+            {'role': 'user', 'content': result, '_nm_results': 'true'}
+          ],
+          contextSize: 1024,
+          request: 'Read astronomy',
+          continuationRequest: 'Current user request: Read astronomy');
+      expect(jsonDecode(turn.prompt)['tool_results'][0]['id'], 'step_1');
+      expect(turn.history[1], call);
+      expect(turn.history.last['_nm_results'], 'true');
+      expect(
+          () => AgentService.fitTurn(
+              baseSystem: 'Safety rules.',
+              system: 'Safety rules.',
+              prompt: result,
+              history: [
+                call,
+                {'role': 'user', 'content': result, '_nm_results': 'true'}
+              ],
+              contextSize: 64,
+              request: 'Read astronomy'),
+          throwsStateError);
+    });
+
     test('optional tool text shrinks while the original request and rules stay',
         () {
       const request = 'Summarize this HTML file';

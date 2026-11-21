@@ -3,8 +3,98 @@ import 'dart:convert';
 
 /// JSON Schema subset used by built-ins and MCP. Unknown schema keywords do
 /// not grant capabilities; handlers still enforce platform permission checks.
+/// Unimplemented schema assertions must disable a tool, never silently weaken
+/// validation. Annotation-only keywords do not constrain execution.
+bool isSupportedToolSchema(Map schema) {
+  const keys = {
+    'type',
+    'enum',
+    'anyOf',
+    'required',
+    'properties',
+    'additionalProperties',
+    'items',
+    'minLength',
+    'maxLength',
+    'pattern',
+    'minimum',
+    'maximum',
+    'minItems',
+    'maxItems',
+    'title',
+    'description',
+    'default',
+    'examples',
+    'deprecated',
+    'readOnly',
+    'writeOnly',
+    'format',
+    r'$schema',
+    r'$id',
+    r'$comment'
+  };
+  if (schema.keys.any((k) => !keys.contains(k))) return false;
+  const types = {
+    'object',
+    'array',
+    'string',
+    'boolean',
+    'integer',
+    'number',
+    'null'
+  };
+  final type = schema['type'];
+  if (type != null &&
+      !(type is String && types.contains(type)) &&
+      !(type is List && type.isNotEmpty && type.every(types.contains)))
+    return false;
+  if (schema['required'] != null &&
+      (schema['required'] is! List ||
+          (schema['required'] as List).any((v) => v is! String))) return false;
+  for (final key in ['minLength', 'maxLength', 'minItems', 'maxItems']) {
+    final value = schema[key];
+    if (value != null && (value is! int || value < 0)) return false;
+  }
+  for (final key in ['minimum', 'maximum']) {
+    final value = schema[key];
+    if (value != null && (value is! num || !value.isFinite)) return false;
+  }
+  if (schema['pattern'] != null && schema['pattern'] is! String) return false;
+  final props = schema['properties'];
+  if (props != null &&
+      (props is! Map ||
+          props.values.any((s) => s is! Map || !isSupportedToolSchema(s))))
+    return false;
+  for (final key in ['items', 'additionalProperties']) {
+    final child = schema[key];
+    if (child is Map && !isSupportedToolSchema(child)) return false;
+    if (child != null &&
+        child is! Map &&
+        !(key == 'additionalProperties' && child is bool)) return false;
+  }
+  final any = schema['anyOf'];
+  if (any != null &&
+      (any is! List ||
+          any.isEmpty ||
+          any.any((s) => s is! Map || !isSupportedToolSchema(s)))) return false;
+  final values = schema['enum'];
+  if (values != null &&
+      (values is! List || values.any((v) => v is Map || v is List)))
+    return false;
+  if (schema['pattern'] is String) {
+    try {
+      RegExp(schema['pattern']);
+    } on FormatException {
+      return false;
+    }
+  }
+  return true;
+}
+
 void validateToolArguments(Object? value, Map schema,
     [String path = 'arguments']) {
+  if (!isSupportedToolSchema(schema))
+    throw FormatException('$path uses unsupported JSON Schema assertions');
   final type = schema['type'];
   if (schema['anyOf'] is List) {
     var matched = false;
@@ -67,6 +157,10 @@ void validateToolArguments(Object? value, Map schema,
           schema['additionalProperties'] == false) {
         throw FormatException('$path.${entry.key} is unknown');
       }
+      if (!props.containsKey(entry.key) &&
+          schema['additionalProperties'] is Map)
+        validateToolArguments(
+            entry.value, schema['additionalProperties'], '$path.${entry.key}');
       if (props[entry.key] is Map) {
         validateToolArguments(
             entry.value, props[entry.key], '$path.${entry.key}');
@@ -74,6 +168,8 @@ void validateToolArguments(Object? value, Map schema,
     }
   }
   if (value is List) {
+    if (value.length < (schema['minItems'] as int? ?? 0))
+      throw FormatException('$path has too few items');
     if (value.length > (schema['maxItems'] as int? ?? 100)) {
       throw FormatException('$path has too many items');
     }
@@ -152,8 +248,8 @@ class ToolRegistry {
   ToolRegistry(Iterable<RegisteredTool> tools)
       : _tools = {for (final t in tools) t.id: t};
   final Map<String, RegisteredTool> _tools;
-  Iterable<RegisteredTool> get available =>
-      _tools.values.where((t) => t.available?.call() ?? true);
+  Iterable<RegisteredTool> get available => _tools.values.where((t) =>
+      (t.available?.call() ?? true) && isSupportedToolSchema(t.inputSchema));
   RegisteredTool? find(String id) =>
       available.where((t) => t.id == id).firstOrNull;
   List<Map<String, dynamic>> get schemas =>
@@ -246,4 +342,19 @@ List<String> decodeModelPlan(String response) {
     throw const FormatException('A plan must contain up to 20 short strings');
   }
   return plan.cast<String>();
+}
+
+// Native transports distinguish a textual answer (which may quote tool syntax)
+// from an actual function-call event. Never reinterpret provider text as calls.
+String encodeModelAnswer(String answer) =>
+    '<final_response>${jsonEncode(answer)}</final_response>';
+String? decodeModelAnswer(String response) {
+  final text = response.trim();
+  if (!text.startsWith('<final_response>')) return null;
+  if (!text.endsWith('</final_response>'))
+    throw const FormatException('Malformed final response envelope');
+  final answer = jsonDecode(text.substring(16, text.length - 17));
+  if (answer is! String)
+    throw const FormatException('Final answer must be text');
+  return answer;
 }

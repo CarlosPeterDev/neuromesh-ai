@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/services.dart';
 import 'dart:ffi' show Abi;
 import 'dart:io' show Platform, Directory, File;
 import 'package:path_provider/path_provider.dart';
@@ -395,6 +397,7 @@ class InferenceEngine {
     String? imagePath,
     String? audioPath,
     String source = 'chat',
+    List<Map<String, dynamic>> nativeTools = const [],
     bool normalThinking = false,
     void Function(String token)? onToken,
   }) async {
@@ -463,9 +466,13 @@ class InferenceEngine {
     // ── Use generateChat() for native template handling ──
     Stream<String>? stream;
     try {
+      if (Platform.isAndroid) {
+        await const MethodChannel('com.neuromesh.ai/llama_tools')
+            .invokeMethod('configure', jsonEncode(nativeTools));
+      }
       final messages = _buildChatMessages(
           prompt, conversationHistory, systemPrompt,
-          imagePath: imagePath);
+          imagePath: imagePath, nativeToolMode: nativeTools.isNotEmpty);
       stream = _controller!.generateChat(
         messages: messages,
         template: Platform.isAndroid
@@ -516,7 +523,8 @@ class InferenceEngine {
           print('[Inference] Idle timeout — $tokenCount tokens');
           finish(buffer.toString());
         });
-        final clean = _sanitizeGemmaGarbage(token);
+        final clean =
+            nativeTools.isEmpty ? _sanitizeGemmaGarbage(token) : token;
         if (clean.isEmpty) return;
         buffer.write(clean);
         tokenCount++;
@@ -551,7 +559,19 @@ class InferenceEngine {
       }
     });
 
-    return await completer.future;
+    final response = await completer.future;
+    if (Platform.isAndroid &&
+        nativeTools.isNotEmpty &&
+        !response.startsWith('ERROR:')) {
+      try {
+        return await const MethodChannel('com.neuromesh.ai/llama_tools')
+                .invokeMethod<String>('normalize', response) ??
+            'ERROR: Native tool parser returned no response.';
+      } catch (e) {
+        return 'ERROR: Native tool response could not be validated: $e';
+      }
+    }
+    return response;
   }
 
   Future<String> _generateLiteRt({
@@ -952,6 +972,7 @@ class InferenceEngine {
     List<Map<String, String>>? history,
     String systemPrompt, {
     String? imagePath,
+    bool nativeToolMode = false,
   }) {
     final messages = <ChatMessage>[];
     messages.add(ChatMessage(role: 'system', content: systemPrompt));
@@ -967,8 +988,13 @@ class InferenceEngine {
       }
       for (final msg in recent) {
         final content = msg['content'] ?? '';
-        messages
-            .add(ChatMessage(role: msg['role'] ?? 'user', content: content));
+        messages.add(ChatMessage(
+            role: nativeToolMode &&
+                    msg['role'] == 'assistant' &&
+                    msg['_nm_tools'] == 'true'
+                ? 'assistant_tool'
+                : msg['role'] ?? 'user',
+            content: content));
       }
     }
 

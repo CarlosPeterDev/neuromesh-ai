@@ -11,6 +11,9 @@ import 'package:neuromesh_ai/services/hive_service.dart';
 import 'package:neuromesh_ai/services/user_files.dart';
 import 'package:neuromesh_ai/services/voice_service.dart';
 import 'package:neuromesh_ai/services/inference_android.dart';
+import 'package:neuromesh_ai/services/tool_registry.dart';
+import 'package:neuromesh_ai/services/agent_tools.dart';
+import 'dart:convert';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -89,6 +92,82 @@ void main() {
       expect(results[1], contains('156'));
       expect(results[0], isNot(contains('</think>')));
       expect(results[1], contains('</think>'));
+    } finally {
+      await engine.dispose();
+    }
+  }, skip: !Platform.isAndroid || model.isEmpty);
+  testWidgets('native GGUF tool schemas, parsing and result history on Android',
+      (tester) async {
+    final engine = InferenceEngine();
+    final loaded = await engine.loadModel(
+        modelPath: model,
+        contextSize: 2048,
+        deviceTier: 'mid',
+        allowGgufGpu: false);
+    expect(loaded.success, isTrue);
+    expect(loaded.supportsToolSchema, isTrue);
+    final tools = [
+      {
+        'type': 'function',
+        'function': {
+          'name': 'calculator',
+          'description': 'Calculate exactly',
+          'parameters': {
+            'type': 'object',
+            'properties': {
+              'expression': {'type': 'string'}
+            },
+            'required': ['expression']
+          }
+        }
+      }
+    ];
+    const request = 'Use the calculator to calculate 17*19.';
+    try {
+      final response = await engine.generate(
+          prompt: request,
+          systemPrompt: 'Use tools where needed.',
+          modelName: 'test GGUF',
+          maxTokens: 384,
+          temperature: 0,
+          nativeTools: tools,
+          onToken: (_) {});
+      final selected = decodeModelCalls(response).single;
+      expect(selected.name, 'calculator');
+      final value = formatNumber(
+          evaluateExpression(selected.arguments['expression'] as String));
+      final call =
+          ModelToolCall(selected.name, selected.arguments, id: 'step_1');
+      final result = jsonEncode({
+        'untrusted': true,
+        'tool_results': [
+          {
+            'id': 'step_1',
+            'name': selected.name,
+            'status': 'ok',
+            'content': value
+          }
+        ]
+      });
+      final answer = await engine.generate(
+          prompt: result,
+          conversationHistory: [
+            {'role': 'user', 'content': request},
+            {
+              'role': 'assistant',
+              'content': encodeModelCalls([call]),
+              '_nm_tools': 'true'
+            },
+            {'role': 'user', 'content': result}
+          ],
+          systemPrompt: 'Answer using the tool result.',
+          modelName: 'test GGUF',
+          maxTokens: 384,
+          temperature: 0,
+          nativeTools: tools,
+          onToken: (_) {});
+      expect(answer, contains('323'));
+      expect(decodeModelCalls(answer), isEmpty);
     } finally {
       await engine.dispose();
     }

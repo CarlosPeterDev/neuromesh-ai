@@ -62,6 +62,7 @@ class InferenceEngine {
     String? imagePath,
     String? audioPath,
     String source = 'chat',
+    List<Map<String, dynamic>> nativeTools = const [],
     bool normalThinking = false,
     void Function(String token)? onToken,
   }) async {

@@ -123,6 +123,9 @@ class AgentService extends GetxService {
   final autoMemory = true.obs;
   final _extra = <AgentTool>[];
   bool _cancel = false;
+  int _runSerial = 0;
+  static final _cancellationKey = Object();
+  final _discoveredForTurn = <String>{};
   bool internetAvailable = true;
   bool imageEditingConfigured = false;
 
@@ -694,7 +697,9 @@ class AgentService extends GetxService {
       '{}',
       (args) async {
         final out = <String>[];
-        for (final f in (await filesDir()).listSync().whereType<File>()) {
+        for (final f in (await filesDir())
+            .listSync(followLinks: false)
+            .whereType<File>()) {
           out.add('${f.path.split('/').last} (${f.lengthSync()} bytes)');
         }
         return out.isEmpty ? '(no files)' : out.join('\n');
@@ -850,6 +855,7 @@ class AgentService extends GetxService {
         final hit =
             q.isEmpty ? all : all.where((t) => t.name.contains(q)).toList();
         if (hit.isEmpty) return 'No tool matches "$q".';
+        _discoveredForTurn.addAll(hit.map((t) => t.name));
         return hit
             .map((t) => '${t.name}: ${t.description}\narguments: ${t.params}')
             .join('\n\n');
@@ -1022,7 +1028,7 @@ class AgentService extends GetxService {
   Future<List<Map<String, dynamic>>> listWorkspace() async {
     final dir = await filesDir();
     return [
-      for (final e in dir.listSync().whereType<File>())
+      for (final e in dir.listSync(followLinks: false).whereType<File>())
         {
           'name': e.path.split('/').last,
           'bytes': e.lengthSync(),
@@ -1037,6 +1043,30 @@ class AgentService extends GetxService {
   }
 
   Future<File> newWorkspaceFile(String name) => _safeFile(name);
+
+  /// Native templates receive real schemas. Small contexts start with
+  /// discovery schemas and expand only after model-directed discovery.
+  List<Map<String, dynamic>> nativeSchemasForTurn(int contextSize) {
+    final budget = (contextSize ~/ 4).clamp(120, 4000);
+    final all = registry.schemas;
+    if (contextTokens(jsonEncode(all)) <= budget) return all;
+    final selected = <Map<String, dynamic>>[];
+    final ids = [
+      'search_tools',
+      ..._discoveredForTurn.toList().reversed,
+      'tool_help'
+    ];
+    for (final id in ids.toSet()) {
+      final tool = registry.find(id);
+      if (tool != null &&
+          contextTokens(jsonEncode([...selected, tool.nativeSchema])) <= budget)
+        selected.add(tool.nativeSchema);
+    }
+    if (selected.isEmpty)
+      throw StateError(
+          'The model context is too small for native tool schemas.');
+    return selected;
+  }
 
   ToolRegistry get registry => ToolRegistry([
         for (final tool in _allBuiltIns)
@@ -1087,6 +1117,7 @@ class AgentService extends GetxService {
 
   Iterable<AgentTool> get _allBuiltIns sync* {
     for (final t in [..._builtIns, ..._extra]) {
+      if (!isSupportedToolSchema(t.inputSchema)) continue;
       if (const {
             'generate_image',
             'edit_image',
@@ -1204,6 +1235,11 @@ class AgentService extends GetxService {
     });
     if (matches.isEmpty) {
       return 'No available tool matched. Try a more specific capability or exact name.';
+    }
+    for (final name
+        in matches.take(3).map((m) => m.$1.name).toList().reversed) {
+      _discoveredForTurn.remove(name);
+      _discoveredForTurn.add(name);
     }
     return matches.take(3).map((match) {
       final tool = match.$1;
@@ -1334,7 +1370,8 @@ class AgentService extends GetxService {
   Iterable<McpTool> get _enabledMcpTools sync* {
     for (final s in servers.where((s) => s.enabled)) {
       for (final t in toolsOf(s.id)) {
-        if (!s.disabledTools.contains(t.name) &&
+        if (isSupportedToolSchema(t.inputSchema) &&
+            !s.disabledTools.contains(t.name) &&
             policyFor(s.name, t.name, needsConfirm: true) != 'block') {
           yield t;
         }
@@ -1485,6 +1522,7 @@ class AgentService extends GetxService {
   }) {
     final budget = contextBudget(contextSize);
     final originalPrompt = prompt;
+    final isToolResult = history.lastOrNull?['_nm_results'] == 'true';
     if (continuationRequest != null) {
       system = '$system\n\n$continuationRequest';
     }
@@ -1500,25 +1538,44 @@ class AgentService extends GetxService {
       final optional = continuationRequest == null && prompt.startsWith(request)
           ? prompt.substring(request.length).trimLeft()
           : prompt;
-      final supportingText = fitContextText(optional, remaining);
+      // A native tool response must remain valid JSON and retain its call IDs.
+      // Fail transparently if it cannot fit instead of silently cutting it.
+      final supportingText =
+          isToolResult ? optional : fitContextText(optional, remaining);
       if (needsEvidence &&
           supportingText.length < 80 &&
           optional.length >= 80) {
         throw StateError(
             'This model has too little room for the source text. Shorten the chat instructions or increase the context size.');
       }
-      prompt =
-          supportingText.isEmpty ? required : '$required\n\n$supportingText';
+      prompt = isToolResult
+          ? originalPrompt
+          : supportingText.isEmpty
+              ? required
+              : '$required\n\n$supportingText';
+      if (isToolResult && continuationRequest != null) {
+        system = '$system\n\n$continuationRequest';
+      }
     }
     final fittedHistory = List<Map<String, String>>.of(history);
     if (fittedHistory.lastOrNull?['role'] == 'user' &&
         fittedHistory.last['content'] == originalPrompt) {
       fittedHistory[fittedHistory.length - 1] = {
+        ...fittedHistory.last,
         'role': 'user',
         'content': prompt
       };
     } else {
       fittedHistory.add({'role': 'user', 'content': prompt});
+    }
+    if (isToolResult && contextSize > 0) {
+      final mandatory = fittedHistory.length >= 2
+          ? fittedHistory.sublist(fittedHistory.length - 2)
+          : fittedHistory;
+      fittedHistory
+        ..clear()
+        ..add({'role': 'user', 'content': continuationRequest ?? request})
+        ..addAll(mandatory);
     }
     fitToContext(system, fittedHistory, prompt, contextSize);
     return (system: system, prompt: prompt, history: fittedHistory);
@@ -1534,11 +1591,12 @@ class AgentService extends GetxService {
     int total() =>
         contextTokens(system) +
         hist.fold<int>(0, (a, m) => a + contextTokens(m['content'] ?? ''));
+    final minimumTurns = hist.lastOrNull?['_nm_results'] == 'true' ? 3 : 1;
     // Strict chat templates require history to start with a user turn.
     while (hist.length > 1 && hist.first['role'] != 'user') {
       hist.removeAt(0);
     }
-    while (total() > budget && hist.length > 1) {
+    while (total() > budget && hist.length > minimumTurns) {
       hist.removeAt(0);
       while (hist.length > 1 && hist.first['role'] != 'user') {
         hist.removeAt(0);
@@ -1573,6 +1631,7 @@ class AgentService extends GetxService {
 
   void cancel() {
     _cancel = true;
+    _runSerial++;
     imageProvider.cancel();
     if (Get.isRegistered<InferenceService>()) {
       final inference = Get.find<InferenceService>();
@@ -1599,6 +1658,8 @@ class AgentService extends GetxService {
     String? userText,
   }) async {
     _cancel = false;
+    final runId = ++_runSerial;
+    _discoveredForTurn.clear();
     final hist = history.map((m) => Map<String, String>.from(m)).toList();
     if (hist.isEmpty || hist.last['content'] != prompt) {
       hist.add({'role': 'user', 'content': prompt});
@@ -1613,7 +1674,7 @@ class AgentService extends GetxService {
     var current = prompt;
     var callsUsed = 0;
     var protocolErrors = 0;
-    bool stopped() => _cancel || cancelled();
+    bool stopped() => _cancel || cancelled() || runId != _runSerial;
     final limits = executionLimits;
     try {
       while (
@@ -1645,6 +1706,11 @@ class AgentService extends GetxService {
         if (stopped()) continue;
         List<ModelToolCall> calls;
         try {
+          final nativeAnswer = decodeModelAnswer(response);
+          if (nativeAnswer != null) {
+            onVisible(nativeAnswer);
+            return finish(_autoLinkFiles(nativeAnswer, trace), trace, false);
+          }
           calls = decodeModelCalls(response);
           final nextPlan = decodeModelPlan(response);
           if (nextPlan.isNotEmpty) {
@@ -1671,7 +1737,19 @@ class AgentService extends GetxService {
           onVisible(answer);
           return finish(_autoLinkFiles(answer, trace), trace, false);
         }
-        hist.add({'role': 'assistant', 'content': response});
+        calls = [
+          for (var i = 0; i < calls.length; i++)
+            ModelToolCall(calls[i].name, calls[i].arguments,
+                id: calls[i].id.isEmpty
+                    ? 'step_${callsUsed + i + 1}'
+                    : calls[i].id,
+                dependsOn: calls[i].dependsOn)
+        ];
+        hist.add({
+          'role': 'assistant',
+          'content': encodeModelCalls(calls, plan: plan),
+          '_nm_tools': 'true',
+        });
         final results = <Map<String, dynamic>>[];
         for (final call in calls) {
           if (stopped() ||
@@ -1708,9 +1786,12 @@ class AgentService extends GetxService {
               call.dependsOn.where((id) => receipts[id] != true).toList();
           final result = blocked.isNotEmpty
               ? 'Error: dependencies are incomplete or failed: ${blocked.join(', ')}'
-              : await executeTool(
-                      ParsedToolCall(call.name, call.arguments, ''), confirm)
-                  .timeout(limits.totalTimeout - clock.elapsed);
+              : await runZoned(
+                  () => executeTool(
+                      ParsedToolCall(call.name, call.arguments, ''), confirm),
+                  zoneValues: {
+                      _cancellationKey: stopped
+                    }).timeout(limits.totalTimeout - clock.elapsed);
           receipts[id] = !_toolFailed(result);
           trace[index] = stepLine(call.name, call.arguments, label, result,
               ms: timer.elapsedMilliseconds);
@@ -1724,7 +1805,7 @@ class AgentService extends GetxService {
         }
         if (stopped()) continue;
         current = jsonEncode({'tool_results': results, 'untrusted': true});
-        hist.add({'role': 'user', 'content': current});
+        hist.add({'role': 'user', 'content': current, '_nm_results': 'true'});
       }
       return finish(
           _autoLinkFiles(
@@ -1737,6 +1818,13 @@ class AgentService extends GetxService {
       return finish(
           _autoLinkFiles(
               'Execution timed out. Any operation already started may still finish; check its result before retrying.',
+              trace),
+          trace,
+          true);
+    } catch (error) {
+      return finish(
+          _autoLinkFiles(
+              'Execution stopped: $error. Completed outputs are attached; remaining steps are incomplete.',
               trace),
           trace,
           true);
@@ -1765,10 +1853,10 @@ class AgentService extends GetxService {
 
   PollinationsImageService imageProvider = PollinationsImageService();
   AgentLimits executionLimits = const AgentLimits();
-  static bool _toolFailed(String result) =>
-      RegExp(r'^(error:|the user denied|the user has blocked|unavailable:)',
-              caseSensitive: false)
-          .hasMatch(result);
+  static bool _toolFailed(String result) => RegExp(
+          r'^(error:|tool error:|http [345]\d{2}\b|the user denied|the user has blocked|unavailable:)',
+          caseSensitive: false)
+      .hasMatch(result);
 
   static final _genericOffer = RegExp(
       r'^(?:of course[!. ]*|sure[!. ]*)?i can (?:help|assist)(?: you)?(?: with (?:that|this|any questions or tasks[^.!?]*))?[.! ]*(?:if there[^.!?]*[.!?]|(?:feel free|please let me know)[^.!?]*[.!?])?$',
@@ -1987,14 +2075,21 @@ class AgentService extends GetxService {
     ParsedToolCall call,
     ToolConfirm confirm,
   ) async {
+    final cancelled =
+        Zone.current[_cancellationKey] as bool Function()? ?? () => false;
+    if (cancelled())
+      return 'Error: execution was cancelled before this action began.';
     for (final t in _allBuiltIns) {
       if (t.name == call.name) {
         try {
           validateToolArguments(call.arguments, t.inputSchema);
           if (t.name == 'run_shell' &&
               Get.isRegistered<DesktopCommandService>()) {
-            return await Get.find<DesktopCommandService>()
-                .execute(call.arguments, filesDir, confirm);
+            return await Get.find<DesktopCommandService>().execute(
+                call.arguments,
+                filesDir,
+                (name, server, args) async =>
+                    await confirm(name, server, args) && !cancelled());
           }
           final pol =
               policyFor('built-in', t.name, needsConfirm: t.needsConfirm);
@@ -2004,6 +2099,8 @@ class AgentService extends GetxService {
               !await confirm(t.name, 'built-in', confirmationArgs)) {
             return 'The user denied this tool call.';
           }
+          if (cancelled())
+            return 'Error: execution was cancelled before this action began.';
           String out = '';
           final retrySafe = const {
             'calculator',
@@ -2015,9 +2112,9 @@ class AgentService extends GetxService {
             'list_folder',
             'list_shared_folders'
           }.contains(t.name);
-          for (var attempt = 0;
-              attempt <= (retrySafe ? executionLimits.readRetries : 0);
-              attempt++) {
+          final retries =
+              retrySafe ? executionLimits.readRetries.clamp(0, 3) : 0;
+          for (var attempt = 0; attempt <= retries; attempt++) {
             try {
               out = await Future.sync(() => t.run(call.arguments)).timeout(
                   executionLimits.totalTimeout < const Duration(seconds: 120)
@@ -2025,7 +2122,7 @@ class AgentService extends GetxService {
                       : const Duration(seconds: 120));
               break;
             } catch (_) {
-              if (!retrySafe || attempt >= executionLimits.readRetries) rethrow;
+              if (attempt >= retries) rethrow;
             }
           }
           return out.length > 6000
@@ -2054,6 +2151,8 @@ class AgentService extends GetxService {
     if (pol == 'ask' && !await confirm(tool.name, cfg.name, call.arguments)) {
       return 'The user denied this tool call.';
     }
+    if (cancelled())
+      return 'Error: execution was cancelled before this action began.';
     final client = McpClient(cfg);
     try {
       final out = await client

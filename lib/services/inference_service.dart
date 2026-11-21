@@ -342,6 +342,7 @@ class InferenceService extends GetxService {
     String? systemPrompt,
     List<Map<String, String>>? conversationHistory,
     String source = 'chat',
+    List<Map<String, dynamic>> nativeTools = const [],
     String? imagePath,
     String? audioPath,
     int? maxTokens,
@@ -425,6 +426,7 @@ class InferenceService extends GetxService {
           systemPrompt: systemPrompt,
           conversationHistory: conversationHistory,
           source: source,
+          nativeTools: nativeTools,
           imagePath: imagePath,
           audioPath: audioPath,
           maxTokens: maxTokens,
@@ -488,6 +490,7 @@ class InferenceService extends GetxService {
         source: source,
         normalThinking: source == 'chat' &&
             (_hive.getSetting<bool>('local_normal_thinking') ?? false),
+        nativeTools: nativeTools,
         onToken: (rawToken) {
           if (!isCurrent()) return;
           var token = rawToken;

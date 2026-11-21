@@ -2,6 +2,7 @@
 // Requires an actual compatible GGUF; no generated thoughts are inserted.
 #include "chat.h"
 #include "llama.h"
+#include "../local_plugins/llama_flutter_android/android/src/main/cpp/native_tool_protocol.h"
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -55,6 +56,36 @@ int main(int argc,char** argv) {
         if(outputs[1].find("</think>")==std::string::npos)throw std::runtime_error("Enabled reasoning did not terminate within the token budget");
         if(outputs[0].find("</think>")!=std::string::npos)throw std::runtime_error("Disabled mode generated a reasoning block");
         std::cout<<"PASS: same GGUF, distinct enabled/disabled prompts, nonempty inference, correct answer, enabled reasoning closes, disabled reasoning absent.\n";
+        const auto nativeCaps=common_chat_templates_get_caps(templates.get());
+        if(!nativeCaps.at("supports_tools") || !nativeCaps.at("supports_tool_calls"))throw std::runtime_error("GGUF template did not advertise native tool support");
+        input.enable_thinking=false;
+        input.chat_template_kwargs["enable_thinking"]="false";
+        input.tools=common_chat_tools_parse_oaicompat(common_json::parse(R"([{"type":"function","function":{"name":"calculator","description":"Calculate an arithmetic expression exactly","parameters":{"type":"object","properties":{"expression":{"type":"string"}},"required":["expression"]}}}])"));
+        input.messages[0].content="Use the calculator tool to calculate 17*19.";
+        auto toolParams=common_chat_templates_apply(templates.get(),input);
+        const auto toolReply=neuromesh_normalize_native(generate(model,toolParams.prompt),toolParams);
+        const auto start=toolReply.find("<tool_call>");const auto end=toolReply.rfind("</tool_call>");
+        if(start==std::string::npos || end==std::string::npos)throw std::runtime_error("Model did not select a native calculator tool");
+        auto calls=common_json::parse(toolReply.substr(start+11,end-start-11));
+        if(calls.at("calls").size()!=1 || calls.at("calls").at(0).at("name").get<std::string>()!="calculator")throw std::runtime_error("Unexpected native tool selection");
+        auto expression=calls.at("calls").at(0).at("arguments").at("expression").get<std::string>();
+        expression.erase(std::remove_if(expression.begin(),expression.end(),[](char c){return c==' ' || c=='(' || c==')';}),expression.end());
+        if(expression!="17*19")throw std::runtime_error("Unexpected native calculator arguments");
+        calls["calls"][0]["id"]="step_1";
+        const std::string canonical="<tool_call>"+calls.dump()+"</tool_call>";
+        const auto result=common_json({{"untrusted",true},{"tool_results",common_json::array({common_json({{"id","step_1"},{"name","calculator"},{"status","ok"},{"content",std::to_string(17*19)}})})}}).dump();
+        input.messages=neuromesh_native_messages({{"user","Use the calculator tool to calculate 17*19."},{"assistant_tool",canonical},{"user",result}});
+        if(input.messages.back().role!="tool" || input.messages.back().tool_call_id!="step_1")throw std::runtime_error("Native tool result history lost its call ID");
+        toolParams=common_chat_templates_apply(templates.get(),input);
+        const auto finalReply=neuromesh_normalize_native(generate(model,toolParams.prompt),toolParams);
+        if(finalReply.find("323")==std::string::npos || finalReply.find("<tool_call>")!=std::string::npos)throw std::runtime_error("Native tool result did not produce a grounded final answer");
+        input.messages.clear();message.content="Say hello in one word.";input.messages.push_back(message);
+        toolParams=common_chat_templates_apply(templates.get(),input);
+        const auto directReply=neuromesh_normalize_native(generate(model,toolParams.prompt),toolParams);
+        if(directReply.empty() || directReply.find("<tool_call>")!=std::string::npos)throw std::runtime_error("Direct answer made an unnecessary native tool call");
+        const auto quotedHistory=neuromesh_native_messages({{"assistant",canonical},{"user",result}});
+        if(quotedHistory.front().tool_calls.size()!=0 || quotedHistory.back().role!="user")throw std::runtime_error("Ordinary content was reinterpreted as native tool history");
+        std::cout<<"PASS: native model-directed calculator call, validated arguments, real arithmetic result, native tool role/ID round trip, grounded final answer and direct answer without a tool.\n";
         llama_model_free(model);llama_backend_free();return 0;
     } catch(const std::exception& e){std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}
 }

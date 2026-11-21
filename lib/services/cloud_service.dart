@@ -81,6 +81,8 @@ class CloudService extends GetxService {
   }
 
   http.Client? _activeStreamClient;
+  final _googleToolParts = <String, Map<String, dynamic>>{};
+  int _nativeCallSerial = 0;
 
   // Without timeouts a stalled connection (captive Wi-Fi, a hung custom
   // endpoint) leaves the chat loading forever.
@@ -97,6 +99,7 @@ class CloudService extends GetxService {
   /// Aborts the streaming response in progress, if any. Closing the client
   /// drops the connection, so the provider stops generating (and billing).
   void cancel() {
+    _googleToolParts.clear();
     final client = _activeStreamClient;
     _activeStreamClient = null;
     client?.close();
@@ -171,7 +174,9 @@ class CloudService extends GetxService {
   /// endpoints require explicit capability opt-in; other providers use the
   /// validated tagged-output protocol supplied by AgentService.
   bool get supportsNativeTools =>
-      _supportsStreaming &&
+      (_supportsStreaming ||
+          _provider == 'google' ||
+          _provider == 'anthropic') &&
       (_provider != 'custom' ||
           _hive.getSetting<bool>('custom_native_tools') == true);
 
@@ -192,10 +197,13 @@ class CloudService extends GetxService {
     var serial = 0;
     for (final message in messages) {
       final content = message['content'] ?? '';
-      if (message['role'] == 'assistant') {
+      if (message['role'] == 'assistant' && message['_nm_tools'] == 'true') {
         final calls = decodeModelCalls(content);
         if (calls.isNotEmpty) {
-          pending = [for (var i = 0; i < calls.length; i++) 'call_${serial++}'];
+          pending = [
+            for (final call in calls)
+              call.id.isEmpty ? 'call_${serial++}' : call.id
+          ];
           native.add({
             'role': 'assistant',
             'content': null,
@@ -229,7 +237,7 @@ class CloudService extends GetxService {
         pending = [];
         continue;
       }
-      native.add(Map<String, dynamic>.from(message));
+      native.add({'role': message['role'], 'content': content});
     }
     if (imageBase64 != null) {
       final lastUser = native.lastIndexWhere((m) => m['role'] == 'user');
@@ -245,6 +253,9 @@ class CloudService extends GetxService {
     final client = _agentClientFactory();
     _activeStreamClient = client;
     try {
+      if (_provider == 'google' || _provider == 'anthropic') {
+        return await _sendNativeOther(native, tools, client, onToken);
+      }
       final response = await client
           .post(
             Uri.parse(_openAICompatibleEndpoint),
@@ -263,7 +274,7 @@ class CloudService extends GetxService {
           )
           .timeout(_responseTimeout);
       if (response.statusCode != 200)
-        return 'ERROR: Native tool request returned HTTP ${response.statusCode}. No actions were executed.';
+        return 'ERROR: Native tool request returned HTTP ${response.statusCode}. No further actions were executed.';
       final data = jsonDecode(response.body);
       final message = data['choices'][0]['message'] as Map;
       final calls = message['tool_calls'];
@@ -273,18 +284,210 @@ class CloudService extends GetxService {
           if (args is! Map)
             throw const FormatException('Tool arguments must be an object');
           return ModelToolCall(
-              c['function']['name'], Map<String, dynamic>.from(args));
+              c['function']['name'], Map<String, dynamic>.from(args),
+              id: c['id'] as String? ?? 'native_${_nativeCallSerial++}');
         }).toList());
       }
       final answer = message['content'] as String? ?? '';
       onToken?.call(answer);
-      return answer;
+      return encodeModelAnswer(answer);
     } catch (e) {
       return 'ERROR: Cloud tool response failed: $e';
     } finally {
       if (identical(_activeStreamClient, client)) _activeStreamClient = null;
       client.close();
     }
+  }
+
+  Future<String> _sendNativeOther(
+      List<Map<String, dynamic>> messages,
+      List<Map<String, dynamic>> tools,
+      http.Client client,
+      void Function(String)? onToken) async {
+    final system = messages
+        .where((m) => m['role'] == 'system')
+        .map((m) => m['content'])
+        .join('\n');
+    final converted = <Map<String, dynamic>>[];
+    final names = <String, String>{};
+    void append(String role, List<Map<String, dynamic>> parts) {
+      final key = _provider == 'google' ? 'parts' : 'content';
+      if (converted.isNotEmpty && converted.last['role'] == role) {
+        (converted.last[key] as List).addAll(parts);
+      } else {
+        converted.add({'role': role, key: parts});
+      }
+    }
+
+    for (final message in messages.where((m) => m['role'] != 'system')) {
+      final calls = message['tool_calls'];
+      if (calls is List) {
+        final parts = <Map<String, dynamic>>[];
+        for (final call in calls) {
+          final fn = call['function'] as Map;
+          final id = call['id'] as String;
+          names[id] = fn['name'];
+          parts.add(_provider == 'google'
+              ? _googleToolParts[id] ??
+                  {
+                    'functionCall': {
+                      'name': fn['name'],
+                      'args': jsonDecode(fn['arguments'])
+                    }
+                  }
+              : {
+                  'type': 'tool_use',
+                  'id': id,
+                  'name': fn['name'],
+                  'input': jsonDecode(fn['arguments'])
+                });
+        }
+        append(_provider == 'google' ? 'model' : 'assistant', parts);
+        continue;
+      }
+      if (message['role'] == 'tool') {
+        final id = message['tool_call_id'] as String;
+        final result = jsonDecode(message['content'] as String);
+        append('user', [
+          _provider == 'google'
+              ? {
+                  'functionResponse': {
+                    'name': names[id],
+                    'response': result,
+                    if (_googleToolParts[id]?['functionCall']?['id'] != null)
+                      'id': _googleToolParts[id]!['functionCall']['id']
+                  }
+                }
+              : {
+                  'type': 'tool_result',
+                  'tool_use_id': id,
+                  'content': message['content'],
+                  'is_error': result['status'] == 'error'
+                }
+        ]);
+        continue;
+      }
+      final content = message['content'];
+      final parts = <Map<String, dynamic>>[];
+      if (content is List) {
+        for (final part in content) {
+          if (part['type'] == 'text')
+            parts.add(_provider == 'google'
+                ? {'text': part['text']}
+                : {'type': 'text', 'text': part['text']});
+          if (part['type'] == 'image_url') {
+            final uri = part['image_url']['url'] as String;
+            final comma = uri.indexOf(',');
+            final mime = uri.substring(5, uri.indexOf(';'));
+            parts.add(_provider == 'google'
+                ? {
+                    'inlineData': {
+                      'mimeType': mime,
+                      'data': uri.substring(comma + 1)
+                    }
+                  }
+                : {
+                    'type': 'image',
+                    'source': {
+                      'type': 'base64',
+                      'media_type': mime,
+                      'data': uri.substring(comma + 1)
+                    }
+                  });
+          }
+        }
+      } else {
+        parts.add(_provider == 'google'
+            ? {'text': content ?? ''}
+            : {'type': 'text', 'text': content ?? ''});
+      }
+      append(
+          _provider == 'google' && message['role'] == 'assistant'
+              ? 'model'
+              : message['role'],
+          parts);
+    }
+    final url = _provider == 'google'
+        ? Uri.parse('${AppConstants.googleEndpoint}/$_model:generateContent')
+        : Uri.parse(AppConstants.anthropicEndpoint);
+    final body = _provider == 'google'
+        ? {
+            'systemInstruction': {
+              'parts': [
+                {'text': system}
+              ]
+            },
+            'contents': converted,
+            'tools': [
+              {
+                'functionDeclarations': [
+                  for (final t in tools)
+                    {
+                      'name': t['function']['name'],
+                      'description': t['function']['description'],
+                      'parametersJsonSchema': t['function']['parameters']
+                    }
+                ]
+              }
+            ],
+          }
+        : {
+            'model': _model,
+            'system': system,
+            'messages': converted,
+            'max_tokens': AppConstants.defaultMaxTokens,
+            'tools': [
+              for (final t in tools)
+                {
+                  'name': t['function']['name'],
+                  'description': t['function']['description'],
+                  'input_schema': t['function']['parameters']
+                }
+            ],
+          };
+    final response = await client
+        .post(url,
+            headers: {
+              'Content-Type': 'application/json',
+              if (_provider == 'google') 'x-goog-api-key': _apiKey,
+              if (_provider == 'anthropic') ...{
+                'x-api-key': _apiKey,
+                'anthropic-version': '2023-06-01'
+              },
+            },
+            body: jsonEncode(body))
+        .timeout(_responseTimeout);
+    if (response.statusCode != 200)
+      return 'ERROR: Native $_provider tool request returned HTTP ${response.statusCode}. No further actions were executed.';
+    final data = jsonDecode(response.body);
+    final parts = (_provider == 'google'
+        ? data['candidates'][0]['content']['parts']
+        : data['content']) as List;
+    final calls = <ModelToolCall>[];
+    final text = StringBuffer();
+    for (final part in parts) {
+      if (_provider == 'google' && part['functionCall'] is Map) {
+        final fn = part['functionCall'];
+        final id = fn['id'] as String? ?? 'google_${_nativeCallSerial++}';
+        _googleToolParts[id] = Map<String, dynamic>.from(part);
+        if (_googleToolParts.length > 128)
+          _googleToolParts.remove(_googleToolParts.keys.first);
+        calls.add(ModelToolCall(
+            fn['name'], Map<String, dynamic>.from(fn['args'] ?? {}),
+            id: id));
+      } else if (_provider == 'anthropic' && part['type'] == 'tool_use') {
+        calls.add(ModelToolCall(
+            part['name'], Map<String, dynamic>.from(part['input']),
+            id: part['id']));
+      } else if (part['text'] is String && part['thought'] != true) {
+        text.write(part['text']);
+      }
+    }
+    if (calls.isNotEmpty) return encodeModelCalls(calls);
+    _googleToolParts.clear();
+    final answer = text.toString();
+    onToken?.call(answer);
+    return encodeModelAnswer(answer);
   }
 
   bool get _supportsStreaming =>
