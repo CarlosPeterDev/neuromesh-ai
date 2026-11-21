@@ -6,6 +6,10 @@ NeuroMesh AI is a Flutter workspace for private local AI with optional cloud pro
 
 Read this file, check the current branch and working tree, and review the latest GitHub runs and open pull requests before choosing work. Update this file when the next task, release status, or known limitations change.
 
+## Play AAB size
+
+The v1.0.139 bundle was 324,350,971 bytes, including 124,471,709 bytes of native debug metadata. Android release packaging now omits that metadata and the two largest browser-only speech payloads. The workflow checks the signed upload file against the 200 MB target and verifies the shipped Flutter ABIs and Android native inference and voice assets. It still checks the split ARM64 download separately. [Play preparation](docs/PLAY_STORE.md)
+
 ## Release and verification
 
 - **v1.0.139** was published from `b97a515d23a8d18ca2ad7dc0c2b3192038960398`. It includes tool discovery, Android shared-folder access, clickable replies, the narration fixes, and local Kitten and Kokoro synthesis. The Android 12 emulator passed installation and reinstallation. All six installers match the checksums on both release pages. The GitHub APKs use a temporary preview signer. [Release](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/tag/v1.0.139) · [ARM64 APK](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/download/v1.0.139/NeuroMesh-AI-v1.0.139-arm64-dev.apk) · [Build and publication](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44796547105)
