@@ -4,10 +4,14 @@ import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 import '../core/constants.dart';
 import 'hive_service.dart';
+import 'tool_registry.dart';
 import 'app_log_service.dart';
 
 /// Cloud API service supporting native and OpenAI-compatible providers.
 class CloudService extends GetxService {
+  CloudService({http.Client Function()? agentClientFactory})
+      : _agentClientFactory = agentClientFactory ?? http.Client.new;
+  final http.Client Function() _agentClientFactory;
   final HiveService _hive = Get.find<HiveService>();
 
   String get _provider =>
@@ -160,6 +164,126 @@ class CloudService extends GetxService {
     } catch (e) {
       Get.find<AppLogService>().error('Cloud API request failed', details: e);
       return 'ERROR: Cloud API request failed — $e';
+    }
+  }
+
+  /// Native function calling for known OpenAI-compatible providers. Custom
+  /// endpoints require explicit capability opt-in; other providers use the
+  /// validated tagged-output protocol supplied by AgentService.
+  bool get supportsNativeTools =>
+      _supportsStreaming &&
+      (_provider != 'custom' ||
+          _hive.getSetting<bool>('custom_native_tools') == true);
+
+  Future<String> sendAgentMessage({
+    required List<Map<String, String>> messages,
+    required List<Map<String, dynamic>> tools,
+    String? imageBase64,
+    void Function(String)? onToken,
+  }) async {
+    if (tools.isEmpty || !supportsNativeTools) {
+      return sendMessage(
+          messages: messages, imageBase64: imageBase64, onToken: onToken);
+    }
+    if (!isConfigured)
+      return 'ERROR: Configure a cloud provider before using tools.';
+    final native = <Map<String, dynamic>>[];
+    var pending = <String>[];
+    var serial = 0;
+    for (final message in messages) {
+      final content = message['content'] ?? '';
+      if (message['role'] == 'assistant') {
+        final calls = decodeModelCalls(content);
+        if (calls.isNotEmpty) {
+          pending = [for (var i = 0; i < calls.length; i++) 'call_${serial++}'];
+          native.add({
+            'role': 'assistant',
+            'content': null,
+            'tool_calls': [
+              for (var i = 0; i < calls.length; i++)
+                {
+                  'id': pending[i],
+                  'type': 'function',
+                  'function': {
+                    'name': calls[i].name,
+                    'arguments': jsonEncode(calls[i].arguments)
+                  },
+                }
+            ]
+          });
+          continue;
+        }
+      }
+      if (pending.isNotEmpty && message['role'] == 'user') {
+        final decoded = jsonDecode(content);
+        final results = decoded['tool_results'] as List;
+        for (var i = 0; i < pending.length; i++) {
+          native.add({
+            'role': 'tool',
+            'tool_call_id': pending[i],
+            'content': jsonEncode(i < results.length
+                ? results[i]
+                : {'status': 'error', 'content': 'Cancelled before execution'})
+          });
+        }
+        pending = [];
+        continue;
+      }
+      native.add(Map<String, dynamic>.from(message));
+    }
+    if (imageBase64 != null) {
+      final lastUser = native.lastIndexWhere((m) => m['role'] == 'user');
+      if (lastUser >= 0)
+        native[lastUser]['content'] = [
+          {'type': 'text', 'text': native[lastUser]['content']},
+          {
+            'type': 'image_url',
+            'image_url': {'url': 'data:image/jpeg;base64,$imageBase64'}
+          },
+        ];
+    }
+    final client = _agentClientFactory();
+    _activeStreamClient = client;
+    try {
+      final response = await client
+          .post(
+            Uri.parse(_openAICompatibleEndpoint),
+            headers: {
+              'Authorization': 'Bearer $_apiKey',
+              'Content-Type': 'application/json',
+              ..._openAICompatibleExtraHeaders
+            },
+            body: jsonEncode({
+              'model': _model,
+              'messages': native,
+              'tools': tools,
+              'tool_choice': 'auto',
+              'stream': false
+            }),
+          )
+          .timeout(_responseTimeout);
+      if (response.statusCode != 200)
+        return 'ERROR: Native tool request returned HTTP ${response.statusCode}. No actions were executed.';
+      final data = jsonDecode(response.body);
+      final message = data['choices'][0]['message'] as Map;
+      final calls = message['tool_calls'];
+      if (calls is List && calls.isNotEmpty) {
+        return encodeModelCalls(calls.map((c) {
+          final args = jsonDecode(c['function']['arguments'] as String);
+          if (args is! Map)
+            throw const FormatException('Tool arguments must be an object');
+          return ModelToolCall(
+              c['function']['name'], Map<String, dynamic>.from(args));
+        }).toList());
+      }
+      final answer = message['content'] as String? ?? '';
+      onToken?.call(answer);
+      return answer;
+    } catch (e) {
+      return 'ERROR: Cloud tool response failed: $e';
+    } finally {
+      if (identical(_activeStreamClient, client)) _activeStreamClient = null;
+      client.close();
     }
   }
 

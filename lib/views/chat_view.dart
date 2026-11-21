@@ -1,3 +1,4 @@
+import '../widgets/composer_actions.dart';
 import '../widgets/scroll_to_end.dart';
 import '../widgets/chat_math.dart';
 import 'dart:io';
@@ -200,10 +201,6 @@ class ChatView extends GetView<ChatController> {
             tooltip: 'Tools & permissions',
             icon: const Icon(Icons.handyman_outlined, size: 20),
             onPressed: () => Get.to(() => const ChatToolsView())),
-        IconButton(
-            tooltip: 'Voice call',
-            icon: const Icon(Icons.call_outlined, size: 20),
-            onPressed: () => Get.to(() => const VoiceCallView())),
         Obx(() {
           // Already on a blank chat — a "new chat" button would only create
           // empty sessions.
@@ -630,38 +627,8 @@ class ChatView extends GetView<ChatController> {
                           : Colors.black.withValues(alpha: 0.07),
                       width: 0.5),
                 ),
-                child:
-                    Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                  // Attach button (image + file) — shown for cloud & local vision
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
                   Obx(() {
-                    final s = Get.find<SettingsController>();
-                    final inf = Get.find<InferenceService>();
-                    final isCloud = s.inferenceMode.value == 'cloud';
-                    // LiteRT vision models or GGUF models with a vision
-                    // projector can take photos.
-                    final isLocalVision = s.inferenceMode.value == 'local' &&
-                        inf.isVisionLoaded.value;
-                    // Audio files only work with cloud and LiteRT models.
-                    final audioOk = isCloud ||
-                        (isLocalVision &&
-                            inf.loadedModelRuntime.value == 'litert');
-                    return _AttachButton(
-                      isDark: isDark,
-                      isCloud: isCloud,
-                      allowMedia: true,
-                      onCamera: () =>
-                          controller.pickImage(source: ImageSource.camera),
-                      onImage: controller.pickImage,
-                      onFile: () =>
-                          controller.pickFile(documentsOnly: !audioOk),
-                      context: context,
-                    );
-                  }),
-                  ContextMentionButton(controller: controller),
-                  // Text field
-                  // Same 40px base height as the buttons so a single line sits
-                  // centred; taller multi-line input keeps buttons at the bottom.
-                  Expanded(child: Obx(() {
                     final noModel = _localModelMissing();
                     return Container(
                       constraints: const BoxConstraints(minHeight: 40),
@@ -679,7 +646,7 @@ class ChatView extends GetView<ChatController> {
                         decoration: InputDecoration(
                           hintText: !noModel
                               ? 'Ask anything'
-                              : 'Generate an image online or load a model',
+                              : 'Load a model to chat',
                           hintStyle: GoogleFonts.inter(
                               fontSize: 15, color: Theme.of(context).hintColor),
                           border: InputBorder.none,
@@ -692,7 +659,7 @@ class ChatView extends GetView<ChatController> {
                           filled: false,
                         ),
                         onSubmitted: (text) {
-                          if (!noModel || controller.canSendOnlineImage(text)) {
+                          if (!noModel) {
                             controller.sendMessage();
                           } else {
                             Get.find<HomeController>().changeTab(1);
@@ -700,80 +667,64 @@ class ChatView extends GetView<ChatController> {
                         },
                       ),
                     );
-                  })),
-                  const SizedBox(width: 6),
-                  // Unified mic / send / stop button
+                  }),
                   Obx(() {
-                    final loading = controller.isLoading.value;
-                    final listening = controller.isListening.value;
-                    final noModel = _localModelMissing();
-                    final hasContent = controller.inputText.value.isNotEmpty ||
-                        controller.selectedFileName.value != null ||
-                        controller.selectedImagePath.value != null;
-
-                    // Determine state
-                    final Color bgColor;
-                    final IconData iconData;
-                    final VoidCallback? onTap;
-
-                    if (loading) {
-                      // AI generating → solid neutral stop
-                      bgColor = isDark ? Colors.white : Colors.black;
-                      iconData = Icons.stop_rounded;
-                      onTap = controller.stopGenerating;
-                    } else if (listening) {
-                      // STT active → red stop
-                      bgColor = const Color(0xFFFF3B30);
-                      iconData = Icons.stop_rounded;
-                      onTap = controller.toggleListening;
-                    } else if (noModel &&
-                        !controller
-                            .canSendOnlineImage(controller.inputText.value)) {
-                      bgColor = Colors.transparent;
-                      iconData = hasContent
-                          ? Icons.memory_outlined
-                          : Icons.mic_none_rounded;
-                      onTap = hasContent
-                          ? () => Get.find<HomeController>().changeTab(1)
-                          : null;
-                    } else if (hasContent) {
-                      // Has text or attachment → blue send
-                      bgColor = _appleBlue(context);
-                      iconData = Icons.arrow_upward_rounded;
-                      onTap = controller.sendMessage;
-                    } else {
-                      // Empty → bare mic glyph
-                      bgColor = Colors.transparent;
-                      iconData = Icons.mic_none_rounded;
-                      onTap = controller.toggleListening;
-                    }
-
-                    return GestureDetector(
-                      onTap: onTap,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeInOut,
-                        margin: const EdgeInsets.symmetric(vertical: 3),
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                            color: bgColor, shape: BoxShape.circle),
-                        child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 180),
-                          transitionBuilder: (child, anim) =>
-                              ScaleTransition(scale: anim, child: child),
-                          child: Icon(iconData,
-                              key: ValueKey(iconData),
-                              color: loading
-                                  ? (isDark ? Colors.black : Colors.white)
-                                  : (listening || (hasContent && !noModel))
-                                      ? Colors.white
-                                      : Theme.of(context)
-                                          .hintColor
-                                          .withValues(alpha: noModel ? 0.4 : 1),
-                              size: 20),
-                        ),
-                      ),
+                    final settings = Get.find<SettingsController>();
+                    return ComposerActions(
+                      thinking: settings.normalThinking.value,
+                      hasContent:
+                          controller.inputText.value.trim().isNotEmpty ||
+                              controller.selectedFileName.value != null,
+                      loading: controller.isLoading.value,
+                      listening: controller.isListening.value,
+                      onThink: () {
+                        settings
+                            .setNormalThinking(!settings.normalThinking.value);
+                        if (!Get.find<InferenceService>()
+                            .supportsThinking
+                            .value) {
+                          showToast('Think mode',
+                              'Thinking requires a compatible loaded model template.');
+                        }
+                      },
+                      onMicrophone: controller.toggleListening,
+                      onVoice: () => Get.to(() => const VoiceCallView()),
+                      onSend: () {
+                        if (_localModelMissing()) {
+                          Get.find<HomeController>().changeTab(1);
+                        } else {
+                          controller.sendMessage();
+                        }
+                      },
+                      onStop: controller.stopGenerating,
+                      leading: [
+                        Obx(() {
+                          final s = Get.find<SettingsController>();
+                          final inf = Get.find<InferenceService>();
+                          final isCloud = s.inferenceMode.value == 'cloud';
+                          // LiteRT vision models or GGUF models with a vision
+                          // projector can take photos.
+                          final isLocalVision =
+                              s.inferenceMode.value == 'local' &&
+                                  inf.isVisionLoaded.value;
+                          // Audio files only work with cloud and LiteRT models.
+                          final audioOk = isCloud ||
+                              (isLocalVision &&
+                                  inf.loadedModelRuntime.value == 'litert');
+                          return _AttachButton(
+                            isDark: isDark,
+                            isCloud: isCloud,
+                            allowMedia: true,
+                            onCamera: () => controller.pickImage(
+                                source: ImageSource.camera),
+                            onImage: controller.pickImage,
+                            onFile: () =>
+                                controller.pickFile(documentsOnly: !audioOk),
+                            context: context,
+                          );
+                        }),
+                        ContextMentionButton(controller: controller),
+                      ],
                     );
                   }),
                 ])),

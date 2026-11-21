@@ -14,18 +14,6 @@ import 'inference_service.dart';
 import 'voice_service.dart';
 
 class OpenAiServerService {
-  OpenAiServerService() : _agentModel = null;
-
-  /// A restricted, authenticated listener for a single desktop agent session.
-  OpenAiServerService.forAgentModel(String modelName) : _agentModel = modelName;
-
-  static const agentModelId = 'loaded';
-  final String? _agentModel;
-  int? _agentModelRevision;
-  late final String _generationSource =
-      _agentModel == null ? 'server' : 'agentBridge-${_id()}';
-  _SseStream? _agentStream;
-
   HttpServer? _server;
   bool _busy = false;
   String? _apiKey;
@@ -54,17 +42,6 @@ class OpenAiServerService {
     void Function(String)? onLog,
   }) async {
     if (_server != null) return;
-    if (_agentModel != null) {
-      if (allowNetwork || (apiKey?.trim().isEmpty ?? true)) {
-        throw ArgumentError('The agent bridge requires a key and loopback access.');
-      }
-      final inference = Get.find<InferenceService>();
-      if (!inference.isModelLoaded.value ||
-          inference.loadedModelName.value != _agentModel) {
-        throw StateError('Load the selected model before opening the bridge.');
-      }
-      _agentModelRevision = inference.modelRevision;
-    }
     if (allowNetwork && (apiKey == null || apiKey.trim().isEmpty)) {
       throw ArgumentError('An API key is required for network access.');
     }
@@ -82,9 +59,6 @@ class OpenAiServerService {
   /// Applies a new API key to the running server without a restart.
   void updateApiKey(String? apiKey) {
     final key = apiKey?.trim();
-    if (_agentModel != null && (key == null || key.isEmpty)) {
-      throw ArgumentError('The agent bridge requires an API key.');
-    }
     _apiKey = (key == null || key.isEmpty) ? null : key;
   }
 
@@ -92,13 +66,6 @@ class OpenAiServerService {
     final server = _server;
     _server = null;
     await server?.close(force: true);
-    if (_agentModel != null && Get.isRegistered<InferenceService>()) {
-      final inference = Get.find<InferenceService>();
-      if (inference.generationSource.value == _generationSource) {
-        await inference.stopGeneration();
-      }
-    }
-    await _agentStream?.close();
     _busy = false;
     _onLog?.call('Server stopped');
   }
@@ -111,19 +78,6 @@ class OpenAiServerService {
 
   Future<void> _handle(HttpRequest request) async {
     try {
-      final path = request.uri.path;
-      if (_agentModel != null) {
-        if (!_isAuthorized(request)) {
-          await _bridgeError(request, 'Unauthorized', HttpStatus.unauthorized);
-          return;
-        }
-        final allowed = (request.method == 'GET' && path == '/v1/models') ||
-            (request.method == 'POST' && path == '/v1/chat/completions');
-        if (!allowed) {
-          await _bridgeError(request, 'Not found', HttpStatus.notFound);
-          return;
-        }
-      }
       _addCorsHeaders(request.response);
       if (request.method == 'OPTIONS') {
         request.response.statusCode = HttpStatus.noContent;
@@ -131,6 +85,7 @@ class OpenAiServerService {
         return;
       }
 
+      final path = request.uri.path;
       if (request.method == 'GET' && path == '/health') {
         await _json(request, {'status': 'ok'});
         return;
@@ -340,15 +295,13 @@ class OpenAiServerService {
 
   Future<void> _handleModels(HttpRequest request) async {
     final inference = Get.find<InferenceService>();
-    final hasModel = _localModelError(inference) == null;
+    final hasModel = inference.isModelLoaded.value;
     await _json(request, {
       'object': 'list',
       'data': [
         if (hasModel)
           {
-            'id': _responseModel(inference),
-            if (_agentModel != null) 'name': _agentModel,
-            if (_agentModel != null) 'tool_calling': false,
+            'id': inference.loadedModelName.value,
             'object': 'model',
             'created': DateTime.now().millisecondsSinceEpoch ~/ 1000,
             'owned_by': 'local',
@@ -383,19 +336,11 @@ class OpenAiServerService {
     final tempFiles = <File>[];
     try {
       final body = await _readJson(request);
-      if (_agentModel != null) {
-        final error = _agentRequestError(body);
-        if (error != null) {
-          await _bridgeError(request, error, HttpStatus.badRequest);
-          return;
-        }
-      }
       // One model is loaded at a time, and clients (PC chat apps, editors)
       // often send their own model name: serve the loaded model regardless,
       // as llama-server and LM Studio do.
       final model = (body['model'] as String?)?.trim();
-      if (_agentModel == null &&
-          model != null &&
+      if (model != null &&
           model.isNotEmpty &&
           model != inference.loadedModelName.value) {
         _onLog?.call('Request for "$model"; serving ${inference.loadedModelName.value}');
@@ -406,19 +351,6 @@ class OpenAiServerService {
         await _json(request, {'error': parsed.error},
             status: HttpStatus.badRequest);
         return;
-      }
-
-      if (_agentModel != null) {
-        if (!isRunning) return;
-        final error = _localModelError(inference);
-        if (error != null) {
-          await _bridgeError(request, error, HttpStatus.conflict);
-          return;
-        }
-        if (inference.isGenerating.value) {
-          await _bridgeError(request, 'Model is busy', 429);
-          return;
-        }
       }
 
       final maxTokens = _maxTokens(body);
@@ -432,7 +364,7 @@ class OpenAiServerService {
           systemPrompt: parsed.systemPrompt ??
               _defaultSystemPrompt(inference.loadedModelName.value),
           conversationHistory: parsed.history,
-          source: _generationSource,
+          source: 'server',
           imagePath: parsed.imagePath,
           audioPath: parsed.audioPath,
           maxTokens: maxTokens,
@@ -442,15 +374,10 @@ class OpenAiServerService {
           await _interrupted(request);
           return;
         }
-        if (_agentModel != null && text.startsWith('ERROR:')) {
-          await _bridgeError(request, text, HttpStatus.badGateway);
-          return;
-        }
-        await _json(request, _chatResponse(_responseModel(inference), text));
+        await _json(
+            request, _chatResponse(inference.loadedModelName.value, text));
       }
     } finally {
-      await _agentStream?.close();
-      _agentStream = null;
       _busy = false;
       await _deleteFiles(tempFiles);
     }
@@ -462,19 +389,12 @@ class OpenAiServerService {
   Future<bool> _acquire(HttpRequest request, InferenceService inference) async {
     final modelError = _localModelError(inference);
     if (modelError != null) {
-      if (_agentModel != null) {
-        await _bridgeError(request, modelError, HttpStatus.conflict);
-      } else {
-        await _json(request, {'error': modelError}, status: HttpStatus.badRequest);
-      }
+      await _json(request, {'error': modelError},
+          status: HttpStatus.badRequest);
       return false;
     }
     if (_busy || inference.isGenerating.value) {
-      if (_agentModel != null) {
-        await _bridgeError(request, 'Model is busy', 429);
-      } else {
-        await _json(request, {'error': 'Model is busy'}, status: 429);
-      }
+      await _json(request, {'error': 'Model is busy'}, status: 429);
       return false;
     }
     _busy = true;
@@ -556,51 +476,11 @@ class OpenAiServerService {
   }
 
   String? _localModelError(InferenceService inference) {
-    if (_agentModel != null &&
-        (!inference.isModelLoaded.value ||
-            inference.loadedModelName.value != _agentModel ||
-            inference.modelRevision != _agentModelRevision)) {
-      return 'The linked model changed. Disconnect and reconnect OpenCode.';
-    }
     if (!inference.isModelLoaded.value) {
       return 'No local model loaded. Load a GGUF or LiteRT-LM model first.';
     }
     return null;
   }
-
-  String? _agentRequestError(Map<String, dynamic> body) {
-    if (body['model'] != agentModelId) {
-      return 'Select the linked NeuroMesh model.';
-    }
-    final tools = body['tools'];
-    if ((tools != null && (tools is! List || tools.isNotEmpty)) ||
-        body['tool_choice'] is Map ||
-        body['tool_choice'] == 'required' ||
-        body['functions'] != null ||
-        body['function_call'] != null) {
-      return 'Tool calling is unavailable on this bridge.';
-    }
-    final messages = body['messages'];
-    if (messages is List) {
-      for (final message in messages.whereType<Map>()) {
-        final content = message['content'];
-        if (message['tool_calls'] != null || message['role'] == 'tool') {
-          return 'Tool calling is unavailable on this bridge.';
-        }
-        if (content is List &&
-            content.any((part) => part is! Map || part['type'] != 'text')) {
-          return 'Only text messages are supported on this bridge.';
-        }
-      }
-    }
-    return null;
-  }
-
-  Future<void> _bridgeError(HttpRequest request, String message, int status) =>
-      _json(request, {'error': {'message': message}}, status: status);
-
-  String _responseModel(InferenceService inference) =>
-      _agentModel == null ? inference.loadedModelName.value : agentModelId;
 
   /// Temp files are appended to [tempFiles] as they're written so the caller
   /// can always delete them, including when parsing fails part-way.
@@ -766,66 +646,43 @@ class OpenAiServerService {
     final created = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     var emitted = false;
     final sse = await _SseStream.open(response, onDisconnect: () {
-      if (inference.generationSource.value == _generationSource) {
+      if (inference.generationSource.value == 'server') {
         unawaited(inference.stopGeneration());
       }
     });
 
-    void chunk(Map<String, String> delta, {String? finishReason}) {
+    void emit(String token) {
+      emitted = true;
       sse.event({
         'id': id,
         'object': 'chat.completion.chunk',
         'created': created,
-        'model': _responseModel(inference),
+        'model': inference.loadedModelName.value,
         'choices': [
           {
             'index': 0,
-            'delta': delta,
-            'finish_reason': finishReason,
+            'delta': {'content': token},
+            'finish_reason': null,
           }
         ],
       });
     }
 
-    void emit(String token) {
-      emitted = true;
-      chunk({'content': token});
-    }
-
-    if (_agentModel != null) {
-      _agentStream = sse;
-      final error = _localModelError(inference);
-      if (!isRunning || error != null || inference.isGenerating.value) {
-        sse.event({
-          'error': {'message': error ?? 'Model is busy or disconnected'},
-        });
-        await sse.close();
-        return;
-      }
-      chunk({'role': 'assistant'});
-    }
     final stopsBefore = inference.stopCount;
     final result = await inference.generate(
       prompt: parsed.prompt,
       systemPrompt: parsed.systemPrompt ??
           _defaultSystemPrompt(inference.loadedModelName.value),
       conversationHistory: parsed.history,
-      source: _generationSource,
+      source: 'server',
       imagePath: parsed.imagePath,
       audioPath: parsed.audioPath,
       maxTokens: maxTokens,
       stopSequences: stop,
       onToken: emit,
     );
-    if (_agentModel != null && result.startsWith('ERROR:')) {
-      sse.event({'error': {'message': result}});
-      await sse.close();
-      return;
-    }
-    await _finishStream(
-      sse, inference, stopsBefore, emitted ? null : result, emit,
-      beforeDone: _agentModel == null ? null : () => chunk({}, finishReason: 'stop'),
-    );
+    await _finishStream(sse, inference, stopsBefore,
+        emitted ? null : result, emit);
   }
 
   /// Ends an SSE stream: reports an interruption as an error event rather
@@ -836,9 +693,8 @@ class OpenAiServerService {
     InferenceService inference,
     int stopsBefore,
     String? unemittedResult,
-    void Function(String) emit, {
-    void Function()? beforeDone,
-  }) async {
+    void Function(String) emit,
+  ) async {
     if (inference.stopCount != stopsBefore) {
       sse.event({
         'error': {
@@ -850,7 +706,6 @@ class OpenAiServerService {
       if (unemittedResult != null && unemittedResult.isNotEmpty) {
         emit(unemittedResult);
       }
-      beforeDone?.call();
       sse.raw('data: [DONE]\n\n');
     }
     await sse.close();
@@ -947,7 +802,7 @@ class OpenAiServerService {
   void _addCorsHeaders(HttpResponse response) {
     // Only allow browser access when a key is required, so an arbitrary web
     // page can't read model output from an open server.
-    if (_apiKey == null || _agentModel != null) return;
+    if (_apiKey == null) return;
     response.headers.set(HttpHeaders.accessControlAllowOriginHeader, '*');
     response.headers
         .set(HttpHeaders.accessControlAllowMethodsHeader, 'GET,POST,OPTIONS');

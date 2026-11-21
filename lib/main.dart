@@ -43,10 +43,8 @@ import 'services/cloud_service.dart';
 import 'services/download_service.dart';
 import 'services/update_service.dart';
 import 'services/device_info_service.dart';
-import 'services/local_image_service.dart';
 import 'services/app_log_service.dart';
 import 'services/crash_reporting_service.dart';
-import 'services/image_generation_notification_service.dart';
 import 'core/constants.dart';
 
 void main() {
@@ -136,7 +134,6 @@ void main() {
     Get.put(CloudService());
     Get.put(DownloadService());
     if (UpdateService.isSupported) Get.put(UpdateService(), permanent: true);
-    Get.put(LocalImageService());
     registerExtraTools(Get.find<AgentService>());
     final crashReporting =
         await Get.putAsync(() => CrashReportingService().init().timeout(
@@ -162,14 +159,6 @@ void main() {
       crashReporting.recordFatal(error, stack, reason: 'platform_dispatcher');
       return true;
     };
-    final imageNotifications = Get.put(ImageGenerationNotificationService());
-    try {
-      await imageNotifications.init();
-      await imageNotifications.configureBackgroundService();
-    } catch (e) {
-      appLog.error('[Notifications] Init failed', details: e);
-    }
-    appLog.info('Notifications initialized');
     Get.put(ServerController(), permanent: true);
     Get.put(RelayService(), permanent: true);
     Get.put(ModelController());
@@ -230,21 +219,6 @@ void _validateLastModel() async {
       await hive.setSetting(AppConstants.keyLocalModelName, '');
     }
   }
-
-  // Validate last image model
-  final imageModelName =
-      hive.getSetting<String>(AppConstants.keyImageModelName);
-  final imageModelPath =
-      hive.getSetting<String>(AppConstants.keyImageModelPath);
-  if (imageModelName != null &&
-      imageModelName.isNotEmpty &&
-      imageModelPath != null &&
-      imageModelPath.isNotEmpty) {
-    if (!await downloadService.isModelDownloaded(imageModelName)) {
-      await hive.setSetting(AppConstants.keyImageModelPath, '');
-      await hive.setSetting(AppConstants.keyImageModelName, '');
-    }
-  }
 }
 
 /// Auto-set optimized inference params based on device RAM (only on first launch).
@@ -277,7 +251,7 @@ class NeuroMeshApp extends StatelessWidget {
       final themeMode = settings.themeMode.value;
       final scale = settings.fontScale.value; // read here → Obx tracks it
       return GetMaterialApp(
-          navigatorObservers: [homeRouteObserver],
+        navigatorObservers: [homeRouteObserver],
         title: 'NeuroMesh AI',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.lightTheme,

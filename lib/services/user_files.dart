@@ -135,14 +135,27 @@ class UserFilesService extends GetxService {
   }
 
   Future<void> writeText(GrantedFolder f, String path, String content) async {
+    await writeBytes(f, path, Uint8List.fromList(utf8.encode(content)));
+  }
+
+  Future<String> writeBytes(
+      GrantedFolder f, String path, Uint8List bytes) async {
     final success = await _ch.invokeMethod<bool>('writeFile', {
       'uri': f.uri,
       'path': path,
-      'bytes': Uint8List.fromList(utf8.encode(content))
+      'bytes': bytes,
     });
-    if (success != true) {
-      throw StateError('The shared folder did not confirm the write.');
-    }
+    if (success != true)
+      throw StateError('The shared folder did not verify the write.');
+    return fileUri(f, path);
+  }
+
+  Future<String> fileUri(GrantedFolder f, String path) async {
+    final uri = await _ch
+        .invokeMethod<String>('sharedFileUri', {'uri': f.uri, 'path': path});
+    if (uri == null || !uri.startsWith('content://'))
+      throw StateError('The provider returned no usable document URI.');
+    return uri;
   }
 
   Future<String> mutateFile(GrantedFolder folder, String path, String action,

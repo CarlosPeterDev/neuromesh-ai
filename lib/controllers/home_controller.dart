@@ -66,6 +66,7 @@ class HomeController extends GetxController {
   }
 
   void changeTab(int index) {
+    if (index < 0 || index >= 4) return;
     if (currentTab.value == index) {
       if (index == 1) modelsToTop();
       return;

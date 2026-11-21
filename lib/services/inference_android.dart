@@ -26,6 +26,8 @@ class LoadResult {
   final int gpuLayers;
   final String runtime;
   final String backend;
+  final bool supportsThinking;
+  final bool supportsToolSchema;
   LoadResult({
     required this.success,
     required this.message,
@@ -33,6 +35,8 @@ class LoadResult {
     this.gpuLayers = 0,
     this.runtime = '',
     this.backend = '',
+    this.supportsThinking = false,
+    this.supportsToolSchema = false,
   });
 }
 
@@ -191,7 +195,9 @@ class InferenceEngine {
     // ── Load ──
     String? visionError;
     await onLoadStage?.call(
-      gpuLayers > 0 ? 'llama.cpp Vulkan model load' : 'llama.cpp CPU model load',
+      gpuLayers > 0
+          ? 'llama.cpp Vulkan model load'
+          : 'llama.cpp CPU model load',
       null,
     );
     try {
@@ -236,11 +242,19 @@ class InferenceEngine {
         : 'CPU ($threads threads)';
     print('[Inference] ✓ Model loaded: $accel, ctx=$contextSize');
 
+    final templateCapabilities = Platform.isAndroid
+        ? await _controller!.getSupportedTemplates()
+        : <String>[];
+
     return LoadResult(
       success: true,
       message: 'Model loaded ($accel).',
       gpuName: gpuNameStr,
       gpuLayers: gpuLayers,
+      supportsThinking:
+          templateCapabilities.contains('metadata-thinking-supported'),
+      supportsToolSchema:
+          templateCapabilities.contains('metadata-tools-supported'),
       runtime: 'llama',
       backend: gpuLayers > 0 ? 'gpu' : 'cpu',
     );
@@ -446,8 +460,6 @@ class InferenceEngine {
       finish(buffer.toString());
     };
 
-    final qwen3 = RegExp(r'qwen[-_ ]?3(?![0-9])', caseSensitive: false)
-        .hasMatch(modelName);
     // ── Use generateChat() for native template handling ──
     Stream<String>? stream;
     try {
@@ -456,7 +468,9 @@ class InferenceEngine {
           imagePath: imagePath);
       stream = _controller!.generateChat(
         messages: messages,
-        template: qwen3 && !normalThinking ? 'qwen3-direct' : null,
+        template: Platform.isAndroid
+            ? (normalThinking ? 'metadata-think' : 'metadata-direct')
+            : null,
         maxTokens: maxTokens,
         temperature: temperature,
         topP: 0.9,
@@ -467,7 +481,8 @@ class InferenceEngine {
       );
       print('[Inference] generateChat() started (${messages.length} messages)');
     } catch (e) {
-      if (imagePath != null) return 'ERROR: Could not prepare image input.';
+      if (imagePath != null || Platform.isAndroid)
+        return 'ERROR: Could not apply the model chat template: $e';
       print('[Inference] generateChat() failed: $e — fallback to generate()');
       try {
         await _controller!.stop();

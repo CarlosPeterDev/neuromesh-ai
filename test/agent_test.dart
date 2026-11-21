@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:neuromesh_ai/services/agent_service.dart';
 import 'package:neuromesh_ai/services/agent_tools.dart';
+import 'package:neuromesh_ai/services/tool_registry.dart';
 import 'package:neuromesh_ai/services/mcp_client.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
 import 'package:neuromesh_ai/services/user_files.dart';
@@ -102,52 +103,20 @@ void main() {
     });
   });
 
-  test('greetings bypass tools even in Always mode, while tasks keep them', () {
+  test('tool availability is independent of request keywords', () {
     Get.put(HiveService());
     addTearDown(Get.reset);
-    final agent = AgentService()..mode.value = AgentChatMode.always;
-    expect(agent.wantsTools('Hi'), isFalse);
-    expect(agent.wantsTools('Helli!'), isFalse);
-    expect(agent.wantsTools('السلام عليكم'), isFalse);
-    expect(agent.wantsTools('Hi', hasFile: true), isTrue);
-    expect(agent.wantsTools('Create a file in the workspace named hello.txt'),
-        isTrue);
-  });
-
-  test('routes literal speech and leaves voice overrides to the model', () {
-    expect(
-      literalSpeechText(
-          'Create audio file that says hello Carlos using tts tool'),
-      'hello Carlos',
-    );
-    expect(
-        literalSpeechText('Make a WAV file saying "Hello!" using the TTS tool'),
-        'Hello!');
-    expect(
-        literalSpeechText(
-            'Create audio file that says hello Carlos using tts tool with voice af_heart'),
-        isNull);
-    expect(literalSpeechText('Can you create a file'), isNull);
-    expect(literalSpeechText('Create a file audio says hello Carlos'),
-        'hello Carlos');
-    expect(
-        literalSpeechText(
-            'Use the tts tool and create audio file says hello carlos'),
-        'hello carlos');
-    expect(
-        literalSpeechText(
-            'Use the TTS tool to create a file says hello Carlos'),
-        'hello Carlos');
-  });
-
-  test('recognizes an explicitly named empty workspace file', () {
-    expect(namedWorkspaceFile('Create a file in the workspace named hello.txt'),
-        'hello.txt');
-    expect(
-        namedWorkspaceFile(
-            'Create a file in the workspace named hello.txt with my notes'),
-        isNull);
-    expect(namedWorkspaceFile('Can you create a file'), isNull);
+    final agent = AgentService();
+    for (final text in [
+      'Hi',
+      'What is gravity?',
+      'Paint a galaxy',
+      'Save a file'
+    ]) {
+      expect(agent.wantsTools(text), isTrue);
+    }
+    agent.mode.value = AgentChatMode.off;
+    expect(agent.wantsTools('Search the internet'), isFalse);
   });
 
   test(
@@ -159,8 +128,9 @@ void main() {
     final traceUpdates = <List<String>>[];
     const prompt = 'Create audio file that says hello Carlos using tts tool';
     final result = await agent.runToolLoop(
-      generate: (_, __, ___) async =>
-          throw StateError('LLM should not be called'),
+      generate: (_, history, ___) async => history.length <= 1
+          ? '<tool_call>{"name":"text_to_speech","arguments":{"text":"hello Carlos","name":"speech.wav"}}</tool_call>'
+          : 'Audio is ready: [Audio](nmfile:speech.wav)',
       prompt: prompt,
       history: [
         {'role': 'user', 'content': prompt}
@@ -189,7 +159,7 @@ void main() {
         request: 'Could you narrate this?', contextSize: 1024, maxTokens: 120);
     expect(toolPrompt, contains('search_tools'));
     expect(agent.wantsTools('Could you narrate this?'), isTrue);
-    expect(agent.wantsTools('Explain why the sky is blue'), isFalse);
+    expect(agent.wantsTools('Explain why the sky is blue'), isTrue);
 
     var generation = 0;
     final result = await agent.runToolLoop(
@@ -206,8 +176,7 @@ void main() {
             return '<tool_call>{"name":"search_tools","arguments":{"query":"calculate a sum"}}</tool_call>';
           case 2:
             expect(prompt, contains('calculator:'));
-            expect(prompt,
-                contains('Use a matching tool to do the original task'));
+            expect(prompt, contains('tool_results'));
             return '<tool_call>{"name":"calculator","arguments":{"expression":"2+3"}}</tool_call>';
           default:
             expect(prompt, contains('5'));
@@ -227,8 +196,8 @@ void main() {
     Future<String> search(String text) => agent.executeTool(
         ParsedToolCall('search_tools', {'query': text}, ''),
         (_, __, ___) async => false);
-    expect(await search('TTS'), startsWith('text_to_speech:'));
-    expect(await search('STT'), startsWith('transcribe_audio:'));
+    expect(await search('TTS'), isNot(contains('text_to_speech:')));
+    expect(await search('STT'), isNot(contains('transcribe_audio:')));
     expect(
         await search('delete_user_file'), isNot(contains('delete_user_file:')));
     agent.policy[AgentService.keyOf('built-in', 'text_to_speech')] = 'block';
@@ -271,8 +240,8 @@ void main() {
               {
                 'folder': folder,
                 'path': 'drafts/report.txt',
-                'name': 'final.txt',
-                'content': 'new paragraph',
+                if (action == 'rename_user_file') 'name': 'final.txt',
+                if (action == 'append_user_file') 'content': 'new paragraph',
               },
               ''),
           (_, __, ___) async => allow,
@@ -313,32 +282,28 @@ void main() {
         return '<tool_call>{"name":"search_context","arguments":{"query":"topic"}}</tool_call>';
       },
     );
-    expect(generations, 3);
+    expect(generations, 2);
     expect(result.trace, hasLength(1));
-    expect(result.answer, contains('could not find'));
-    expect(result.hitLimit, isFalse);
+    expect(result.answer, contains('repeated tool call'));
+    expect(result.hitLimit, isTrue);
   });
 
-  group('parseToolCall', () {
-    test('reads a normal call', () {
-      final c = parseToolCall(
-          'Let me check.\n<tool_call>{"name":"calculator","arguments":{"expression":"2+2"}}</tool_call>');
-      expect(c, isNotNull);
-      expect(c!.name, 'calculator');
-      expect(c.arguments['expression'], '2+2');
-      expect(c.textBefore, 'Let me check.');
-    });
-
-    test('tolerates a missing closing tag and braces inside strings', () {
-      final c =
-          parseToolCall('<tool_call>{"name":"x","arguments":{"q":"a } b"}}');
-      expect(c?.arguments['q'], 'a } b');
-    });
-
-    test('returns null for plain answers and broken json', () {
-      expect(parseToolCall('The answer is 4.'), isNull);
-      expect(parseToolCall('<tool_call>{"name": </tool_call>'), isNull);
-    });
+  test('structured adapter rejects malformed calls and ignores prose JSON', () {
+    expect(decodeModelCalls('Example: {"name":"write_file","arguments":{}}'),
+        isEmpty);
+    expect(
+        decodeModelCalls('```json\n{"name":"write_file","arguments":{}}\n```'),
+        isEmpty);
+    expect(() => decodeModelCalls('<tool_call>{"name":"x"}</tool_call>'),
+        throwsFormatException);
+    expect(() => decodeModelCalls('<tool_call>{"name":"x","arguments":{}}'),
+        throwsFormatException);
+    expect(
+        decodeModelCalls(
+                '<think>reasoning</think><tool_call>{"name":"calculator","arguments":{"expression":"2+2"}}</tool_call>')
+            .single
+            .name,
+        'calculator');
   });
 
   group('evaluateExpression', () {

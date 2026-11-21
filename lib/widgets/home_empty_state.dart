@@ -5,10 +5,8 @@ import '../controllers/chat_controller.dart';
 import '../controllers/home_controller.dart';
 import '../controllers/model_controller.dart';
 import '../controllers/settings_controller.dart';
-import '../ffi/sd_ffi_bindings.dart';
 import '../services/cluster_service.dart';
 import '../services/inference_service.dart';
-import '../services/local_image_service.dart';
 import '../core/haptics.dart';
 import '../services/pollinations_image_service.dart';
 
@@ -245,7 +243,7 @@ String _prettyModel(String name) => name.replaceAll(
 
 // ── Model card ──────────────────────────────────────────────────────────
 
-enum _ModelState { noModels, idle, loading, readyText, readyImage, cloud }
+enum _ModelState { noModels, idle, loading, readyText, cloud }
 
 class _ModelCard extends StatelessWidget {
   final _HomeTokens t;
@@ -262,7 +260,6 @@ class _ModelCard extends StatelessWidget {
       final settings = Get.find<SettingsController>();
       final models = Get.find<ModelController>();
       final inf = Get.find<InferenceService>();
-      final img = Get.find<LocalImageService>();
 
       final _ModelState state;
       if (settings.inferenceMode.value != 'local') {
@@ -271,8 +268,6 @@ class _ModelCard extends StatelessWidget {
         state = _ModelState.loading;
       } else if (inf.isModelLoaded.value) {
         state = _ModelState.readyText;
-      } else if (img.isModelLoaded.value) {
-        state = _ModelState.readyImage;
       } else if (models.downloadedCount == 0) {
         state = _ModelState.noModels;
       } else {
@@ -310,19 +305,11 @@ class _ModelCard extends StatelessWidget {
           meta = [
             'Ready',
             Get.isRegistered<ClusterService>()
-              ? Get.find<ClusterService>().splitSummary ??
-                  (inf.isGpuAccelerated.value ? 'GPU' : 'CPU')
-              : (inf.isGpuAccelerated.value ? 'GPU' : 'CPU'),
+                ? Get.find<ClusterService>().splitSummary ??
+                    (inf.isGpuAccelerated.value ? 'GPU' : 'CPU')
+                : (inf.isGpuAccelerated.value ? 'GPU' : 'CPU'),
             runtime,
           ].join(' · ');
-          dot = t.green;
-          action = _ActionChip(t: t, label: 'Switch', onTap: _openModels);
-        case _ModelState.readyImage:
-          final backend = img.currentBackend.value;
-          icon = Icons.image_outlined;
-          title = _prettyModel(img.loadedModelName.value);
-          meta =
-              'Ready · Image generation · ${backend == Backend.cpu ? 'CPU' : backend.displayName.split(' ').first}';
           dot = t.green;
           action = _ActionChip(t: t, label: 'Switch', onTap: _openModels);
         case _ModelState.noModels:
@@ -413,7 +400,9 @@ class _ModelCard extends StatelessWidget {
             ClipRRect(
               borderRadius: BorderRadius.circular(2),
               child: LinearProgressIndicator(
-                value: inf.modelLoadProgress.value > 0 ? inf.modelLoadProgress.value : null,
+                value: inf.modelLoadProgress.value > 0
+                    ? inf.modelLoadProgress.value
+                    : null,
                 minHeight: 3,
                 color: t.accent,
                 backgroundColor: t.hairline,
@@ -482,17 +471,6 @@ const _textStarters = [
       'Plan a relaxed 3-day trip to Tokyo with food and sightseeing.'),
 ];
 
-const _imageStarters = [
-  _Starter(Icons.landscape_outlined, 'A mountain lake at golden hour',
-      'Mountain lake at golden hour, wide shot, photorealistic'),
-  _Starter(Icons.person_outline_rounded, 'A portrait in soft studio light',
-      'Portrait of a person, soft studio lighting, 85mm, detailed'),
-  _Starter(Icons.brush_outlined, 'A flat editorial illustration',
-      'Flat editorial illustration of a city street, muted palette'),
-];
-
-/// Three tappable prompt pills. Sends right away when a model is ready;
-/// otherwise opens Models so the user can load one.
 class _Starters extends StatelessWidget {
   final _HomeTokens t;
   const _Starters({required this.t});
@@ -517,14 +495,10 @@ class _Starters extends StatelessWidget {
   Widget build(BuildContext context) {
     return Obx(() {
       final inf = Get.find<InferenceService>();
-      final img = Get.find<LocalImageService>();
       final isLocal =
           Get.find<SettingsController>().inferenceMode.value == 'local';
-      final imageMode =
-          isLocal && img.isModelLoaded.value && !inf.isModelLoaded.value;
-      final ready =
-          !isLocal || inf.isModelLoaded.value || img.isModelLoaded.value;
-      final items = imageMode ? _imageStarters : _textStarters;
+      final ready = !isLocal || inf.isModelLoaded.value;
+      const items = _textStarters;
 
       return Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
         for (final s in items)

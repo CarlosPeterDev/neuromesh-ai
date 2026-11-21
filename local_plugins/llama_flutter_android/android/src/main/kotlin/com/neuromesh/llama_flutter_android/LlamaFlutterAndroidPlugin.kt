@@ -264,15 +264,21 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
                 val imageIndex = request.messages.indexOfLast { !it.imagePath.isNullOrBlank() }
                 val imagePath = if (imageIndex >= 0) request.messages[imageIndex].imagePath else null
 
-                // Format the chat messages using the template manager
-                val formattedPrompt = ChatTemplateManager.formatMessages(
-                    request.messages.mapIndexed { i, msg ->
-                        val content = if (i == imageIndex) "$MEDIA_MARKER\n${msg.content}" else msg.content
-                        TemplateChatMessage(msg.role, content)
-                    },
-                    request.template,
-                    currentModelPath
-                )
+                val chatMessages = request.messages.mapIndexed { i, msg ->
+                    val content = if (i == imageIndex) "$MEDIA_MARKER\n${msg.content}" else msg.content
+                    TemplateChatMessage(msg.role, content)
+                }
+                val metadataMode = request.template?.startsWith("metadata-") == true
+                val formattedPrompt = if (metadataMode) {
+                    nativeFormatChat(chatMessages.map { it.role }.toTypedArray(),
+                        chatMessages.map { it.content }.toTypedArray(), request.template == "metadata-think")
+                        ?: ChatTemplateManager.formatMessages(chatMessages, null, currentModelPath)
+                } else ChatTemplateManager.formatMessages(chatMessages, request.template, currentModelPath)
+                // A template may prefill the opening delimiter. Surface that
+                // delimiter so the parser can distinguish actual generated reasoning.
+                if (metadataMode && formattedPrompt.trimEnd().endsWith("<think>")) {
+                    withContext(Dispatchers.Main) { flutterApi.onToken("<think>\n") { } }
+                }
 
                 if (imagePath != null) {
                     android.util.Log.i(TAG, "Image turn: message $imageIndex of ${request.messages.size}, " +
@@ -324,7 +330,12 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
     }
 
     override fun getSupportedTemplates(): List<String> {
-        return ChatTemplateManager.getSupportedTemplates()
+        val caps = if (isModelLoaded.get()) nativeChatCapabilities() else 0L
+        return ChatTemplateManager.getSupportedTemplates() + buildList {
+            if (caps and 1L != 0L) add("metadata-thinking-supported")
+            if (caps and 2L != 0L) add("metadata-tools-supported")
+            if (caps and 4L != 0L) add("metadata-chat-supported")
+        }
     }
 
     override fun isModelLoaded(): Boolean {
@@ -552,6 +563,8 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
 
     /** Returns null on success, otherwise why the vision file didn't load. */
     private external fun nativeLoadMmproj(path: String, nThreads: Long): String?
+    private external fun nativeFormatChat(roles: Array<String>, contents: Array<String>, thinking: Boolean): String?
+    private external fun nativeChatCapabilities(): Long
     private external fun nativeStop()
     private external fun nativeFreeModel()
     private external fun nativeGetTokensUsed(): Int

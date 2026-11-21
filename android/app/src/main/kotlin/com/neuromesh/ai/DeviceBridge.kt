@@ -69,6 +69,12 @@ class DeviceBridge(private val context: Context) {
                         call.argument<Int>("maxBytes") ?: MAX_READ
                     )
                 }
+                "sharedFileUri" -> background(result) {
+                    val file = resolve(call.argument<String>("uri")!!, call.argument<String>("path")!!)
+                        ?: throw IllegalArgumentException("File not found")
+                    check(file.exists()) { "File does not exist" }
+                    file.uri.toString()
+                }
                 "writeFile" -> background(result) {
                     writeFile(
                         call.argument<String>("uri")!!,
@@ -240,12 +246,15 @@ class DeviceBridge(private val context: Context) {
     }
 
     private fun resolve(treeUri: String, path: String, create: Boolean = false): DocumentFile? {
+        if (context.contentResolver.persistedUriPermissions.none {
+                it.uri == Uri.parse(treeUri) && it.isReadPermission
+            }) throw SecurityException("Folder access was revoked. Select it again in Shared Folder.")
         var cur = DocumentFile.fromTreeUri(context, Uri.parse(treeUri)) ?: return null
         val parts = path.split('/').filter { it.isNotEmpty() && it != "." }
         for ((i, part) in parts.withIndex()) {
             if (part == "..") throw IllegalArgumentException("'..' is not allowed")
             var next = cur.findFile(part)
-            if (next == null && create && i < parts.size - 1) next = cur.createDirectory(part)
+            if (next == null && create) next = cur.createDirectory(part)
             cur = next ?: return null
         }
         return cur
@@ -287,7 +296,7 @@ class DeviceBridge(private val context: Context) {
     private fun writeFile(uri: String, path: String, bytes: ByteArray, append: Boolean = false): Boolean {
         requireWriteGrant(uri)
         val clean = mutationPath(path)
-        val existing = resolve(uri, path, create = true)
+        val existing = resolve(uri, path)
         if (existing != null && !existing.isFile) {
             throw IllegalArgumentException("Not a file: $path")
         }
@@ -301,10 +310,27 @@ class DeviceBridge(private val context: Context) {
             val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
             parent.createFile(mime, name) ?: throw IllegalStateException("Could not create $name")
         }
+        val expected = java.security.MessageDigest.getInstance("SHA-256")
+        if (append) context.contentResolver.openInputStream(target.uri).use { input ->
+            checkNotNull(input) { "Cannot verify the existing file" }
+            val chunk = ByteArray(16384)
+            while (true) { val n = input.read(chunk); if (n < 0) break; expected.update(chunk, 0, n) }
+        }
+        expected.update(bytes)
         val mode = if (append) "wa" else "wt"
         context.contentResolver.openOutputStream(target.uri, mode).use { out ->
             if (out == null) throw IllegalStateException("Cannot write ${target.name}")
             out.write(bytes)
+            out.flush()
+        }
+        val actual = java.security.MessageDigest.getInstance("SHA-256")
+        context.contentResolver.openInputStream(target.uri).use { input ->
+            checkNotNull(input) { "The written file could not be reopened" }
+            val chunk = ByteArray(16384)
+            while (true) { val n = input.read(chunk); if (n < 0) break; actual.update(chunk, 0, n) }
+        }
+        check(target.exists() && expected.digest().contentEquals(actual.digest())) {
+            "The provider did not persist the expected file contents. The write may be partial."
         }
         return true
     }
@@ -342,6 +368,7 @@ class DeviceBridge(private val context: Context) {
             require(existing == null) { "That folder or file already exists." }
             val created = parent.createDirectory(parts.last())
                 ?: throw IllegalStateException("The provider could not create the folder.")
+            check(created.exists() && created.isDirectory) { "Folder creation could not be verified" }
             return parts.dropLast(1).plus(created.name ?: parts.last()).joinToString("/")
         }
         require(existing?.isFile == true) { "No file found at $path." }

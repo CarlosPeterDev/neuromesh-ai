@@ -183,84 +183,6 @@ void main() {
       expect(next.statusCode, 200, reason: 'server must not stay busy');
     });
   });
-
-  group('agent bridge', () {
-    late FakeInference fake;
-    const auth = {'Authorization': 'Bearer agent-test'};
-    const json = {...auth, 'Content-Type': 'application/json'};
-    const completion = '/v1/chat/completions';
-    const body = {
-      'model': OpenAiServerService.agentModelId,
-      'messages': [{'role': 'user', 'content': 'hello'}],
-    };
-
-    setUp(() async {
-      fake = Get.put<InferenceService>(FakeInference()) as FakeInference;
-      server = OpenAiServerService.forAgentModel(fake.loadedModelName.value);
-      await server.start(port: port, apiKey: 'agent-test');
-    });
-
-    tearDown(Get.reset);
-
-    test('requires a key, stays on loopback and exposes only model calls', () async {
-      final restricted = OpenAiServerService.forAgentModel('fake-model');
-      await expectLater(restricted.start(port: 0), throwsArgumentError);
-      await expectLater(restricted.start(port: 0, allowNetwork: true, apiKey: 'another'),
-          throwsArgumentError);
-      expect(server.localUrl, 'http://127.0.0.1:$port');
-      expect((await send('GET', '/v1/models')).statusCode, 401);
-      expect((await send('GET', '/v1/files', headers: auth)).statusCode, 404);
-      expect((await send('OPTIONS', completion, headers: auth)).statusCode, 404);
-      final request = await client.getUrl(Uri.parse('${server.localUrl}/v1/models'));
-      auth.forEach(request.headers.set);
-      final response = await request.close();
-      expect(response.headers.value('access-control-allow-origin'), isNull);
-      final models = jsonDecode(await response.transform(utf8.decoder).join());
-      expect(models['data'].single, containsPair('tool_calling', false));
-      expect(models['data'].single, containsPair('id', OpenAiServerService.agentModelId));
-    });
-
-    test('rejects tools, wrong model IDs and a reloaded model of the same name', () async {
-      for (final payload in [
-        {...body, 'tools': [{'type': 'function'}]},
-        {...body, 'model': 'another-model'},
-      ]) {
-        expect((await send('POST', completion, headers: json,
-            body: jsonEncode(payload))).statusCode, 400);
-      }
-      fake.modelRevision++;
-      expect((await send('POST', completion, headers: json,
-          body: jsonEncode(body))).statusCode, 409);
-      expect(fake.isGenerating.value, isFalse);
-    });
-
-    test('streams an OpenAI finish chunk before DONE', () async {
-      final request = await client.postUrl(Uri.parse('${server.localUrl}$completion'));
-      json.forEach(request.headers.set);
-      request.write(jsonEncode({...body, 'stream': true}));
-      final response = await request.close();
-      expect(response.statusCode, 200);
-      final data = await response.transform(utf8.decoder).join();
-      expect(data, contains('"delta":{"role":"assistant"}'));
-      expect(data, contains('"delta":{"content":"t0 "}'));
-      expect(data, endsWith('"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'));
-    });
-
-    test('disconnect stops an active bridge generation and revokes access', () async {
-      fake.tokensToEmit = 500;
-      final uri = Uri.parse('${server.localUrl}$completion');
-      final request = await client.postUrl(uri);
-      json.forEach(request.headers.set);
-      request.write(jsonEncode({...body, 'stream': true}));
-      final response = await request.close();
-      final drain = response.drain<void>();
-      expect(fake.isGenerating.value, isTrue);
-      await server.stop();
-      await drain;
-      expect(fake.stops, 1);
-      await expectLater(client.postUrl(uri), throwsA(isA<SocketException>()));
-    });
-  });
 }
 
 /// Minimal stand-in for InferenceService: tokens are emitted on a timer until
@@ -272,8 +194,6 @@ class FakeInference extends GetxService implements InferenceService {
   final isGenerating = false.obs;
   @override
   final loadedModelName = 'fake-model'.obs;
-  @override
-  int modelRevision = 1;
   @override
   final generationSource = ''.obs;
   @override

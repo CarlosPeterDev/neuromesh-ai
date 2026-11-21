@@ -50,8 +50,6 @@ class AppConstants {
   /// still set on the next load means the GPU crashed the app.
   static const String keyGgufGpuPending = 'gguf_gpu_pending';
   static const String keyStopSequences = 'stop_sequences';
-  static const String keyImageModelPath = 'image_model_path';
-  static const String keyImageModelName = 'image_model_name';
   static const String keyTemperature = 'temperature';
   static const String keyMaxTokens = 'max_tokens';
   static const String keyContextSize = 'context_size';
@@ -68,25 +66,13 @@ class AppConstants {
   static const String keyServerAllowNetwork = 'server_allow_network';
   static const String keyClusterEnabled = 'cluster_enabled';
   static const String keyClusterWorkers = 'cluster_workers';
-  static const String keyImageSteps = 'image_steps';
-  static const String keyImageGenForceCpu = 'image_gen_force_cpu';
-  static const String keyImageGenBackend = 'image_gen_backend';
-  static const String keyImageGenGpuGuardMb = 'image_gen_gpu_guard_mb';
-  static const String keyImageGenSize = 'image_gen_size';
-  static const String keyImageGenQuantization = 'image_gen_quantization';
   static const String keyFontScale = 'font_scale';
-  static const String keyBatchModeWarningAccepted =
-      'batch_mode_warning_accepted';
 
   // Default Model Config
   static const double defaultTemperature = 0.7;
   static const int defaultMaxTokens = 1024;
   static const int defaultContextSize = 2048;
   static const String defaultLiteRtPerformanceMode = 'auto_fast';
-  static const int defaultImageSteps = 1;
-  static const bool defaultImageGenForceCpu = true;
-  static const int defaultImageGenGpuGuardMb = 1843; // 1.8 GB
-  static const int defaultImageGenSize = 0; // 0 = Auto recommended
   static const double defaultFontScale =
       0.95; // 4th slider stop, "Small" default
 

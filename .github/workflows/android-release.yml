@@ -33,6 +33,17 @@ env:
   ANDROID_VERSION_CODE_BASE: 5000   # Exceed legacy split-ABI APK version codes (including 4072)
 
 jobs:
+  native-thinking:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify real GGUF thinking modes on the host
+        run: |
+          curl -fL --retry 3 https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf -o "$RUNNER_TEMP/qwen.gguf"
+          echo "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031  $RUNNER_TEMP/qwen.gguf" | sha256sum -c -
+          scripts/check_model_thinking.sh "$RUNNER_TEMP/qwen.gguf"
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -513,23 +524,6 @@ jobs:
           CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
         run: flutter build windows --release "--dart-define-from-file=$env:RUNNER_TEMP/neuromesh-report-defines.json" --build-name=${{ env.RELEASE_VERSION }} --build-number=${{ github.run_number }}
 
-      - name: Build and install the desktop image runtime
-        shell: bash
-        run: |
-          set -e
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            bundle="$PWD/build/windows/x64/runner/Release"
-            library=neuromesh_sd.dll
-          else
-            bundle="$PWD/build/linux/x64/release/bundle"
-            library=libneuromesh_sd.so
-          fi
-          cmake -S local_plugins/sd_flutter_android/desktop -B build/desktop-image -DCMAKE_BUILD_TYPE=Release
-          cmake --build build/desktop-image --config Release --parallel 2
-          ctest --test-dir build/desktop-image -C Release --output-on-failure
-          cmake --install build/desktop-image --config Release --prefix "$bundle"
-          test -s "$bundle/native/$library"
-
       - name: Bundle llama-server and package (Linux)
         if: runner.os == 'Linux'
         env:
@@ -584,7 +578,7 @@ jobs:
 
   publish:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
-    needs: [build, desktop]
+    needs: [build, desktop, native-thinking]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

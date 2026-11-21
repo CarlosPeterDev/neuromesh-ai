@@ -17,9 +17,7 @@ import 'package:neuromesh_ai/services/agent_service.dart';
 import 'package:neuromesh_ai/services/app_log_service.dart';
 import 'package:neuromesh_ai/services/cloud_service.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
-import 'package:neuromesh_ai/services/image_generation_notification_service.dart';
 import 'package:neuromesh_ai/services/inference_service.dart';
-import 'package:neuromesh_ai/services/local_image_service.dart';
 import 'package:neuromesh_ai/services/web_search_service.dart';
 import 'package:neuromesh_ai/utils/web_search_parse.dart';
 
@@ -41,8 +39,6 @@ void main() {
     local = _TestNarrationInference();
     Get.put<InferenceService>(local);
     Get.put(AppLogService());
-    Get.put(ImageGenerationNotificationService());
-    Get.put(LocalImageService());
     cloud = Get.put<CloudService>(_TestCloud()) as _TestCloud;
     agent = Get.put<AgentService>(_WorkspaceAgent()) as _WorkspaceAgent;
     chat = Get.put(ChatController());
@@ -63,99 +59,36 @@ void main() {
     chat.textController.text = 'Read this';
   }
 
-  test('explicit image generation works without an active chat model',
-      () async {
-    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+  test('image words reach the model without executing an image tool', () async {
+    cloud.answer = 'Which style would you prefer?';
     chat.textController.text = 'Create an image of a fox';
     await chat.sendMessage();
-    expect(agent.imageCall?.arguments['prompt'], 'Create an image of a fox');
-    expect(agent.directImageRequest, isTrue);
-    expect(chat.messages.last.content, contains('Generated online'));
-    expect(cloud.calls, 0);
-  });
-
-  test('vague image requests ask once and use the reply as the description',
-      () async {
-    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
-    chat.textController.text = 'Create an image';
-    await chat.sendMessage();
-    expect(agent.imageCall, isNull);
-    expect(chat.messages.last.content, contains('what should it show'));
-    chat.textController.text = 'A fox in a snowy forest';
-    await chat.sendMessage();
-    expect(agent.imageCall?.arguments['prompt'], 'A fox in a snowy forest');
-  });
-
-  test('an edit routes the attached image to the editor', () async {
-    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
-    chat.selectedImageBase64.value = 'cGljdHVyZQ==';
-    chat.textController.text = 'Replace the background with a beach';
-    await chat.sendMessage();
-    expect(agent.imageCall?.name, 'edit_image');
-    expect(agent.imageCall?.arguments['attachedImage'], 'cGljdHVyZQ==');
-  });
-
-  test('chat refines prompts using the selected language model', () async {
-    cloud.answer =
-        '{"prompt":"A fox in a snowy forest, soft watercolor","question":"","style":"illustration"}';
-    chat.textController.text = 'Create an image of a fox';
-    await chat.sendMessage();
-    expect(agent.imageCall?.arguments['prompt'],
-        'A fox in a snowy forest, soft watercolor');
-    expect(agent.imageCall?.arguments['style'], 'illustration');
-  });
-
-  test('local writing goes directly to TTS without creating a text file',
-      () async {
-    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
-    agent.mode.value = AgentChatMode.always;
-    local.answer = 'Playing sports builds fitness and teaches teamwork.';
-    for (final request in [
-      'Write a paragraph about the importance of sports then use the tts tool to convert it to audio file',
-      'A paragraph you write about sports and be in audio file',
-      'Create audio file talk about the importance of sports',
-    ]) {
-      chat.textController.text = request;
-      await chat.sendMessage();
-      expect(local.lastPrompt, contains('Return only the finished text'));
-      expect(local.lastPrompt, isNot(contains('audio file')));
-      expect(local.lastSystem, isNot(contains('<tool_call>')));
-      expect(agent.narration?.arguments['text'], local.answer);
-      expect(chat.messages.last.content, contains('nmfile:research.wav'));
-      expect(chat.messages.last.content, isNot(contains('notes.txt')));
-    }
-    expect(local.calls, 3);
-    expect(cloud.calls, 0);
-  });
-
-  test('TTS follow-up narrates the last reply without using a file converter',
-      () async {
-    cloud.answer = 'Sports help people stay active and build teamwork.';
-    chat.textController.text = 'Write a short introduction about sports';
-    await chat.sendMessage();
-    chat.textController.text = 'Use the tts tool to convert it to tts';
-    await chat.sendMessage();
-
     expect(cloud.calls, 1);
-    expect(agent.narration?.arguments['text'], cloud.answer);
-    expect(chat.messages.last.content, contains('nmfile:research.wav'));
-    expect(chat.messages.last.content, isNot(contains('convert_file')));
+    expect(cloud.lastInput, contains('Create an image of a fox'));
+    expect(agent.imageCall, isNull);
   });
 
-  test('web research writes a paragraph, then narrates exactly that paragraph',
-      () async {
-    Get.put<WebSearchService>(_TestWeb());
-    cloud.answer =
-        'Sport improves fitness and brings communities together [1].';
-    chat.textController.text =
-        'OK now search for the importance of sport in modern society '
-        'then write a paragraph then create an audio file that reads it';
+  test('indirect image request executes only a model-selected tool', () async {
+    cloud.answers.addAll([
+      '<tool_call>{"name":"generate_image","arguments":{"prompt":"A fox in watercolor"}}</tool_call>',
+      'Here is the image.',
+    ]);
+    chat.textController.text = 'A watercolor fox would help illustrate this.';
     await chat.sendMessage();
-    expect(cloud.lastInput, contains('Write one plain-language paragraph'));
-    expect(agent.narration?.arguments['text'],
-        'Sport improves fitness and brings communities together.');
-    expect(chat.messages.last.content, contains('nmfile:research.wav'));
-    expect(chat.messages.last.content, contains('Sources:'));
+    expect(cloud.calls, 2);
+    expect(agent.imageCall?.arguments['prompt'], 'A fox in watercolor');
+    expect(agent.directImageRequest, isFalse);
+  });
+
+  test('audio words do not execute TTS before inference', () async {
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    local.answer = 'What should the audio say?';
+    chat.textController.text =
+        'Create audio file that says hello Carlos using tts tool';
+    await chat.sendMessage();
+    expect(local.calls, 1);
+    expect(local.lastPrompt, contains('audio file'));
+    expect(agent.narration, isNull);
   });
 
   test('a second send during attachment import cannot duplicate the request',
@@ -255,24 +188,13 @@ void main() {
         chat.messages.last.content, contains('couldn’t read "missing.html"'));
   });
 
-  test(
-      'an explicit search retry reuses the original topic and refreshes sources',
-      () async {
+  test('question words never launch automatic web research', () async {
     final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
-    const first = 'What is the strongest AI model today for coding?';
-    chat.textController.text = first;
+    chat.textController.text = 'What is the strongest AI model today?';
     await chat.sendMessage();
     expect(cloud.calls, 1);
-    expect(cloud.lastInput, contains('Published benchmark results'));
-    chat.textController.text = 'Please search because this is old';
-    await chat.sendMessage();
-
-    expect(web.previous, first);
-    expect(web.refreshed, isTrue);
-    expect(cloud.lastInput, contains('Research question:'));
-    expect(cloud.lastInput, contains('Published benchmark results'));
-    expect(
-        chat.messages.last.content, contains('https://example.com/benchmark'));
+    expect(web.previous, isNull);
+    expect(cloud.lastInput, contains('What is the strongest'));
   });
 
   test('voice messages and attachments remain in the originating chat',
@@ -363,8 +285,7 @@ class _WorkspaceAgent extends AgentService {
       narration = call;
       return 'Saved research.wav. Show it with [Audio](nmfile:research.wav).';
     }
-    return super.executeTool(call, confirm,
-        userRequestedOnlineImage: userRequestedOnlineImage);
+    return super.executeTool(call, confirm);
   }
 
   @override
@@ -404,6 +325,15 @@ class _TestCloud extends CloudService {
   int calls = 0;
   String? lastInput;
   String answer = 'Reply';
+  final answers = <String>[];
+  @override
+  Future<String> sendAgentMessage(
+          {required List<Map<String, String>> messages,
+          required List<Map<String, dynamic>> tools,
+          String? imageBase64,
+          void Function(String)? onToken}) =>
+      sendMessage(
+          messages: messages, imageBase64: imageBase64, onToken: onToken);
 
   @override
   Future<String> sendMessage({
@@ -415,7 +345,7 @@ class _TestCloud extends CloudService {
   }) async {
     calls++;
     lastInput = messages.last['content'];
-    return answer;
+    return answers.isEmpty ? answer : answers.removeAt(0);
   }
 }
 

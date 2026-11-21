@@ -15,6 +15,8 @@ class LoadResult {
   final int gpuLayers;
   final String runtime;
   final String backend;
+  final bool supportsThinking;
+  final bool supportsToolSchema;
   LoadResult({
     required this.success,
     required this.message,
@@ -22,6 +24,8 @@ class LoadResult {
     this.gpuLayers = 0,
     this.runtime = '',
     this.backend = '',
+    this.supportsThinking = false,
+    this.supportsToolSchema = false,
   });
 }
 

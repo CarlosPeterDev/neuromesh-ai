@@ -20,13 +20,11 @@ dependencies:
 
   # Local AI Inference (Android)
   llama_flutter_android: ^0.2.0
-  sd_flutter_android:
-    path: local_plugins/sd_flutter_android
 
   # FFI for native library interop
   ffi: ^2.1.2
 
-  # Web interop (used by local_image_service_web.dart)
+  # Web interop
   web: ^1.1.1
 
   # Networking
@@ -86,6 +84,8 @@ dependencies:
   flutter_math_fork: ^0.7.4
 
 dev_dependencies:
+  integration_test:
+    sdk: flutter
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
@@ -99,5 +99,4 @@ flutter:
 
   assets:
     - assets/
-    - assets/webgpu_engine.html
     - assets/icons/

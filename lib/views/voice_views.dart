@@ -1080,13 +1080,10 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       } else {
         Future<ToolLoopResult> runAgentLoop() => agent.runToolLoop(
               generate: gen,
-              allowDirectActions:
-                  skillContext == null || skillContext.documents.isEmpty,
               prompt: message,
               history: List.of(_history),
               confirm: confirmToolCall,
               userText: heard,
-              researchQuestion: agent.needsResearch(heard) ? heard : null,
               cancelled: () => _ended || _interrupted,
               onVisible: (v) => feed(v),
               onTrace: (trace) {
