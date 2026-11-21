@@ -11,6 +11,10 @@ on:
         description: Build and verify a development-signed Play AAB artifact
         type: boolean
         default: false
+      preview_only:
+        description: Test Android and desktop packages with development signing and upload them to Actions
+        type: boolean
+        default: false
 
 # Serialize runs by ref so releases cannot move the latest tag concurrently.
 concurrency:
@@ -21,10 +25,10 @@ permissions:
   contents: read
 
 env:
-  NEUROMESH_REPORT_ENDPOINT: ${{ !inputs.play_bundle_only && vars.NEUROMESH_REPORT_ENDPOINT || '' }}
-  NEUROMESH_REPORT_BOT_TOKEN: ${{ !inputs.play_bundle_only && secrets.NEUROMESH_REPORT_BOT_TOKEN || '' }}
-  NEUROMESH_REPORT_CHAT_ID: ${{ !inputs.play_bundle_only && secrets.NEUROMESH_REPORT_CHAT_ID || '' }}
-  REQUIRE_DEVELOPER_REPORT_DELIVERY: ${{ !inputs.play_bundle_only && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
+  NEUROMESH_REPORT_ENDPOINT: ${{ !inputs.preview_only && !inputs.play_bundle_only && vars.NEUROMESH_REPORT_ENDPOINT || '' }}
+  NEUROMESH_REPORT_BOT_TOKEN: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.NEUROMESH_REPORT_BOT_TOKEN || '' }}
+  NEUROMESH_REPORT_CHAT_ID: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.NEUROMESH_REPORT_CHAT_ID || '' }}
+  REQUIRE_DEVELOPER_REPORT_DELIVERY: ${{ !inputs.preview_only && !inputs.play_bundle_only && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
   BASE_VERSION: "1.0"   # MAJOR.MINOR; patch comes from the CI run number
   ANDROID_VERSION_CODE_BASE: 5000   # Exceed legacy split-ABI APK version codes (including 4072)
 
@@ -75,10 +79,10 @@ jobs:
       - name: Prepare signing
         id: sign
         env:
-          KS_B64: ${{ !inputs.play_bundle_only && secrets.ANDROID_KEYSTORE_BASE64 || '' }}
-          KS_PASS: ${{ !inputs.play_bundle_only && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
-          KEY_ALIAS: ${{ !inputs.play_bundle_only && secrets.ANDROID_KEY_ALIAS || '' }}
-          KEY_PASS: ${{ !inputs.play_bundle_only && secrets.ANDROID_KEY_PASSWORD || '' }}
+          KS_B64: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.ANDROID_KEYSTORE_BASE64 || '' }}
+          KS_PASS: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
+          KEY_ALIAS: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.ANDROID_KEY_ALIAS || '' }}
+          KEY_PASS: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.ANDROID_KEY_PASSWORD || '' }}
         run: |
           if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
             echo "$KS_B64" | base64 -d > android/release.jks
@@ -237,11 +241,11 @@ jobs:
         id: standalone_sign
         if: github.event_name != 'pull_request' && !inputs.play_bundle_only
         env:
-          UPDATE_KEYSTORE: ${{ secrets.ANDROID_UPDATE_KEYSTORE_BASE64 }}
-          UPDATE_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEYSTORE_PASSWORD }}
-          UPDATE_ALIAS: ${{ secrets.ANDROID_UPDATE_KEY_ALIAS }}
-          UPDATE_KEY_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEY_PASSWORD }}
-          UPDATE_CERT: ${{ vars.ANDROID_UPDATE_CERT_SHA256 }}
+          UPDATE_KEYSTORE: ${{ !inputs.preview_only && secrets.ANDROID_UPDATE_KEYSTORE_BASE64 || '' }}
+          UPDATE_PASSWORD: ${{ !inputs.preview_only && secrets.ANDROID_UPDATE_KEYSTORE_PASSWORD || '' }}
+          UPDATE_ALIAS: ${{ !inputs.preview_only && secrets.ANDROID_UPDATE_KEY_ALIAS || '' }}
+          UPDATE_KEY_PASSWORD: ${{ !inputs.preview_only && secrets.ANDROID_UPDATE_KEY_PASSWORD || '' }}
+          UPDATE_CERT: ${{ !inputs.preview_only && vars.ANDROID_UPDATE_CERT_SHA256 || '' }}
         run: |
           set -euo pipefail
           if [ -n "$UPDATE_KEYSTORE$UPDATE_PASSWORD$UPDATE_ALIAS$UPDATE_KEY_PASSWORD$UPDATE_CERT" ]; then
@@ -268,7 +272,7 @@ jobs:
         if: github.event_name != 'pull_request' && !inputs.play_bundle_only
         env:
           NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING: ${{ steps.standalone_sign.outputs.channel == 'preview' && 'true' || 'false' }}
-          UPDATE_CERT: ${{ vars.ANDROID_UPDATE_CERT_SHA256 }}
+          UPDATE_CERT: ${{ !inputs.preview_only && vars.ANDROID_UPDATE_CERT_SHA256 || '' }}
         run: |
           set -euo pipefail
           git show HEAD:android/app/src/main/AndroidManifest.xml > android/app/src/main/AndroidManifest.xml
@@ -322,7 +326,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Android 12 clean install and upgrade smoke test
-        if: github.event_name != 'pull_request' && !inputs.play_bundle_only
+        if: github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 31
@@ -334,6 +338,56 @@ jobs:
             adb install "$RUNNER_TEMP/universal.apk"
             adb shell pm path com.neuromesh.ai | grep -F 'package:'
             adb install -r "$RUNNER_TEMP/universal.apk"
+
+      - name: Android preview launch and Play split smoke test
+        if: inputs.preview_only && !inputs.play_bundle_only
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: bash scripts/smoke_android_packages.sh
+
+      - name: Preview Android checksums
+        if: inputs.preview_only && !inputs.play_bundle_only
+        run: |
+          cd dist
+          sha256sum -- *.apk *.aab > SHA256SUMS.txt
+          sha256sum --check --strict SHA256SUMS.txt
+
+      - name: Upload ARM64 preview APK
+        if: inputs.preview_only && !inputs.play_bundle_only
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-apk
+          path: dist/*-arm64-dev.apk
+          if-no-files-found: error
+
+      - name: Upload universal preview APK
+        if: inputs.preview_only && !inputs.play_bundle_only
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-universal-apk
+          path: dist/*-universal-dev.apk
+          if-no-files-found: error
+
+      - name: Upload preview Play AAB
+        if: inputs.preview_only && !inputs.play_bundle_only
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-play-aab
+          path: dist/*-dev.aab
+          if-no-files-found: error
+
+      - name: Upload preview Android checksums
+        if: inputs.preview_only && !inputs.play_bundle_only
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-checksums
+          path: dist/SHA256SUMS.txt
+          if-no-files-found: error
 
       - name: Upload verified Play bundle
         if: inputs.play_bundle_only
@@ -355,7 +409,7 @@ jobs:
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
-        if: github.event_name != 'pull_request' && !inputs.play_bundle_only
+        if: github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
         with:
           name: neuromesh-ai-${{ steps.ver.outputs.name }}
           path: dist/*
@@ -508,7 +562,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.event_name != 'pull_request' && !inputs.play_bundle_only
+    if: github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
     needs: [build, desktop]
     runs-on: ubuntu-latest
     timeout-minutes: 30
