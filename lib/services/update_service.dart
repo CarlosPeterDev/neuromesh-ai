@@ -134,16 +134,13 @@ class UpdateService extends GetxService with WidgetsBindingObserver {
       if (currentVersion.value.isEmpty) {
         currentVersion.value = (await PackageInfo.fromPlatform()).version;
       }
-      final res = await http.get(
-        Uri.parse(
-            'https://api.github.com/repos/${AppConstants.githubRepo}/releases/tags/latest'),
-        headers: const {'Accept': 'application/vnd.github+json'},
-      ).timeout(const Duration(seconds: 15));
-      if (res.statusCode != 200) {
-        throw HttpException('GitHub returned ${res.statusCode}');
+      final client = http.Client();
+      late final AppRelease release;
+      try {
+        release = await fetchLatestRelease(client, abi: _abiTag());
+      } finally {
+        client.close();
       }
-      final release = parseRelease(jsonDecode(res.body) as Map<String, dynamic>,
-          abi: _abiTag());
       final now = DateTime.now();
       lastCheck.value = now;
       await _hive.setSetting(
@@ -183,6 +180,26 @@ class UpdateService extends GetxService with WidgetsBindingObserver {
       }
       return null;
     }
+  }
+
+  static Future<AppRelease> fetchLatestRelease(http.Client client,
+      {required String abi}) async {
+    const base =
+        'https://api.github.com/repos/${AppConstants.githubRepo}/releases';
+    const headers = {'Accept': 'application/vnd.github+json'};
+    Future<http.Response> fetch(String suffix) => client
+        .get(Uri.parse('$base/$suffix'), headers: headers)
+        .timeout(const Duration(seconds: 15));
+
+    var response = await fetch('latest');
+    if (response.statusCode == 404) {
+      response = await fetch('tags/latest');
+    }
+    if (response.statusCode != 200) {
+      throw HttpException('GitHub returned ${response.statusCode}');
+    }
+    return parseRelease(jsonDecode(response.body) as Map<String, dynamic>,
+        abi: abi);
   }
 
   static AppRelease parseRelease(Map<String, dynamic> json,

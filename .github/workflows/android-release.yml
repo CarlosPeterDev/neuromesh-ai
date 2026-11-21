@@ -16,7 +16,7 @@ on:
         type: boolean
         default: false
 
-# Serialize runs by ref so releases cannot move the latest tag concurrently.
+# Serialize main release builds so publication and Latest selection agree.
 concurrency:
   group: android-release-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -562,7 +562,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
     needs: [build, desktop]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -577,6 +577,8 @@ jobs:
       AAB_MB: ${{ needs.build.outputs.aab_mb }}
       SPLIT_MB: ${{ needs.build.outputs.split_mb }}
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           pattern: neuromesh-ai-*
@@ -616,78 +618,5 @@ jobs:
           sha256sum -- *.apk *.aab *.exe *.deb *.AppImage > SHA256SUMS.txt
           sha256sum --check SHA256SUMS.txt
 
-      - name: Publish GitHub releases
-        if: github.ref == 'refs/heads/main'
-        run: |
-          set -euo pipefail
-          signing_label="production-signed"
-          version_flags=(--latest)
-          channel_flags=(--latest=false)
-          replace_channel=true
-          channel_exists=false
-          if existing=$(gh release view latest --json name,isDraft --jq '[.isDraft, .name] | @tsv'); then
-            channel_exists=true
-            IFS=$'\t' read -r draft title <<< "$existing"
-            if [[ "$title" =~ \(v([0-9]+\.[0-9]+\.[0-9]+)\)$ ]]; then
-              channel_version="${BASH_REMATCH[1]}"
-              newest=$(printf '%s\n' "$VERSION" "$channel_version" | sort -V | tail -1)
-              if [[ "$newest" != "$VERSION" ]]; then
-                replace_channel=false
-                version_flags=(--latest=false)
-              elif [[ "$channel_version" == "$VERSION" && "$draft" == "false" ]]; then
-                replace_channel=false
-              fi
-            fi
-          fi
-          if [[ "$PRODUCTION_SIGNED" != "true" ]]; then
-            signing_label="DEVELOPMENT-signed (not production-ready)"
-            version_flags=(--prerelease --latest=false)
-            channel_flags+=(--prerelease)
-          fi
-
-          cat > release-notes.txt <<EOF
-          NeuroMesh AI v$VERSION
-          - Build date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-          - Commit: $GITHUB_SHA
-          - Android signing: $signing_label
-          - GitHub APK signing channel: $STANDALONE_CHANNEL
-          - Android APK signer SHA-256: $APK_SIGNER
-          - Play AAB: $AAB_MB MB file (must be under 200 MB), $SPLIT_MB MB download on an arm64 phone after Play splitting
-          - Verify any installer using SHA256SUMS.txt.
-          EOF
-
-          tag="v$VERSION"
-          asset_dir=dist
-          if existing=$(gh release view "$tag" --json isDraft,targetCommitish --jq '[.isDraft, .targetCommitish] | @tsv'); then
-            IFS=$'\t' read -r draft target <<< "$existing"
-            if [[ "$target" != "$GITHUB_SHA" ]]; then
-              echo "::error::Existing $tag release targets $target, expected $GITHUB_SHA"
-              exit 1
-            fi
-            if [[ "$draft" == "true" ]]; then
-              gh release upload "$tag" dist/* --clobber
-              gh release edit "$tag" --draft=false --notes-file release-notes.txt "${version_flags[@]}"
-            elif [[ "$replace_channel" == "true" ]]; then
-              # Use the published bytes on reruns, including the original APK signer.
-              asset_dir=published
-              patterns=()
-              for asset in dist/*; do
-                patterns+=(--pattern "${asset##*/}")
-              done
-              gh release download "$tag" --dir "$asset_dir" "${patterns[@]}"
-              (cd "$asset_dir" && sha256sum --check --strict SHA256SUMS.txt)
-              gh release view "$tag" --json body --jq '.body' > release-notes.txt
-            fi
-          else
-            gh release create "$tag" dist/* --target "$GITHUB_SHA" \
-              --title "NeuroMesh AI v$VERSION" --notes-file release-notes.txt "${version_flags[@]}"
-          fi
-
-          if [[ "$replace_channel" == "false" ]]; then
-            exit 0
-          fi
-          if [[ "$channel_exists" == "true" ]]; then
-            gh release delete latest --cleanup-tag --yes
-          fi
-          gh release create latest "$asset_dir"/* --target "$GITHUB_SHA" \
-            --title "NeuroMesh AI latest (v$VERSION)" --notes-file release-notes.txt "${channel_flags[@]}"
+      - name: Publish and verify the versioned GitHub Release
+        run: bash scripts/publish_github_release.sh
