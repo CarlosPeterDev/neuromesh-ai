@@ -21,14 +21,14 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
-        android:label="NeuroMesh AI"
+        android:label="${neuromeshAppLabel}"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:largeHeap="true"
         android:extractNativeLibs="true">
         <activity
-            android:name=".MainActivity"
+            android:name="com.neuromesh.ai.MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:taskAffinity=""
@@ -62,10 +62,10 @@
             tools:replace="android:exported,android:foregroundServiceType" />
 
         <service
-            android:name=".QuickTileService"
+            android:name="com.neuromesh.ai.QuickTileService"
             android:exported="true"
             android:icon="@drawable/ic_tile"
-            android:label="NeuroMesh AI"
+            android:label="${neuromeshAppLabel}"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
@@ -73,7 +73,7 @@
         </service>
 
         <receiver
-            android:name=".QuickWidget"
+            android:name="com.neuromesh.ai.QuickWidget"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -85,7 +85,7 @@
 
         <!-- Boot receiver to restart after reboot -->
         <receiver
-            android:name=".BootReceiver"
+            android:name="com.neuromesh.ai.BootReceiver"
             android:enabled="true"
             android:exported="true">
             <intent-filter>

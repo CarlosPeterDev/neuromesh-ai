@@ -23,6 +23,10 @@ The combined v1.0.150 Actions run passed. Windows and Linux produced native pack
 
 Every push to `main` starts the Android, Linux, and Windows release workflow. The publish job verifies the build outputs and SHA-256 digests, then publishes one versioned GitHub Release with individual installer downloads. GitHub marks the newest eligible version **Latest**, and the Android updater uses GitHub’s Latest release endpoint with a fallback for the historical channel. Development-signed packages carry a development label and the `-dev` filename suffix. [Latest release](https://github.com/CarlosPeterDev/neuromesh-ai/releases/latest)
 
+## Persistent Android test APKs
+
+The standard v1.0.139 and v1.0.155 APKs had different temporary signers. CI now uses a stable public test certificate for GitHub APKs when a private signer is unavailable. These APKs install as **NeuroMesh AI Test** with a separate package ID. The Play AAB keeps the normal application ID and its own signer. Two independent imports of the public fixture produced the same signing fingerprint. Android CI verifies both package IDs and upgrades a lower-version signed fixture on the emulator before installing the Play-generated splits alongside Test. [Signing and migration](SECURITY.md#public-test-apks) · [Tracking issue](https://github.com/CarlosPeterDev/neuromesh-ai/issues/58)
+
 ## Release and verification
 
 - **v1.0.139** was published from `b97a515d23a8d18ca2ad7dc0c2b3192038960398`. It includes tool discovery, Android shared-folder access, clickable replies, the narration fixes, and local Kitten and Kokoro synthesis. The Android 12 emulator passed installation and reinstallation. All six installers match the checksums on both release pages. The GitHub APKs use a temporary preview signer. [Release](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/tag/v1.0.139) · [ARM64 APK](https://github.com/carlospeter582011-prog/neuromesh-ai/releases/download/v1.0.139/NeuroMesh-AI-v1.0.139-arm64-dev.apk) · [Build and publication](https://github.com/carlospeter582011-prog/neuromesh-ai/actions/runs/44796547105)
@@ -62,7 +66,7 @@ flutter test
 python -m unittest discover -s scripts -p 'test_report_build_config.py'
 ```
 
-Full release packaging also needs the dependencies in the GitHub workflow. Linux packaging uses Ubuntu 24.04. The release uses version name `1.0.<run_number>` and Android version code `5000 + run_number`. The Play AAB uses `PLAY_BUILD=true`. Standalone APKs use `PLAY_BUILD=false` and can check for GitHub updates. Alpine downloads on supported ARM64 devices. GitHub APKs support a persistent signer. The preview pipeline uses a temporary key when signing credentials are unavailable. Follow [release signing](SECURITY.md#release-signing) and [Play Store preparation](docs/PLAY_STORE.md).
+Full release packaging also needs the dependencies in the GitHub workflow. Linux packaging uses Ubuntu 24.04. The release uses version name `1.0.<run_number>` and Android version code `5000 + run_number`. The Play AAB uses `PLAY_BUILD=true`. Standalone APKs use `PLAY_BUILD=false` and can check for GitHub updates. Alpine downloads on supported ARM64 devices. GitHub APKs support a persistent signer. The Play bundle preview uses a temporary upload key when signing credentials are unavailable. The standalone Test APK uses the persistent public test certificate. Follow [release signing](SECURITY.md#release-signing) and [Play Store preparation](docs/PLAY_STORE.md).
 
 ## Changes in v1.0.113
 

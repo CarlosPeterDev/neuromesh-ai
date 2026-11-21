@@ -5,7 +5,7 @@ tag="v$VERSION"
 title="NeuroMesh AI $tag"
 signing_label="Production-signed"
 if [[ "$PRODUCTION_SIGNED" != "true" ]]; then
-    signing_label="Development-signed Android packages for testing"
+    signing_label="Development-signed for testing"
     title="$title (Development build)"
 fi
 
@@ -15,12 +15,19 @@ notes="$scratch/release-notes.txt"
 cat > "$notes" <<NOTES
 NeuroMesh AI $tag
 - Commit: $GITHUB_SHA
-- Android signing: $signing_label
+- Play AAB signing: $signing_label
 - GitHub APK signing channel: $STANDALONE_CHANNEL
 - Android APK signer SHA-256: $APK_SIGNER
 - Play AAB: $AAB_MB MB file, $SPLIT_MB MB ARM64 split download
 - Download each installer separately and verify it using SHA256SUMS.txt.
 NOTES
+if [[ "$STANDALONE_CHANNEL" == "public-test" ]]; then
+    cat >> "$notes" <<'NOTES'
+- The GitHub APK installs as **NeuroMesh AI Test**. Future APKs in this test channel use the same public test certificate.
+- Existing NeuroMesh installations can stay on the device. Export a backup from the old app and restore it in the Test app to bring over chats and settings.
+- The public test key is intended for disposable testing. Install these APKs from this release page.
+NOTES
+fi
 
 latest_route="repos/$GH_REPO/releases/latest"
 if ! latest=$(gh api "$latest_route" --jq '.tag_name' 2>"$scratch/error"); then

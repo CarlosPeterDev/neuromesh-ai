@@ -16,6 +16,12 @@ if (hasReleaseKeystore) {
 }
 val allowDebugReleaseSigning =
     System.getenv("NEUROMESH_ALLOW_DEBUG_RELEASE_SIGNING") == "true"
+val publicTestApk = System.getenv("NEUROMESH_PUBLIC_TEST_APK") == "true"
+if (publicTestApk && gradle.startParameter.taskNames.any {
+        it.substringAfterLast(':').startsWith("bundle", ignoreCase = true)
+    }) {
+    throw GradleException("The public test signer is only for standalone APKs.")
+}
 val isReleaseBuild = gradle.startParameter.taskNames.any {
     it.contains("release", ignoreCase = true)
 }
@@ -55,7 +61,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.neuromesh.ai"
+        applicationId = if (publicTestApk) "com.neuromesh.ai.test" else "com.neuromesh.ai"
+        manifestPlaceholders["neuromeshAppLabel"] =
+            if (publicTestApk) "NeuroMesh AI Test" else "NeuroMesh AI"
         minSdk = 28
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
