@@ -263,8 +263,6 @@ jobs:
               printf 'storeFile=%s\n' "$GITHUB_WORKSPACE/android/github-release.jks"
             } > android/key.properties
             echo "channel=stable" >> "$GITHUB_OUTPUT"
-          elif [ '${{ steps.sign.outputs.production }}' = 'true' ]; then
-            echo "channel=stable" >> "$GITHUB_OUTPUT"
           else
             test_keystore="$RUNNER_TEMP/neuromesh-test-signing.p12"
             fingerprint=$(bash scripts/create_public_test_keystore.sh "$test_keystore")
@@ -328,12 +326,13 @@ jobs:
         run: |
           set -e
           V='${{ steps.ver.outputs.name }}'
-          SUF=""; [ '${{ steps.sign.outputs.production }}' = 'true' ] || SUF="-dev"
+          apk_suffix=""; [ '${{ steps.standalone_sign.outputs.channel }}' = 'stable' ] || apk_suffix="-dev"
+          aab_suffix=""; [ '${{ steps.sign.outputs.production }}' = 'true' ] || aab_suffix="-dev"
           mkdir -p dist
           cp "$RUNNER_TEMP/arm64-cert.txt" dist/android-apk-signer.txt
-          cp "$RUNNER_TEMP/arm64.apk" "dist/NeuroMesh-AI-v${V}-arm64${SUF}.apk"
-          cp "$RUNNER_TEMP/universal.apk" "dist/NeuroMesh-AI-v${V}-universal${SUF}.apk"
-          cp build/app/outputs/bundle/release/app-release.aab "dist/NeuroMesh-AI-v${V}${SUF}.aab"
+          cp "$RUNNER_TEMP/arm64.apk" "dist/NeuroMesh-AI-v${V}-arm64${apk_suffix}.apk"
+          cp "$RUNNER_TEMP/universal.apk" "dist/NeuroMesh-AI-v${V}-universal${apk_suffix}.apk"
+          cp build/app/outputs/bundle/release/app-release.aab "dist/NeuroMesh-AI-v${V}${aab_suffix}.aab"
           for f in dist/*; do test -s "$f" || { echo "empty artifact $f"; exit 1; }; done
           for f in dist/*.apk; do unzip -tq "$f"; done
           unzip -tq dist/*.aab
@@ -609,18 +608,16 @@ jobs:
       - name: Verify all release installers and generate checksums
         run: |
           set -euo pipefail
-          signing_suffix=""
-          if [[ "$PRODUCTION_SIGNED" != "true" ]]; then
-            signing_suffix="-dev"
-          fi
+          apk_suffix=""; [ "$STANDALONE_CHANNEL" = 'stable' ] || apk_suffix="-dev"
+          aab_suffix=""; [ "$PRODUCTION_SIGNED" = 'true' ] || aab_suffix="-dev"
 
           android="packages/neuromesh-ai-$VERSION"
           windows="packages/neuromesh-ai-Windows-x64"
           linux="packages/neuromesh-ai-Linux-x64"
           installers=(
-            "$android/NeuroMesh-AI-v$VERSION-arm64$signing_suffix.apk"
-            "$android/NeuroMesh-AI-v$VERSION-universal$signing_suffix.apk"
-            "$android/NeuroMesh-AI-v$VERSION$signing_suffix.aab"
+            "$android/NeuroMesh-AI-v$VERSION-arm64$apk_suffix.apk"
+            "$android/NeuroMesh-AI-v$VERSION-universal$apk_suffix.apk"
+            "$android/NeuroMesh-AI-v$VERSION$aab_suffix.aab"
             "$windows/NeuroMesh-AI-Setup-v$VERSION-x64.exe"
             "$linux/NeuroMesh-AI-v$VERSION-linux-x64.deb"
             "$linux/NeuroMesh-AI-v$VERSION-linux-x64.AppImage"

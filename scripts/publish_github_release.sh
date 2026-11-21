@@ -5,7 +5,7 @@ tag="v$VERSION"
 title="NeuroMesh AI $tag"
 signing_label="Production-signed"
 if [[ "$PRODUCTION_SIGNED" != "true" ]]; then
-    signing_label="Development-signed Android packages for testing"
+    signing_label="Development-signed for testing"
     title="$title (Development build)"
 fi
 
@@ -15,7 +15,7 @@ notes="$scratch/release-notes.txt"
 cat > "$notes" <<NOTES
 NeuroMesh AI $tag
 - Commit: $GITHUB_SHA
-- Android signing: $signing_label
+- Play AAB signing: $signing_label
 - GitHub APK signing channel: $STANDALONE_CHANNEL
 - Android APK signer SHA-256: $APK_SIGNER
 - Play AAB: $AAB_MB MB file, $SPLIT_MB MB ARM64 split download

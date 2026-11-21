@@ -39,8 +39,12 @@ launch_app "$test_app"
 
 # Install the Play-style splits alongside the public test app. The Play
 # bundle keeps its separate signing identity and application ID.
+play_keystore="$RUNNER_TEMP/emulator-play-signing.p12"
+keytool -genkeypair -noprompt -keystore "$play_keystore" -storetype PKCS12 \
+    -storepass android -keypass android -alias emulator-play -keyalg RSA \
+    -keysize 2048 -validity 7 -dname 'CN=NeuroMesh Emulator Play Split Test'
 java -jar "$bundletool" build-apks --bundle="$aab" --output="$apk_set" \
-    --connected-device --ks=android/release.jks --ks-key-alias=androiddebugkey \
+    --connected-device --ks="$play_keystore" --ks-key-alias=emulator-play \
     --ks-pass=pass:android --key-pass=pass:android --overwrite
 java -jar "$bundletool" install-apks --apks="$apk_set"
 launch_app "$play_app"
