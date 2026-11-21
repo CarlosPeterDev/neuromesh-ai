@@ -16,6 +16,11 @@ on:
         type: boolean
         default: false
 
+      publish_preview_run:
+        description: Publish Android assets from a successful preview run as a prerelease without rebuilding
+        type: string
+        default: ""
+
 # Serialize main release builds so publication and Latest selection agree.
 concurrency:
   group: android-release-${{ github.ref }}
@@ -25,15 +30,16 @@ permissions:
   contents: read
 
 env:
-  NEUROMESH_REPORT_ENDPOINT: ${{ !inputs.preview_only && !inputs.play_bundle_only && vars.NEUROMESH_REPORT_ENDPOINT || '' }}
-  NEUROMESH_REPORT_BOT_TOKEN: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.NEUROMESH_REPORT_BOT_TOKEN || '' }}
-  NEUROMESH_REPORT_CHAT_ID: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.NEUROMESH_REPORT_CHAT_ID || '' }}
-  REQUIRE_DEVELOPER_REPORT_DELIVERY: ${{ !inputs.preview_only && !inputs.play_bundle_only && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
+  NEUROMESH_REPORT_ENDPOINT: ${{ !inputs.preview_only && !inputs.play_bundle_only && !inputs.publish_preview_run && vars.NEUROMESH_REPORT_ENDPOINT || '' }}
+  NEUROMESH_REPORT_BOT_TOKEN: ${{ !inputs.preview_only && !inputs.play_bundle_only && !inputs.publish_preview_run && secrets.NEUROMESH_REPORT_BOT_TOKEN || '' }}
+  NEUROMESH_REPORT_CHAT_ID: ${{ !inputs.preview_only && !inputs.play_bundle_only && !inputs.publish_preview_run && secrets.NEUROMESH_REPORT_CHAT_ID || '' }}
+  REQUIRE_DEVELOPER_REPORT_DELIVERY: ${{ !inputs.preview_only && !inputs.play_bundle_only && !inputs.publish_preview_run && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
   BASE_VERSION: "1.0"   # MAJOR.MINOR; patch comes from the CI run number
   ANDROID_VERSION_CODE_BASE: 5000   # Exceed legacy split-ABI APK version codes (including 4072)
 
 jobs:
   native-thinking:
+    if: ${{ !inputs.publish_preview_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -45,6 +51,7 @@ jobs:
           scripts/check_model_thinking.sh "$RUNNER_TEMP/qwen.gguf"
 
   build:
+    if: ${{ !inputs.publish_preview_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     outputs:
@@ -90,10 +97,10 @@ jobs:
       - name: Prepare signing
         id: sign
         env:
-          KS_B64: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.ANDROID_KEYSTORE_BASE64 || '' }}
-          KS_PASS: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
-          KEY_ALIAS: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.ANDROID_KEY_ALIAS || '' }}
-          KEY_PASS: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.ANDROID_KEY_PASSWORD || '' }}
+          KS_B64: ${{ !inputs.preview_only && !inputs.play_bundle_only && !inputs.publish_preview_run && secrets.ANDROID_KEYSTORE_BASE64 || '' }}
+          KS_PASS: ${{ !inputs.preview_only && !inputs.play_bundle_only && !inputs.publish_preview_run && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
+          KEY_ALIAS: ${{ !inputs.preview_only && !inputs.play_bundle_only && !inputs.publish_preview_run && secrets.ANDROID_KEY_ALIAS || '' }}
+          KEY_PASS: ${{ !inputs.preview_only && !inputs.play_bundle_only && !inputs.publish_preview_run && secrets.ANDROID_KEY_PASSWORD || '' }}
         run: |
           if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
             echo "$KS_B64" | base64 -d > android/release.jks
@@ -450,7 +457,7 @@ jobs:
   # Windows and Linux desktop builds. They bundle llama.cpp's llama-server (CPU)
   # next to the app; the AI's shell commands use the computer's own shell.
   desktop:
-    if: github.event_name != 'pull_request' && !inputs.play_bundle_only
+    if: github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.publish_preview_run
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -577,7 +584,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only && !inputs.publish_preview_run
     needs: [build, desktop, native-thinking]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -633,3 +640,19 @@ jobs:
 
       - name: Publish and verify the versioned GitHub Release
         run: bash scripts/publish_github_release.sh
+
+  publish-preview:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_preview_run != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PREVIEW_RUN: ${{ inputs.publish_preview_run }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish verified Android preview assets
+        run: bash scripts/publish_preview_release.sh "$PREVIEW_RUN"

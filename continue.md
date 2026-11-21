@@ -23,3 +23,5 @@ scripts/check_model_thinking.sh /path/to/compatible.gguf
 ```
 
 Use the report's Android commands with a folder already granted through the app and an installed offline TTS voice. The downloaded host-test GGUF and generated ARM64 check build were cleaned after verification; model hash/log evidence remains. GitHub CLI credentials expired late in the session; connected GitHub tools continued CI/artifact access.
+
+Release follow-up: a manual `publish_preview_run` workflow input can publish the verified Android assets from an existing successful preview run without rebuilding. It validates the source workflow, test-signing filenames and package hashes, uploads individual APK/AAB/checksum assets into a draft, verifies their remote sizes/digests, then publishes a prerelease with `Latest=false`. An already published release cannot be replaced. This was added after workspace uploads returned HTTP 401 from uploads.github.com, while the normal GitHub API remained authenticated. Bash syntax, actionlint and the three build-configuration tests passed; publication execution is pending.
