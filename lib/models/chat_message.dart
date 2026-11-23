@@ -21,6 +21,7 @@ class ChatMessage {
   final int? thoughtDurationSeconds;
   final int? imageGenDurationMs; // Time taken to generate image locally
   final DateTime timestamp;
+  final List<Map<String, dynamic>> toolSearches;
 
   // Cache decoded bytes to prevent flickering on re-build
   Uint8List? _decodedImageBytes;
@@ -52,6 +53,7 @@ class ChatMessage {
     this.tokensPerSec,
     this.thoughtDurationSeconds,
     this.imageGenDurationMs,
+    this.toolSearches = const [],
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 
@@ -96,6 +98,7 @@ class ChatMessage {
         'thoughtDurationSeconds': thoughtDurationSeconds,
         'imageGenDurationMs': imageGenDurationMs,
         'timestamp': timestamp.toIso8601String(),
+        if (toolSearches.isNotEmpty) 'toolSearches': toolSearches,
       };
 
   factory ChatMessage.fromMap(Map<dynamic, dynamic> map) => ChatMessage(
@@ -124,6 +127,11 @@ class ChatMessage {
         imageGenDurationMs: map['imageGenDurationMs'] != null
             ? (map['imageGenDurationMs'] as num).toInt()
             : null,
+        toolSearches: [
+          for (final item
+              in (map['toolSearches'] as List? ?? const []).whereType<Map>())
+            Map<String, dynamic>.from(item),
+        ],
         timestamp: DateTime.tryParse(map['timestamp'] ?? '') ?? DateTime.now(),
       );
 }

@@ -33,4 +33,29 @@ void main() {
     expect(hive.getSetting<String>(AppConstants.keyServerApiKey), 'aichat_abc');
     expect(hive.settingsBox.containsKey('server_obsolete_provider'), isFalse);
   });
+
+  test('legacy setting types fall back without modifying stored values',
+      () async {
+    final hive = await HiveService().init();
+    await hive.setSetting('legacy', 'old-type');
+    expect(hive.getSetting<int>('legacy', defaultValue: 20), 20);
+    expect(hive.getSetting<String>('legacy'), 'old-type');
+  });
+
+  test('a corrupted storage file is preserved when initialization fails',
+      () async {
+    final hive = await HiveService().init();
+    await hive.saveSession('session', {'id': 'session', 'title': 'preserve'});
+    await Hive.close();
+    final file =
+        File('${dir.path}/${AppConstants.chatSessionsBox.toLowerCase()}.hive');
+    final bytes = await file.readAsBytes();
+    final damaged = [...bytes]..[bytes.length - 1] ^= 0xff;
+    await file.writeAsBytes(damaged);
+    await expectLater(HiveService().init(), throwsA(isA<HiveError>()));
+    expect(await file.readAsBytes(), damaged);
+    await file.writeAsBytes(bytes);
+    final recovered = await HiveService().init();
+    expect(recovered.getAllSessions().single['title'], 'preserve');
+  });
 }

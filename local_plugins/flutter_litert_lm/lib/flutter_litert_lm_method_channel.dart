@@ -74,15 +74,11 @@ class MethodChannelFlutterLitertLm extends FlutterLitertLmPlatform {
     List<Map<String, dynamic>> contents,
     Map<String, Object>? extraContext,
   ) {
-    // First, tell native side to start streaming
-    _methodChannel.invokeMethod('startMessageStream', {
+    // Android starts generation only after the event sink is installed.
+    return _eventChannel.receiveBroadcastStream({
       'conversationId': conversationId,
       'contents': contents,
       if (extraContext != null) 'extraContext': extraContext,
-    });
-
-    return _eventChannel.receiveBroadcastStream({
-      'conversationId': conversationId,
     }).map((event) {
       if (event is Map) {
         return Map<String, dynamic>.from(event);

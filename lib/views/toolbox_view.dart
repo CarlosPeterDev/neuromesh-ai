@@ -12,6 +12,7 @@ import 'storage_view.dart';
 import 'perf_views.dart';
 import '../services/rag_service.dart';
 import '../services/hive_service.dart';
+import '../services/inference_service.dart';
 import '../services/download_queue.dart';
 import '../widgets/model_file_filter.dart';
 import 'voice_views.dart';
@@ -246,22 +247,34 @@ class ToolboxView extends StatelessWidget {
           AppRow(
             icon: Icons.speed_rounded,
             title: 'Benchmark loaded model',
-            subtitle: 'Measures first-token time and tokens per second',
+            subtitle: 'Measures first visible output and output chunks per second',
             onTap: () async {
-              _toast('Running benchmark…');
-              final r = await runBenchmark();
-              if (!context.mounted) return;
-              showDialog<void>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                        title: const Text('Benchmark'),
-                        content: Text(r),
-                        actions: [
-                          TextButton(
-                              onPressed: () => Navigator.pop(ctx),
-                              child: const Text('OK'))
-                        ],
-                      ));
+              final inference = Get.find<InferenceService>();
+              final result = runBenchmark();
+              await showDialog<void>(
+                context: context,
+                barrierDismissible: false,
+                builder: (ctx) => FutureBuilder<String>(
+                  future: result,
+                  builder: (ctx, snapshot) {
+                    final done = snapshot.connectionState == ConnectionState.done;
+                    return AlertDialog(
+                      title: const Text('Benchmark'),
+                      content: Text(snapshot.data ??
+                          (snapshot.hasError ? 'Benchmark failed.' : 'Measuring the loaded model…')),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: Text(done ? 'Close' : 'Cancel'),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              );
+              if (inference.generationSource.value == 'benchmark') {
+                await inference.stopGeneration();
+              }
             },
           ),
           AppRow(

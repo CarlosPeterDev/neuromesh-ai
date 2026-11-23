@@ -6,30 +6,31 @@ import '../services/download_service.dart';
 import '../services/device_bridge.dart';
 import '../services/inference_service.dart';
 
-/// Measures tokens per second for the currently loaded model.
+/// Measures observed output chunks for the currently loaded model.
 Future<String> runBenchmark() async {
   final inf = Get.find<InferenceService>();
   if (!inf.isModelLoaded.value) return 'Load a model first.';
-  final sw = Stopwatch()..start();
-  var first = 0;
-  var tokens = 0;
+  if (inf.isGenerating.value || inf.isLoadingModel.value) {
+    return 'Wait for the active model operation to finish.';
+  }
+  final stopCount = inf.stopCount;
   final out = await inf.generate(
     prompt: 'Write a short paragraph about the ocean.',
     systemPrompt: 'You are a helpful assistant.',
     source: 'benchmark',
     maxTokens: 64,
-    onToken: (_) {
-      if (tokens == 0) first = sw.elapsedMilliseconds;
-      tokens++;
-    },
   );
-  sw.stop();
-  if (out.startsWith('ERROR') || tokens == 0) return out;
-  final genMs = (sw.elapsedMilliseconds - first).clamp(1, 1 << 30);
-  final tps = tokens > 1 ? (tokens - 1) * 1000 / genMs : 0.0;
-  return '${inf.loadedModelName.value}\n'
-      'First token: $first ms\n'
-      'Speed: ${tps.toStringAsFixed(1)} tokens/s ($tokens tokens)';
+  if (out.startsWith('ERROR')) return out;
+  if (inf.stopCount != stopCount) return 'Benchmark interrupted.';
+  if (inf.tokenCount.value == 0) return 'The benchmark produced no output.';
+  return [
+    inf.loadedModelName.value,
+    if (inf.loadedBackend.value.isNotEmpty)
+      'Reported backend: ${inf.loadedBackend.value}',
+    if (inf.modelLoadMs case final ms?) 'Model load: $ms ms',
+    if (inf.firstOutputMs case final ms?) 'First visible output: $ms ms',
+    'Speed: ${inf.tokensPerSecond.value.toStringAsFixed(1)} output chunks/s (${inf.tokenCount.value} chunks)',
+  ].join('\n');
 }
 
 /// One prompt, two models, answers side by side.
@@ -89,36 +90,33 @@ class _CompareViewState extends State<CompareView> {
     }
     if (!mounted) return;
     setState(() => _status = 'Running $label…');
-    final sw = Stopwatch()..start();
-    var tokens = 0;
-    int? firstTokenMs;
+    final stops = inf.stopCount;
     final out = await inf.generate(
       prompt: _prompt.text.trim(),
       systemPrompt: 'You are a helpful assistant.',
       source: 'compare',
       maxTokens: 256,
-      onToken: (t) {
-        firstTokenMs ??= sw.elapsedMilliseconds;
-        tokens++;
-        if (mounted) setState(() => r.text += t);
+      onToken: (text) {
+        if (mounted) setState(() => r.text += text);
       },
     );
-    sw.stop();
+    final first = inf.firstOutputMs;
+    final rate = inf.tokensPerSecond.value;
+    final valid = !out.startsWith('ERROR') && inf.stopCount == stops;
+    final load = inf.modelLoadMs;
     final status = Get.isRegistered<DeviceBridge>()
         ? await Get.find<DeviceBridge>().status()
         : const <String, dynamic>{};
     if (!mounted) return;
     final free = status['ramFree'];
-    final first = firstTokenMs;
-    final speed = first == null
-        ? 0.0
-        : (tokens - 1) * 1000 / (sw.elapsedMilliseconds - first).clamp(1, 1 << 30);
     setState(() {
-      if (r.text.isEmpty) r.text = out;
+      if (!valid || r.text.isEmpty) r.text = out;
       r.stats = [
-        if (first != null) 'First token: ${first}ms',
-        if (tokens > 1) '${speed.toStringAsFixed(1)} tok/s',
-        if (free is num) '${(free / 1073741824).toStringAsFixed(1)} GiB device RAM free',
+        if (load != null) 'Model load: $load ms',
+        if (valid && first != null) 'First visible output: $first ms',
+        if (valid && rate > 0) '${rate.toStringAsFixed(1)} chunks/s',
+        if (free is num)
+          '${(free / 1073741824).toStringAsFixed(1)} GiB device RAM free',
       ].join(' · ');
     });
   }
@@ -156,7 +154,8 @@ class _CompareViewState extends State<CompareView> {
         decoration: InputDecoration(labelText: label),
         items: [
           for (final m in _models)
-            DropdownMenuItem(value: m, child: Text(m, overflow: TextOverflow.ellipsis))
+            DropdownMenuItem(
+                value: m, child: Text(m, overflow: TextOverflow.ellipsis))
         ],
         onChanged: _running ? null : on,
       );
@@ -164,10 +163,12 @@ class _CompareViewState extends State<CompareView> {
   Widget _card(String title, String? file, _Result r) => Card(
         child: Padding(
           padding: const EdgeInsets.all(12),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('$title · ${file ?? '-'}',
                 style: const TextStyle(fontWeight: FontWeight.w600)),
-            if (r.stats.isNotEmpty) Text(r.stats, style: const TextStyle(fontSize: 12)),
+            if (r.stats.isNotEmpty)
+              Text(r.stats, style: const TextStyle(fontSize: 12)),
             const SizedBox(height: 6),
             SelectableText(r.text.isEmpty ? '…' : r.text),
           ]),
@@ -184,7 +185,8 @@ class _CompareViewState extends State<CompareView> {
           ? const Center(
               child: Padding(
                   padding: EdgeInsets.all(24),
-                  child: Text('Download at least two GGUF models to compare them.')))
+                  child: Text(
+                      'Download at least two GGUF models to compare them.')))
           : ListView(padding: kPagePadding, children: [
               _picker('Model A', _a, (v) => setState(() => _a = v)),
               const SizedBox(height: 8),
@@ -194,7 +196,8 @@ class _CompareViewState extends State<CompareView> {
                   controller: _prompt,
                   minLines: 2,
                   maxLines: 5,
-                  decoration: const InputDecoration(hintText: 'Prompt for both models')),
+                  decoration: const InputDecoration(
+                      hintText: 'Prompt for both models')),
               const SizedBox(height: 8),
               FilledButton(
                   onPressed: _running ? null : _run,

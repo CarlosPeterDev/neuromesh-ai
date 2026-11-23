@@ -3,9 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../controllers/home_controller.dart';
-import '../services/opencode_adapter.dart';
 import '../widgets/chat_drawer.dart';
-import 'agent_hub_view.dart';
 import 'chat_view.dart';
 import 'model_view.dart';
 import 'server_view.dart';
@@ -86,16 +84,6 @@ class _HomeViewState extends State<HomeView> with RouteAware {
         label: 'Settings'),
   ];
 
-  List<_NavItem> _navigationItems(BuildContext context) => [
-        ..._tabs,
-        if (hasDesktopAgents)
-          _NavItem(
-            icon: Icons.terminal_outlined,
-            activeIcon: Icons.terminal_rounded,
-            label: agentHubUsesArabic(context) ? 'الوكلاء' : 'Agents',
-          ),
-      ];
-
   bool get _isWide {
     // Force bottom navbar for all layouts per user request
     return false;
@@ -126,7 +114,6 @@ class _HomeViewState extends State<HomeView> with RouteAware {
                     const ModelView(),
                     const ServerView(),
                     const SettingsView(),
-                    if (hasDesktopAgents) const AgentHubView(),
                   ],
                 );
                 if (_isWide) {
@@ -152,7 +139,7 @@ class _HomeViewState extends State<HomeView> with RouteAware {
     final accent = isDark ? const Color(0xFF0A84FF) : const Color(0xFF007AFF);
     final muted = isDark ? const Color(0xFF7C7C80) : const Color(0xFF8E8E93);
     final current = controller.currentTab.value;
-    final tabs = _navigationItems(context);
+    final tabs = _tabs;
     return Container(
       decoration: BoxDecoration(
         color: isDark ? Colors.black : Colors.white,
@@ -216,7 +203,7 @@ class _HomeViewState extends State<HomeView> with RouteAware {
   Widget _buildSidebar(BuildContext context, bool isDark) {
     final accent = isDark ? const Color(0xFF0A84FF) : const Color(0xFF007AFF);
     final muted = Theme.of(context).hintColor;
-    final tabs = _navigationItems(context);
+    final tabs = _tabs;
 
     return Container(
       width: 76,

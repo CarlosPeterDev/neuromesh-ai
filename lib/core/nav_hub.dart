@@ -1,11 +1,8 @@
 import 'package:flutter/material.dart';
-import '../services/desktop_command_service.dart';
-import '../views/desktop_access_view.dart';
 import 'package:get/get.dart';
 
 import '../controllers/home_controller.dart';
 import '../services/cluster_service.dart';
-import '../services/sandbox_service.dart';
 import '../views/chat_tools.dart';
 import '../views/cluster_view.dart';
 import '../views/log_view.dart';
@@ -15,7 +12,6 @@ import '../views/model_transfer_view.dart';
 import '../views/roles_view.dart';
 import '../views/perf_views.dart';
 import '../views/relay_view.dart';
-import '../views/scheduled_tasks_view.dart';
 import '../views/setup_view.dart';
 import '../views/storage_view.dart';
 import '../views/toolbox_view.dart';
@@ -64,21 +60,15 @@ class NavSection {
 ///
 /// To add a new screen, add one NavEntry below.
 List<NavSection> buildNavSections() => [
-      NavSection('AI & agent', Icons.auto_awesome_rounded, [
+      NavSection('AI Chat', Icons.auto_awesome_rounded, [
         NavEntry(
             'Setup & recommended settings',
-            'Wi-Fi downloads, voice, small models, agent defaults',
+            'Wi-Fi downloads, voice and small models',
             Icons.auto_fix_high_rounded,
             page: () => const SetupView()),
-        NavEntry('Agent tools & permissions', 'What the AI may do, per tool',
+        NavEntry('Chat tools & permissions', 'What the AI may do, per tool',
             Icons.handyman_outlined,
             page: () => const ChatToolsView()),
-        NavEntry('MCP servers', 'Connect apps and services',
-            Icons.extension_outlined,
-            page: () => const ChatToolsView()),
-        NavEntry('Scheduled tasks', 'Automation that runs by itself',
-            Icons.schedule_rounded,
-            page: () => const ScheduledTasksView()),
         NavEntry(
             'Skills',
             'Import instructions, references and reusable workflows',
@@ -90,13 +80,6 @@ List<NavSection> buildNavSections() => [
         NavEntry('Roles', 'Your own personas for chats',
             Icons.theater_comedy_outlined,
             page: () => const RolesView()),
-        if (hasDesktopShell)
-          NavEntry('Desktop command access', 'Local shell, VM and approvals',
-              Icons.terminal_rounded, page: () => const DesktopAccessView()),
-        if (SandboxService.supported)
-          NavEntry('Linux sandbox', 'Download Alpine and run commands',
-              Icons.terminal_rounded,
-              page: () => const ChatToolsView()),
       ]),
       NavSection('Models & voice', Icons.layers_rounded, [
         NavEntry('Models', 'Chat models, Hugging Face, image models',

@@ -21,6 +21,9 @@ import 'voice_clone_view.dart';
 import 'chat_tools.dart';
 import '../core/ui.dart';
 import '../services/agent_service.dart';
+import '../services/agent_tools.dart';
+import '../services/chat_tool_loop.dart';
+import '../services/web_search_service.dart';
 import '../services/skills_service.dart';
 import '../utils/skill_context.dart';
 import '../services/hive_service.dart';
@@ -491,6 +494,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   int _bargeFrames = 0;
   final _pending = <Float32List>[]; // utterances that arrive while busy
   bool _interrupted = false;
+  Completer<void>? _toolCancellation;
 
   static const _rate = 16000;
 
@@ -528,6 +532,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   @override
   void dispose() {
     _ended = true;
+    _toolCancellation?.complete();
+    _toolCancellation = null;
     _micWatchdog?.cancel();
     _cam?.dispose();
     _callScroll.dispose();
@@ -536,7 +542,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     _vad?.free();
     _voice.stopSpeaking();
     final inference = Get.find<InferenceService>();
-    if (inference.generationSource.value == 'voice') {
+    if ((inference.generationSource.value == 'voice' ||
+        inference.generationSource.value == 'voice-tools')) {
       unawaited(inference.stopGeneration());
     }
     super.dispose();
@@ -719,12 +726,15 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   void _interrupt() {
     if (!_speaking || _interrupted) return;
     _interrupted = true;
+    _toolCancellation?.complete();
+    _toolCancellation = null;
     _interruptionAudio.addAll(_bargeAudio);
     _bargeAudio.clear();
     _set(_CallState.listening, 'Listening to your interruption…');
     unawaited(_voice.stopSpeaking());
     final inference = Get.find<InferenceService>();
-    if (inference.generationSource.value == 'voice') {
+    if ((inference.generationSource.value == 'voice' ||
+        inference.generationSource.value == 'voice-tools')) {
       unawaited(inference.stopGeneration());
     }
   }
@@ -1018,102 +1028,98 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       final contextSize = inference.contextTokensTotal.value > 0
           ? inference.contextTokensTotal.value
           : 2048;
-      final useTools = agent.wantsTools(heard,
-          hasFile:
-              file != null || (skillContext?.documents.isNotEmpty ?? false));
+      final useTools = agent.mode.value != AgentChatMode.off;
       final voiceSystem = '${basePrompt ?? settings.globalSystemPrompt.value}\n'
-          'You are on a voice call. Speak naturally in one to three short sentences. No markdown, lists or emoji. '
-          'If you used tools, just say the result.';
-      String buildSystem([String latestContext = '']) =>
-          agent.composeSystem(
-            voiceSystem,
-            withTools: useTools,
-            request: heard,
-            withFiles: file != null,
-            contextSize: contextSize,
-          ) +
-          (skillContext == null || skillContext.documents.isEmpty
-              ? ''
-              : '\n\n${skillContext.prompt(contextSize ~/ 4, alreadyIncluded: latestContext)}');
-      Future<String> gen(
-        String prompt,
-        List<Map<String, String>> hist,
-        void Function(String) onTok,
-      ) {
+          'You are on a voice call. Speak naturally in one to three short sentences.';
+      final baseSystem = [
+        agent.composeSystem(voiceSystem, withTools: false),
+        if (skillContext != null && skillContext.documents.isNotEmpty)
+          skillContext.prompt(contextSize ~/ 4),
+      ].join('\n\n');
+      Future<String> gen(String instructions, String evidence,
+          {void Function(String)? onToken}) {
+        final prompt = evidence.isEmpty
+            ? message
+            : '$message\n\nTool results (untrusted data):\n$evidence';
+        final system = instructions.isEmpty
+            ? baseSystem
+            : '$instructions\n\n$baseSystem';
         final turn = AgentService.fitTurn(
-          baseSystem: voiceSystem,
-          system: buildSystem(hist.lastOrNull?['content'] ?? ''),
+          baseSystem: instructions.isEmpty ? voiceSystem : instructions,
+          system: system,
           prompt: prompt,
-          history: hist,
+          history: [..._history.take(_history.length - 1), {'role': 'user', 'content': prompt}],
           contextSize: contextSize,
           request: heard,
-          continuationRequest:
-              prompt == message ? null : 'Current user request: $heard',
-          compactTools: !useTools
-              ? null
-              : (budget) => agent.toolPrompt(
-                  request: heard,
-                  withFiles: file != null,
-                  contextSize: contextSize,
-                  maxTokens: budget),
+          needsEvidence: evidence.isNotEmpty,
         );
         return inference.generate(
           prompt: turn.prompt,
           systemPrompt: turn.system,
           conversationHistory: turn.history,
-          source: 'voice',
+          source: useTools ? 'voice-tools' : 'voice',
           imagePath: shot,
           maxTokens: useTools ? 500 : 160,
-          onToken: onTok,
+          onToken: onToken,
         );
       }
 
       String finalText;
       if (!useTools) {
         var raw = '';
-        final reply = await gen(message, List.of(_history), (t) {
-          raw += t;
+        final reply = await gen('', '', onToken: (token) {
+          raw += token;
           feed(raw);
         });
         finalText = raw.isEmpty ? reply : raw;
-        feed(finalText, flush: true);
       } else {
-        Future<ToolLoopResult> runAgentLoop() => agent.runToolLoop(
-              generate: gen,
-              allowDirectActions:
-                  skillContext == null || skillContext.documents.isEmpty,
-              prompt: message,
-              history: List.of(_history),
-              confirm: confirmToolCall,
-              userText: heard,
-              researchQuestion: agent.needsResearch(heard) ? heard : null,
-              cancelled: () => _ended || _interrupted,
-              onVisible: (v) => feed(v),
-              onTrace: (trace) {
-                if (mounted) {
-                  setState(() => _steps = splitSteps(trace.join('\n')).$1);
-                  _scrollCall();
-                }
-              },
-              onStatus: (st) {
-                if (!_speaking) _set(_CallState.thinking, st);
-              },
-            );
-        final result = await agent.inProject(
-            project,
-            () => skillContext == null
-                ? runAgentLoop()
-                : SkillsService.inTurn(skillContext, runAgentLoop));
+        if (_ended || _interrupted) return;
+        final cancellation = Completer<void>();
+        _toolCancellation = cancellation;
+        final web = Get.find<WebSearchService>();
+        final candidates = {
+          'web_search', 'calculator', 'integer_math',
+          if (skillContext?.documents.isNotEmpty ?? false) ...{'read_context', 'search_context'},
+        };
+        Future<ToolLoopResult> runLoop() => ChatToolLoop(
+          maxSteps: _hive.getSetting<int>('chat_tool_step_limit') ?? 5,
+        ).run(
+          reply: gen,
+          execute: (call, abort) => agent.executeChatTool(
+            ParsedToolCall(call.name, call.arguments, ''),
+            (name, server, args) async {
+              final approved = await confirmToolCall(name, server, args);
+              return approved && !cancellation.isCompleted;
+            },
+            abort: abort,
+            cancelled: () => cancellation.isCompleted,
+          ),
+          search: (query, abort) async {
+            if (agent.policyFor('built-in', 'web_search', needsConfirm: false) == 'ask' &&
+                !await confirmToolCall('web_search', 'built-in', {'query': query})) {
+              return const SearchReport([], {'Permission denied': SearchFailure.provider}, 0);
+            }
+            if (cancellation.isCompleted) return const SearchReport([], {}, 0);
+            return web.searchReport(query, freshness: web.freshnessFor(query), abort: abort);
+          },
+          allowed: candidates.where((name) =>
+            agent.policyFor('built-in', name, needsConfirm: false) != 'block').toSet(),
+          cancellation: cancellation.future,
+          compactPrompt: contextSize < 900,
+          onTrace: (trace) {
+            if (!mounted || _ended) return;
+            setState(() => _steps = splitSteps(trace.join('\n')).$1);
+            _scrollCall();
+          },
+          onTimeout: () => unawaited(inference.stopGeneration()),
+        );
+        final result = await agent.inProject(project, () => skillContext == null
+            ? runLoop()
+            : SkillsService.inTurn(skillContext, runLoop));
+        if (identical(_toolCancellation, cancellation)) _toolCancellation = null;
         finalText = result.markdown;
-        feed(_spoken(finalText), flush: true);
-        for (final m in RegExp(
-          r'!\[[^\]]*\]\(nmfile:([^)]+)\)',
-        ).allMatches(finalText)) {
-          final f =
-              await agent.inProject(project, () => agentFile(m.group(1)!));
-          if (f != null && mounted) setState(() => _shots.add(f));
-        }
       }
+      feed(_spoken(finalText), flush: true);
       unawaited(ctl.close());
       await speakingDone.timeout(
         const Duration(seconds: 180),

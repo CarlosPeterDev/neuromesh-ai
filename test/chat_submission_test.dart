@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -255,24 +256,51 @@ void main() {
         chat.messages.last.content, contains('couldn’t read "missing.html"'));
   });
 
-  test(
-      'an explicit search retry reuses the original topic and refreshes sources',
+  test('model-directed research refines a query and surfaces both sources',
       () async {
     final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
-    const first = 'What is the strongest AI model today for coding?';
-    chat.textController.text = first;
-    await chat.sendMessage();
-    expect(cloud.calls, 1);
-    expect(cloud.lastInput, contains('Published benchmark results'));
-    chat.textController.text = 'Please search because this is old';
+    cloud.replies.addAll([
+      '{"type":"tool","name":"web_search","arguments":{"query":"coding model benchmark"}}',
+      '{"type":"tool","name":"web_search","arguments":{"query":"coding model benchmark methodology"},"missing":"benchmark methodology"}',
+      '{"type":"answer","text":"The tests cover different workloads [1] and [2]."}',
+    ]);
+    chat.textController.text = 'Which model is strongest at coding today?';
     await chat.sendMessage();
 
-    expect(web.previous, first);
-    expect(web.refreshed, isTrue);
-    expect(cloud.lastInput, contains('Research question:'));
-    expect(cloud.lastInput, contains('Published benchmark results'));
+    expect(web.queries,
+        ['coding model benchmark', 'coding model benchmark methodology']);
+    expect(cloud.lastInput, contains('benchmark methodology'));
     expect(
         chat.messages.last.content, contains('https://example.com/benchmark'));
+    expect(chat.messages.last.content,
+        contains('https://example.com/methodology'));
+    expect(chat.messages.last.content, contains('Sources:'));
+    expect(cloud.calls, 3);
+    final saved = hive
+        .getMessagesForChat(chat.currentSessionId.value)
+        .map(ChatMessage.fromMap)
+        .firstWhere((message) => message.role == 'assistant');
+    expect(saved.toolSearches.map((record) => record['query']), web.queries);
+    expect(saved.toolSearches.first['results'].single['snippet'], 'First test');
+  });
+
+  test('a send waits for the pending context reset after switching', () async {
+    local.isModelLoaded.value = true;
+    local.pendingReset = Completer<void>();
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    await hive.setSetting('auto_title', false);
+    agent.mode.value = AgentChatMode.off;
+    chat.createNewChat();
+    chat.textController.text = 'After switching';
+    final send = chat.sendMessage();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(local.resets, 1);
+    expect(local.calls, 0);
+    local.answer = 'Reply from the new chat';
+    local.pendingReset!.complete();
+    await send;
+    expect(local.calls, 1);
+    expect(chat.messages.last.content, local.answer);
   });
 
   test('voice messages and attachments remain in the originating chat',
@@ -376,6 +404,14 @@ class _WorkspaceAgent extends AgentService {
 
 class _TestNarrationInference extends InferenceService {
   String answer = '';
+  Completer<void>? pendingReset;
+  int resets = 0;
+  @override
+  Future<void> resetConversation() async {
+    resets++;
+    await pendingReset?.future;
+  }
+
   String? lastPrompt;
   String? lastSystem;
   int calls = 0;
@@ -404,6 +440,7 @@ class _TestCloud extends CloudService {
   int calls = 0;
   String? lastInput;
   String answer = 'Reply';
+  final replies = <String>[];
 
   @override
   Future<String> sendMessage({
@@ -415,19 +452,36 @@ class _TestCloud extends CloudService {
   }) async {
     calls++;
     lastInput = messages.last['content'];
+    if (replies.isNotEmpty) return replies.removeAt(0);
+    if (messages.first['content']?.startsWith('Return exactly one JSON') ==
+        true) {
+      return jsonEncode({'type': 'answer', 'text': answer});
+    }
     return answer;
   }
 }
 
 class _TestWeb extends WebSearchService {
-  String? previous;
-  bool refreshed = false;
+  final queries = <String>[];
+
+  @override
+  Future<SearchReport> searchReport(String query,
+      {int max = 4, String? freshness, Future<void>? abort}) async {
+    queries.add(query);
+    final isFollowUp = query.endsWith('methodology');
+    return SearchReport([
+      if (isFollowUp)
+        const WebResult(
+            'Methodology', 'https://example.com/methodology', 'Second test')
+      else
+        const WebResult(
+            'Benchmark', 'https://example.com/benchmark', 'First test'),
+    ], {}, 1);
+  }
 
   @override
   Future<WebContext?> buildContext(String question,
       {String? previous, bool refresh = false}) async {
-    this.previous = previous;
-    refreshed = refresh;
     return WebContext('Published benchmark results', const [
       WebResult('Coding benchmark', 'https://example.com/benchmark',
           'Model comparison')

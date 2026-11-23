@@ -46,7 +46,7 @@ class _SetupViewState extends State<SetupView> {
   bool ttsEn = true;
   bool ttsAr = true;
   bool vad = true;
-  // Agent
+  // Chat
   bool tools = true;
   bool autoMemory = true;
   bool memoryUpdate = true;
@@ -54,8 +54,6 @@ class _SetupViewState extends State<SetupView> {
   bool sandbox = false;
   late bool sandboxTools =
       _hive.getSetting<bool>(SandboxService.basicToolsInstalledKey) != true;
-  bool sandboxNoAsk = false;
-  bool _sandboxPermissionChanged = false;
   // Performance
   bool autoContext = true;
   bool autoTitle = true;
@@ -75,9 +73,6 @@ class _SetupViewState extends State<SetupView> {
     super.initState();
     if (_pro) {
       final alpine = Get.find<SandboxService>();
-      sandboxNoAsk = Get.find<AgentService>()
-              .policyFor('built-in', 'run_shell', needsConfirm: true) ==
-          'allow';
       unawaited(alpine.runtimeAvailable().then((available) {
         if (!mounted) return;
         setState(() {
@@ -130,15 +125,7 @@ class _SetupViewState extends State<SetupView> {
       await agent.setMode(tools ? AgentChatMode.auto : AgentChatMode.off);
       await agent.setAutoMemory(autoMemory);
       await MemoryService.ensure().setEnabled(memoryUpdate);
-      if (_alpineAvailable == true && _sandboxPermissionChanged) {
-        final policy = sandboxNoAsk ? 'allow' : 'default';
-        for (final tool in const [
-          'run_shell', 'run_script', 'install_packages', 'convert_file',
-          'create_tool', 'sandbox_setup',
-        ]) {
-          await agent.setPolicy('built-in', tool, policy);
-        }
-      }
+
       final language = _hive.getSetting<String>('voice_lang') ?? 'en';
       final tts = ttsAr && (!ttsEn || language == 'ar')
           ? 'piper-ar-kareem'
@@ -354,18 +341,11 @@ class _SetupViewState extends State<SetupView> {
           _sw(Icons.graphic_eq_rounded, 'Smart speech detector', 'Makes calls feel natural  ·  1 MB${_has('silero-vad') ? '  ·  installed' : ''}', vad, (v) => vad = v),
           _alpineDownloads(),
         ]),
-        const SectionHeader('Agent'),
+        const SectionHeader('Chat'),
         AppGroup(children: [
-          _sw(Icons.handyman_outlined, 'Let the AI use tools', 'Files, web search, voice, images, and Alpine commands when the terminal is installed.', tools, (v) => tools = v),
+          _sw(Icons.handyman_outlined, 'Let the AI use tools', 'Web search, calculations, attachments, speech, and images.', tools, (v) => tools = v),
           _sw(Icons.psychology_alt_rounded, 'Remember things I tell it', 'Saves short facts about you on this device', autoMemory, (v) => autoMemory = v),
           _sw(Icons.update_rounded, 'Update memory automatically', 'Reads recent chats once a day', memoryUpdate, (v) => memoryUpdate = v),
-          if (_alpineAvailable == true)
-            _sw(Icons.bolt_rounded, 'Run sandbox commands without asking',
-                'Controls whether the agent asks before running commands in Alpine.',
-                sandboxNoAsk, (value) {
-                  sandboxNoAsk = value;
-                  _sandboxPermissionChanged = true;
-                }, rec: false),
         ]),
         const SectionHeader('Performance'),
         AppGroup(children: [

@@ -14,13 +14,7 @@ import 'voice_service.dart';
 
 /// Extra tools that work in every build (no Linux needed): fetching files,
 /// HTTP requests, archives, searching the workspace and a model overview.
-void registerExtraTools(AgentService agent) {
-  String nameOf(File f) => f.path.split('/').last;
-
-  Future<File> newFile(String name) => agent.newWorkspaceFile(name);
-
-  String size(int b) => b > 1048576 ? '${(b / 1048576).toStringAsFixed(1)} MB' : '${(b / 1024).ceil()} KB';
-
+void registerVoiceModelStatus(AgentService agent) {
   agent.addTool(AgentTool(
     'models_status',
     'Show which AI models are installed and ready: chat models, listening (speech to text) and speaking (text to speech). Use this to check voice choices for text_to_speech and transcribe_audio.',
@@ -50,6 +44,15 @@ void registerExtraTools(AgentService agent) {
       return b.toString().trim();
     },
   ));
+
+}
+
+void registerExtraTools(AgentService agent) {
+  String nameOf(File f) => f.path.split('/').last;
+  Future<File> newFile(String name) => agent.newWorkspaceFile(name);
+  String size(int b) => b > 1048576 ? '${(b / 1048576).toStringAsFixed(1)} MB' : '${(b / 1024).ceil()} KB';
+
+  registerVoiceModelStatus(agent);
 
   agent.addTool(AgentTool(
     'download_file',

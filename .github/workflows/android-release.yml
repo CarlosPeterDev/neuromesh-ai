@@ -12,7 +12,7 @@ on:
         type: boolean
         default: false
       preview_only:
-        description: Test Android and desktop packages with development signing and upload them to Actions
+        description: Test Android packages with development signing and upload them to Actions
         type: boolean
         default: false
 
@@ -59,6 +59,7 @@ jobs:
           cache: true
 
       - name: Install modern glslc (Vulkan shader compiler)
+        if: github.event_name != 'pull_request'
         run: |
           # The NDK's bundled glslc is too old for the cooperative-matrix shaders in llama.cpp's Vulkan backend.
           mkdir -p "$RUNNER_TEMP/vksdk" && cd "$RUNNER_TEMP/vksdk"
@@ -436,155 +437,9 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # Windows and Linux desktop builds. They bundle llama.cpp's llama-server (CPU)
-  # next to the app; the AI's shell commands use the computer's own shell.
-  desktop:
-    if: github.event_name != 'pull_request' && !inputs.play_bundle_only
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-24.04]
-    steps:
-      - name: Compute desktop version
-        shell: bash
-        run: echo "RELEASE_VERSION=${BASE_VERSION}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
-
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: 3.38.x
-          channel: stable
-          cache: true
-
-      - name: Linux build tools
-        if: runner.os == 'Linux'
-        run: |
-          set -euo pipefail
-          packages=(clang cmake ninja-build pkg-config libgtk-3-dev libasound2-dev libsecret-1-dev
-            liblzma-dev libayatana-appindicator3-dev libmpv-dev libgstreamer1.0-dev
-            libgstreamer-plugins-base1.0-dev)
-          apt_options=(-o Acquire::Retries=1 -o Acquire::http::Timeout=12 -o Acquire::https::Timeout=12)
-          fetch_packages() {
-            sudo timeout --kill-after=20s 150s apt-get "${apt_options[@]}" update &&
-              sudo timeout --kill-after=20s 360s apt-get "${apt_options[@]}" install \
-                -y --download-only --no-install-recommends "${packages[@]}"
-          }
-          if ! fetch_packages; then
-            echo "::warning::Runner Ubuntu mirror stalled. Trying a signed Ubuntu archive mirror."
-            source_list="$RUNNER_TEMP/ubuntu-fallback.list"
-            for suite in noble noble-updates noble-security; do
-              echo "deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://mirror.math.princeton.edu/pub/ubuntu/ $suite main restricted universe multiverse"
-            done > "$source_list"
-            apt_options+=(-o "Dir::Etc::sourcelist=$source_list" -o Dir::Etc::sourceparts=-)
-            fetch_packages
-          fi
-          sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=20s 480s apt-get \
-            "${apt_options[@]}" install -y --no-download --no-install-recommends "${packages[@]}"
-          flutter config --enable-linux-desktop
-
-      - name: Windows desktop
-        if: runner.os == 'Windows'
-        run: flutter config --enable-windows-desktop
-
-      - name: Add desktop platform folders
-        run: flutter create --platforms=windows,linux --project-name neuromesh_ai --org com.neuromesh .
-
-      - run: flutter pub get
-
-      - name: Private developer report configuration
-        shell: bash
-        run: python scripts/report_build_config.py "$RUNNER_TEMP/neuromesh-report-defines.json"
-
-      - name: Build (Linux)
-        if: runner.os == 'Linux'
-        env:
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-        run: flutter build linux --release "--dart-define-from-file=$RUNNER_TEMP/neuromesh-report-defines.json" --build-name=${{ env.RELEASE_VERSION }} --build-number=${{ github.run_number }}
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        env:
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-          CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
-        run: flutter build windows --release "--dart-define-from-file=$env:RUNNER_TEMP/neuromesh-report-defines.json" --build-name=${{ env.RELEASE_VERSION }} --build-number=${{ github.run_number }}
-
-      - name: Build and install the desktop image runtime
-        shell: bash
-        run: |
-          set -e
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            bundle="$PWD/build/windows/x64/runner/Release"
-            library=neuromesh_sd.dll
-          else
-            bundle="$PWD/build/linux/x64/release/bundle"
-            library=libneuromesh_sd.so
-          fi
-          cmake -S local_plugins/sd_flutter_android/desktop -B build/desktop-image -DCMAKE_BUILD_TYPE=Release
-          cmake --build build/desktop-image --config Release --parallel 2
-          ctest --test-dir build/desktop-image -C Release --output-on-failure
-          cmake --install build/desktop-image --config Release --prefix "$bundle"
-          test -s "$bundle/native/$library"
-
-      - name: Bundle llama-server and package (Linux)
-        if: runner.os == 'Linux'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -e
-          V="$RELEASE_VERSION"
-          B=build/linux/x64/release/bundle
-          mkdir -p "$B/llama" dl
-          TAG=$(gh release list --repo ggml-org/llama.cpp --limit 20 --json tagName -q '.[].tagName' | grep -E '^b[0-9]+$' | head -1); echo "llama.cpp $TAG"
-          gh release download "$TAG" --repo ggml-org/llama.cpp --pattern '*ubuntu*x64*' --pattern '*linux*x64*' --dir dl || true
-          ls dl
-          mkdir -p dl/x
-          for f in dl/*; do case "$f" in *.zip) unzip -q -o "$f" -d dl/x;; *.tar.gz) tar -xzf "$f" -C dl/x;; esac; done
-          test -n "$(find dl/x -name llama-server | head -1)" || { echo "llama-server not in archive"; find dl/x | head; exit 1; }
-          cp -r $(dirname "$(find dl/x -name llama-server | head -1)")/* "$B/llama/"
-          chmod +x "$B/llama/llama-server"
-          ls "$B/llama" | head -20
-          tar -C "$B" -czf "NeuroMesh-AI-v${V}-linux-x64.tar.gz" .
-          bash scripts/package_linux.sh "$B" "$V" web/icons/Icon-512.png
-
-      - name: Bundle llama-server and package (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -e
-          V="$RELEASE_VERSION"
-          B=build/windows/x64/runner/Release
-          mkdir -p "$B/llama" dl
-          TAG=$(gh release list --repo ggml-org/llama.cpp --limit 20 --json tagName -q '.[].tagName' | grep -E '^b[0-9]+$' | head -1); echo "llama.cpp $TAG"
-          gh release download "$TAG" --repo ggml-org/llama.cpp --pattern '*win*cpu*x64*' --dir dl
-          ls dl
-          mkdir -p dl/x
-          for f in dl/*.zip; do unzip -q -o "$f" -d dl/x; done
-          cp -r $(dirname "$(find dl/x -name llama-server.exe | head -1)")/* "$B/llama/"
-          ls "$B/llama" | head -20
-          powershell -Command "Compress-Archive -Path '$B/*' -DestinationPath 'NeuroMesh-AI-v${V}-windows-x64-portable.zip'"
-          # Real installer (Start-menu entry, uninstaller) built with Inno Setup.
-          choco install innosetup -y --no-progress
-          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
-          export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
-          "$ISCC" "/DAppVersion=${V}" "/DSourceDir=$(cygpath -w "$PWD/$B")" "/DOutDir=$(cygpath -w "$PWD")" installer/neuromesh.iss
-          ls -la NeuroMesh-AI-Setup-*.exe
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: neuromesh-ai-${{ runner.os }}-x64
-          path: NeuroMesh-AI-*x64*
-          if-no-files-found: error
-
   publish:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
-    needs: [build, desktop]
+    needs: [build]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -605,22 +460,17 @@ jobs:
           pattern: neuromesh-ai-*
           path: packages
 
-      - name: Verify all release installers and generate checksums
+      - name: Verify Android release artifacts and generate checksums
         run: |
           set -euo pipefail
           apk_suffix=""; [ "$STANDALONE_CHANNEL" = 'stable' ] || apk_suffix="-dev"
           aab_suffix=""; [ "$PRODUCTION_SIGNED" = 'true' ] || aab_suffix="-dev"
 
           android="packages/neuromesh-ai-$VERSION"
-          windows="packages/neuromesh-ai-Windows-x64"
-          linux="packages/neuromesh-ai-Linux-x64"
           installers=(
             "$android/NeuroMesh-AI-v$VERSION-arm64$apk_suffix.apk"
             "$android/NeuroMesh-AI-v$VERSION-universal$apk_suffix.apk"
             "$android/NeuroMesh-AI-v$VERSION$aab_suffix.aab"
-            "$windows/NeuroMesh-AI-Setup-v$VERSION-x64.exe"
-            "$linux/NeuroMesh-AI-v$VERSION-linux-x64.deb"
-            "$linux/NeuroMesh-AI-v$VERSION-linux-x64.AppImage"
           )
           mkdir -p dist
           for installer in "${installers[@]}"; do
@@ -634,7 +484,7 @@ jobs:
           [[ "$APK_SIGNER" =~ ^[a-f0-9]{64}$ ]]
           echo "APK_SIGNER=$APK_SIGNER" >> "$GITHUB_ENV"
           cd dist
-          sha256sum -- *.apk *.aab *.exe *.deb *.AppImage > SHA256SUMS.txt
+          sha256sum -- *.apk *.aab > SHA256SUMS.txt
           sha256sum --check SHA256SUMS.txt
 
       - name: Publish and verify the versioned GitHub Release

@@ -18,8 +18,9 @@ class AgentStep {
   final String result;
   final bool running;
   final int ms;
+  final bool failed;
   const AgentStep(
-      this.name, this.label, this.args, this.result, this.running, this.ms);
+      this.name, this.label, this.args, this.result, this.running, this.ms, {this.failed = false});
 
   static AgentStep? parse(String line) {
     if (!line.startsWith(ToolLoopResult.traceMark)) return null;
@@ -35,6 +36,7 @@ class AgentStep {
         '${j['r'] ?? ''}',
         j['run'] == true,
         (j['ms'] is num) ? (j['ms'] as num).toInt() : 0,
+        failed: j['failed'] == true,
       );
     } catch (_) {
       return null;
@@ -153,7 +155,7 @@ class _AgentStepsViewState extends State<AgentStepsView> {
                         Column(mainAxisSize: MainAxisSize.min, children: [
                           ListTile(
                               title: Text(
-                                  'Agent activity · ${steps.length} steps'),
+                                  'Tool activity · ${steps.length} steps'),
                               trailing: IconButton(
                                   tooltip: 'Close',
                                   icon: const Icon(Icons.close),
@@ -229,7 +231,7 @@ class _StepTile extends StatelessWidget {
               height: 16,
               child: CircularProgressIndicator(strokeWidth: 2),
             )
-          : Icon(_iconFor(step.name), size: 18),
+          : Icon(step.failed ? Icons.error_outline : _iconFor(step.name), size: 18),
       title: Text(step.label,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -237,7 +239,7 @@ class _StepTile extends StatelessWidget {
       subtitle: Text(
         step.running
             ? 'Working…'
-            : '${step.name}${step.ms > 0 ? ' · ${(step.ms / 1000).toStringAsFixed(1)}s' : ''}',
+            : '${step.failed ? 'Failed' : 'Completed'} · ${step.name}${step.ms > 0 ? ' · ${(step.ms / 1000).toStringAsFixed(1)}s' : ''}',
         style: const TextStyle(fontSize: 11.5),
       ),
       trailing: const Icon(Icons.chevron_right_rounded, size: 18),
@@ -290,7 +292,7 @@ class _StepDetails extends StatelessWidget {
                 ],
               ],
               const SizedBox(height: 12),
-              Text(step.running ? 'Working…' : 'Result',
+              Text(step.running ? 'Working…' : step.failed ? 'Failed' : 'Result',
                   style: theme.textTheme.labelLarge),
               if (!step.running)
                 SelectableText(_readableResult(step.result), style: textStyle),

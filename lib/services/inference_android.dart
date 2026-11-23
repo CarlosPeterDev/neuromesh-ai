@@ -45,6 +45,9 @@ class InferenceEngine {
   StreamSubscription? _loadProgressSub;
   Timer? _idleTimer;
   void Function()? _onStop;
+  int _stopRevision = 0;
+  Future<void>? _preparingLiteRt;
+  Future<void> _nativeCancel = Future<void>.value();
   bool _isLiteRt = false;
   // GGUF model loaded together with a working vision projector.
   bool _ggufVisionLoaded = false;
@@ -191,7 +194,9 @@ class InferenceEngine {
     // ── Load ──
     String? visionError;
     await onLoadStage?.call(
-      gpuLayers > 0 ? 'llama.cpp Vulkan model load' : 'llama.cpp CPU model load',
+      gpuLayers > 0
+          ? 'llama.cpp Vulkan model load'
+          : 'llama.cpp CPU model load',
       null,
     );
     try {
@@ -409,6 +414,9 @@ class InferenceEngine {
       );
     }
 
+    final revision = _stopRevision;
+    await _nativeCancel;
+    if (_disposed || revision != _stopRevision) return '';
     if (_controller == null) throw Exception('No model loaded');
     if (imagePath != null && imagePath.isNotEmpty && !_ggufVisionLoaded) {
       return 'This model can\'t read images. Load a vision model (one marked '
@@ -432,11 +440,12 @@ class InferenceEngine {
         _subscription?.cancel();
         _onStop = null;
         if (stopNative) {
-          unawaited(controller
-                  ?.stop()
-                  .timeout(const Duration(seconds: 1))
-                  .catchError((_) {}) ??
-              Future<void>.value());
+          _nativeCancel =
+              controller?.stop().timeout(const Duration(seconds: 2)) ??
+                  Future<void>.value();
+          unawaited(_nativeCancel.then<void>((_) {}, onError: (Object error) {
+            print('[Inference] GGUF cancellation failed: $error');
+          }));
         }
         if (!completer.isCompleted) completer.complete(result);
       }
@@ -472,7 +481,7 @@ class InferenceEngine {
       try {
         await _controller!.stop();
       } catch (_) {}
-      await Future.delayed(const Duration(milliseconds: 100));
+      if (completed || _disposed || revision != _stopRevision) return '';
       final fullPrompt =
           _buildPrompt(prompt, conversationHistory, systemPrompt, modelName);
       stream = _controller!.generate(
@@ -552,14 +561,26 @@ class InferenceEngine {
   }) async {
     if (_liteEngine == null) throw Exception('No LiteRT-LM model loaded');
 
-    await _subscription?.cancel();
-    await _ensureLiteRtConversation(
-      prompt: prompt,
-      conversationHistory: conversationHistory,
-      systemPrompt: systemPrompt,
-      temperature: temperature,
-      source: source,
-    );
+    final revision = _stopRevision;
+    final prepare = () async {
+      await _subscription?.cancel();
+      await _nativeCancel;
+      if (revision != _stopRevision) return;
+      await _ensureLiteRtConversation(
+        prompt: prompt,
+        conversationHistory: conversationHistory,
+        systemPrompt: systemPrompt,
+        temperature: temperature,
+        source: source,
+      );
+    }();
+    _preparingLiteRt = prepare;
+    try {
+      await prepare;
+    } finally {
+      if (identical(_preparingLiteRt, prepare)) _preparingLiteRt = null;
+    }
+    if (_disposed || revision != _stopRevision) return '';
 
     final completer = Completer<String>();
     final buffer = StringBuffer();
@@ -578,8 +599,10 @@ class InferenceEngine {
         _subscription?.cancel();
         _onStop = null;
         if (cancelNative) {
-          unawaited(conversation?.cancel().catchError((_) {}) ??
-              Future<void>.value());
+          _nativeCancel = conversation?.cancel() ?? Future<void>.value();
+          unawaited(_nativeCancel.then<void>((_) {}, onError: (Object error) {
+            print('[Inference] LiteRT cancellation failed: $error');
+          }));
         }
         if (!completer.isCompleted) completer.complete(result);
       }
@@ -729,6 +752,8 @@ class InferenceEngine {
     // always gets a fresh conversation and never sees chat context.
     final shouldReset = _liteConversation == null ||
         source == 'server' ||
+        source == 'chat-tools' ||
+        source == 'voice-tools' ||
         _liteConversationOwner != source ||
         _liteConversationSystemPrompt != systemPrompt ||
         _liteConversationTemperature != temperature ||
@@ -761,38 +786,51 @@ class InferenceEngine {
   Future<void> stop() async {
     if (_desk != null) return _desk.stop();
     if (_disposed) return;
+    _stopRevision++;
     _idleTimer?.cancel();
     final stopCallback = _onStop;
     _onStop = null;
     stopCallback?.call();
-    unawaited(_subscription?.cancel() ?? Future<void>.value());
+    await _subscription?.cancel();
     if (_isLiteRt) {
+      await _preparingLiteRt;
       _liteConversationHasMessages = true;
-      try {
+      if (stopCallback == null) {
         await _liteConversation?.cancel();
-      } catch (_) {}
+      } else {
+        await _nativeCancel;
+      }
       return;
     }
-    try {
-      await _controller?.stop().timeout(const Duration(milliseconds: 800));
-    } catch (_) {}
+    if (stopCallback != null) {
+      await _nativeCancel;
+    } else {
+      await _controller?.stop().timeout(const Duration(seconds: 2));
+    }
   }
 
   /// Reset any persistent conversation state so the next generation
   /// starts with a clean context. Essential when switching chat sessions.
   Future<void> resetConversation() async {
     if (_isLiteRt) {
-      try {
-        await _liteConversation?.dispose();
-      } catch (_) {}
+      final conversation = _liteConversation;
       _liteConversation = null;
+      _nativeCancel = Future<void>.value();
+      await conversation?.dispose();
       _liteConversationSystemPrompt = null;
       _liteConversationTemperature = null;
       _liteConversationHasMessages = false;
       _liteConversationOwner = null;
     }
-    // llama.cpp (GGUF) is stateless per-generation — no native
-    // conversation object to reset.
+    // GGUF uses explicit history. A prior failed stop needs a native retry.
+    if (!_isLiteRt) {
+      try {
+        await _nativeCancel;
+      } catch (_) {
+        await _controller?.stop().timeout(const Duration(seconds: 2));
+        _nativeCancel = Future<void>.value();
+      }
+    }
   }
 
   Future<ContextInfo?> getContextInfo() async {
