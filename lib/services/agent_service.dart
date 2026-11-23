@@ -59,7 +59,10 @@ class ToolLoopResult {
   /// One short markdown line per tool the model used.
   final List<String> trace;
   final bool hitLimit;
-  const ToolLoopResult(this.answer, this.trace, this.hitLimit);
+  const ToolLoopResult(this.answer, this.trace, this.hitLimit,
+      {this.searches = const []});
+
+  final List<Map<String, dynamic>> searches;
 
   /// Marker so trace lines can be stripped out of the history sent back to
   /// the model on later turns.
@@ -76,6 +79,22 @@ String stripToolTrace(String content) => content
     .join('\n')
     .trimLeft();
 
+String markToolTraceCancelled(String content) => content.split('\n').map((line) {
+  if (!line.startsWith(ToolLoopResult.traceMark)) return line;
+  try {
+    final data = jsonDecode(line.substring(ToolLoopResult.traceMark.length));
+    if (data is Map && data['run'] == true) {
+      data['run'] = false;
+      data['failed'] = true;
+      data['r'] = 'Cancelled.';
+      return '${ToolLoopResult.traceMark}${jsonEncode(data)}';
+    }
+  } on FormatException {
+    return line;
+  }
+  return line;
+}).join('\n');
+
 enum AgentChatMode { auto, always, off }
 
 /// Lets the chat model use tools: files, memory, the web, MCP servers and
@@ -88,6 +107,19 @@ class AgentService extends GetxService {
   static const _policyKey = 'agent_tool_policy';
   static const _modeKey = 'agent_chat_mode';
   static const _autoMemKey = 'agent_auto_memory';
+  static final _chatToolAbort = Object();
+  static final _chatToolCancelled = Object();
+
+  static bool get chatToolCancelled =>
+      (Zone.current[_chatToolCancelled] as bool Function()?)?.call() ?? false;
+
+  Future<String> executeChatTool(ParsedToolCall call, ToolConfirm confirm,
+      {required Future<void> abort, required bool Function() cancelled}) =>
+      runZoned(
+        () => executeTool(call, confirm),
+        zoneValues: {_chatToolAbort: abort, _chatToolCancelled: cancelled},
+      );
+
   static const maxSteps = 20;
   static const finalAnswerPrompt =
       'Give the final answer to the original request using the actual tool '
@@ -489,6 +521,12 @@ class AgentService extends GetxService {
           evaluateExpression((args['expression'] ?? '').toString())),
     ),
     AgentTool(
+      'integer_math',
+      'Apply sum, product, min, max, or gcd to a bounded list of decimal integers.',
+      '{"operation":"string","values":"comma-separated integers"}',
+      evaluateBoundedIntegers,
+    ),
+    AgentTool(
       'current_time',
       'Get the phone\'s current local date and time.',
       '{}',
@@ -583,8 +621,10 @@ class AgentService extends GetxService {
           modelId: (args['model_id'] ?? '').toString(),
           speaker: (args['speaker'] ?? '').toString(),
         );
+        if (wav.length <= 44) return 'Error: the voice produced no playable audio.';
+        if (chatToolCancelled) return 'Error: audio generation cancelled.';
         final f = await _safeFile(name);
-        await f.writeAsBytes(wav);
+        await f.writeAsBytes(wav, flush: true);
         return 'Saved ${f.path.split('/').last} (${wav.length ~/ 1024} KB). Show it with [📎 ${f.path.split('/').last}](nmfile:${f.path.split('/').last}).';
       },
     ),
@@ -637,13 +677,22 @@ class AgentService extends GetxService {
       'Create an image online with Pollinations. Internet is required. Use the user’s description, ask if the subject is missing, and show the returned image.',
       '{"prompt":"image description","style":"illustration|photo|design","name":"optional output file name"}',
       (args) async {
-        final image = await PollinationsImageService().create(
-          (args['prompt'] ?? '').toString(),
-          style: (args['style'] ?? '').toString(),
-          key: await PollinationsCredentials.read()
-              .onError<Exception>((_, __) => null),
-        );
-        return _savePollinationsImage(image, args['name'], edited: false);
+        final transport = http.Client();
+        final abort = Zone.current[_chatToolAbort] as Future<void>?;
+        if (abort != null) unawaited(abort.then((_) => transport.close()));
+        try {
+          final image = await PollinationsImageService().create(
+            (args['prompt'] ?? '').toString(),
+            style: (args['style'] ?? '').toString(),
+            key: await PollinationsCredentials.read()
+                .onError<Exception>((_, __) => null),
+            client: transport,
+          );
+          if (chatToolCancelled) return 'Error: image generation cancelled.';
+          return _savePollinationsImage(image, args['name'], edited: false);
+        } finally {
+          transport.close();
+        }
       },
     ),
     AgentTool(
@@ -1105,11 +1154,13 @@ class AgentService extends GetxService {
   @override
   void onInit() {
     super.onInit();
-    final raw = _hive.getSetting<List>(_serversKey) ?? const [];
-    servers.value = raw
-        .whereType<Map>()
-        .map((m) => McpServerConfig.fromMap(Map<String, dynamic>.from(m)))
-        .toList();
+    if (mcpEnabled) {
+      final raw = _hive.getSetting<List>(_serversKey) ?? const [];
+      servers.value = raw
+          .whereType<Map>()
+          .map((m) => McpServerConfig.fromMap(Map<String, dynamic>.from(m)))
+          .toList();
+    }
     memory.value = (_hive.getSetting<List>(_memoryKey) ?? const [])
         .map((e) => e.toString())
         .toList();
@@ -1126,10 +1177,6 @@ class AgentService extends GetxService {
     mode.value = AgentChatMode.values
         .firstWhere((x) => x.name == m, orElse: () => AgentChatMode.auto);
     autoMemory.value = _hive.getSetting<bool>(_autoMemKey) ?? true;
-    // Reconnect to enabled servers in the background so their tools are ready.
-    for (final s in servers.where((s) => s.enabled)) {
-      unawaited(refreshServer(s));
-    }
   }
 
   // ── MCP servers ──────────────────────────────────────────────────────
@@ -1189,7 +1236,10 @@ class AgentService extends GetxService {
   }
 
   /// Connects to the server and lists its tools; updates [serverStatus].
+  static const mcpEnabled = false;
+
   Future<void> refreshServer(McpServerConfig cfg) async {
+    if (!mcpEnabled) return;
     serverStatus[cfg.id] = 'Connecting…';
     final client = McpClient(cfg);
     try {
@@ -1208,6 +1258,7 @@ class AgentService extends GetxService {
 
   /// Tries a connection without saving anything. Returns tool names or throws.
   Future<List<McpTool>> testServer(McpServerConfig cfg) async {
+    if (!mcpEnabled) throw StateError('MCP is disabled.');
     final client = McpClient(cfg);
     try {
       return await client.listTools();
@@ -1219,6 +1270,7 @@ class AgentService extends GetxService {
   List<McpTool> toolsOf(String id) => _tools[id] ?? const [];
 
   Iterable<McpTool> get _enabledMcpTools sync* {
+    if (!mcpEnabled) return;
     for (final s in servers.where((s) => s.enabled)) {
       for (final t in toolsOf(s.id)) {
         if (!s.disabledTools.contains(t.name) &&
@@ -2148,7 +2200,7 @@ class AgentService extends GetxService {
   /// One saved trace line: the marker followed by a JSON step.
   static String stepLine(
       String name, Map<String, dynamic> args, String label, String? result,
-      {bool running = false, int ms = 0}) {
+      {bool running = false, bool failed = false, int ms = 0}) {
     var r = result ?? '';
     if (r.length > 3000)
       r = '${r.substring(0, 3000)}\n… (${result!.length - 3000} more characters)';
@@ -2158,6 +2210,7 @@ class AgentService extends GetxService {
           'a': args,
           'r': r,
           'run': running,
+          if (failed) 'failed': true,
           'ms': ms,
         })}';
   }
@@ -2174,7 +2227,7 @@ class AgentService extends GetxService {
         RegExp(r'\.(png|jpe?g|webp)$', caseSensitive: false), '');
     if (stem.isEmpty) stem = 'image_${DateTime.now().microsecondsSinceEpoch}';
     final file = await _safeFile('$stem.${image.extension}');
-    await file.writeAsBytes(image.bytes);
+    await file.writeAsBytes(image.bytes, flush: true);
     final filename = file.uri.pathSegments.last;
     return '${edited ? 'Edited' : 'Generated'} online with Pollinations (${image.model}).'
         '\n\n![${edited ? 'Edited' : 'Generated'} image](nmfile:$filename)';
@@ -2201,6 +2254,7 @@ class AgentService extends GetxService {
               !await confirm(t.name, 'built-in', confirmationArgs)) {
             return 'The user denied this tool call.';
           }
+          if (chatToolCancelled) return 'Error: tool cancelled.';
           final out = await t.run(call.arguments);
           return out.length > 6000
               ? '${out.substring(0, 6000)}\n…(truncated)'

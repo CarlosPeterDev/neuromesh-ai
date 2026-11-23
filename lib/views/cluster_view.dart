@@ -92,6 +92,9 @@ class _ClusterViewState extends State<ClusterView> {
               ),
               const SizedBox(height: 16),
             ],
+            if (role != ClusterRole.worker && cluster.worker.value.state == 'error')
+              AppNotice(cluster.worker.value.error ?? 'Could not start the worker. Select Worker to try again.',
+                  icon: Icons.error_outline_rounded, color: t.red),
             ...switch (role) {
               ClusterRole.off => _offSection(),
               ClusterRole.master => _masterSection(context),

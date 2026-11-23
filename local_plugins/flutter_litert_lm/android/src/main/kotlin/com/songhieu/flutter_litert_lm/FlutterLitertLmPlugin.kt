@@ -31,7 +31,8 @@ class FlutterLitertLmPlugin : FlutterPlugin, MethodCallHandler, EventChannel.Str
     private val conversations = ConcurrentHashMap<String, Conversation>()
     private val conversationEngineMap = ConcurrentHashMap<String, String>()
 
-    private var eventSink: EventChannel.EventSink? = null
+    private var streamJob: Job? = null
+    private var streamingConversation: Conversation? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
@@ -44,6 +45,7 @@ class FlutterLitertLmPlugin : FlutterPlugin, MethodCallHandler, EventChannel.Str
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
+        onCancel(null)
         scope.cancel()
         // Clean up all resources
         conversations.values.forEach { closeConversation(it) }
@@ -52,12 +54,57 @@ class FlutterLitertLmPlugin : FlutterPlugin, MethodCallHandler, EventChannel.Str
         engines.clear()
     }
 
+    @Suppress("UNCHECKED_CAST")
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-        eventSink = events
+        onCancel(null)
+        val args = arguments as? Map<String, Any>
+        val id = args?.get("conversationId") as? String
+        val conversation = id?.let { conversations[it] }
+        val contents = args?.get("contents") as? List<Map<String, Any>>
+        if (conversation == null || contents == null || events == null) {
+            events?.error("STREAM_ERROR", "Conversation or message contents are unavailable.", null)
+            events?.endOfStream()
+            return
+        }
+
+        val extraContext = args?.get("extraContext") as? Map<String, Any>
+        streamingConversation = conversation
+        streamJob = scope.launch {
+            try {
+                val input = parseContents(contents)
+                val flow = if (extraContext != null) {
+                    conversation.sendMessageAsync(input, extraContext)
+                } else {
+                    conversation.sendMessageAsync(input)
+                }
+                flow.collect { message: Message ->
+                    val map = messageToMap(message)
+                    withContext(Dispatchers.Main) { events.success(map) }
+                }
+                withContext(Dispatchers.Main) { events.endOfStream() }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main) {
+                    events.error("STREAM_ERROR", error.message, null)
+                    events.endOfStream()
+                }
+            }
+        }
     }
 
     override fun onCancel(arguments: Any?) {
-        eventSink = null
+        streamJob?.cancel()
+        streamJob = null
+        val conversation = streamingConversation
+        streamingConversation = null
+        if (conversation != null) {
+            try {
+                conversation.cancelProcess()
+            } catch (error: Exception) {
+                android.util.Log.w("FlutterLiteRTLM", "Cannot cancel the conversation stream", error)
+            }
+        }
     }
 
     override fun onMethodCall(call: MethodCall, result: Result) {
@@ -68,7 +115,6 @@ class FlutterLitertLmPlugin : FlutterPlugin, MethodCallHandler, EventChannel.Str
             "disposeConversation" -> handleDisposeConversation(call, result)
             "cancelConversation" -> handleCancelConversation(call, result)
             "sendMessage" -> handleSendMessage(call, result)
-            "startMessageStream" -> handleStartMessageStream(call, result)
             "countTokens" -> handleCountTokens(call, result)
             else -> result.notImplemented()
         }
@@ -223,44 +269,6 @@ class FlutterLitertLmPlugin : FlutterPlugin, MethodCallHandler, EventChannel.Str
                 }
             }
         }
-    }
-
-    private fun handleStartMessageStream(call: MethodCall, result: Result) {
-        scope.launch {
-            try {
-                val convId = call.argument<String>("conversationId")!!
-                val contentsList = call.argument<List<Map<String, Any>>>("contents")!!
-                @Suppress("UNCHECKED_CAST")
-                val extraContext = call.argument<Map<String, Any>>("extraContext")
-
-                val conversation = conversations[convId]
-                    ?: throw IllegalStateException("Conversation not found: $convId")
-
-                val contents = parseContents(contentsList)
-                val flow = if (extraContext != null) {
-                    conversation.sendMessageAsync(contents, extraContext)
-                } else {
-                    conversation.sendMessageAsync(contents)
-                }
-
-                flow.collect { message: Message ->
-                    val map = messageToMap(message)
-                    withContext(Dispatchers.Main) {
-                        eventSink?.success(map)
-                    }
-                }
-
-                withContext(Dispatchers.Main) {
-                    eventSink?.endOfStream()
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    eventSink?.error("STREAM_ERROR", e.message, e.stackTraceToString())
-                }
-            }
-        }
-        // Return immediately — streaming happens via event channel
-        result.success(null)
     }
 
     private fun handleCountTokens(call: MethodCall, result: Result) {

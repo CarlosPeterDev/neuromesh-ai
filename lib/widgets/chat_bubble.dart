@@ -203,7 +203,7 @@ class ChatBubble extends StatelessWidget {
     final (answerContent, sources) = splitSources(withoutSteps);
     final meta = <String>[
       if (message.tokensPerSec != null && message.tokensPerSec! > 0)
-        '${message.tokensPerSec!.toStringAsFixed(1)} tok/s',
+        '${message.tokensPerSec!.toStringAsFixed(1)} chunks/s',
       if (message.imageGenDurationMs != null && message.imageGenDurationMs! > 0)
         _formatGenTime(message.imageGenDurationMs!),
     ];

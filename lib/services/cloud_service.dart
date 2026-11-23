@@ -86,16 +86,29 @@ class CloudService extends GetxService {
   /// Max gap between streamed chunks. Not const so tests can shorten it.
   static Duration streamIdleTimeout = const Duration(seconds: 60);
 
-  Future<http.Response> _post(Uri url,
-          {Map<String, String>? headers, Object? body}) =>
-      http.post(url, headers: headers, body: body).timeout(_responseTimeout);
+  final _requestClients = <http.Client>{};
 
-  /// Aborts the streaming response in progress, if any. Closing the client
-  /// drops the connection, so the provider stops generating (and billing).
+  Future<http.Response> _post(Uri url,
+      {Map<String, String>? headers, Object? body}) async {
+    final client = http.Client();
+    _requestClients.add(client);
+    try {
+      return await client.post(url, headers: headers, body: body)
+          .timeout(_responseTimeout);
+    } finally {
+      _requestClients.remove(client);
+      client.close();
+    }
+  }
+
+  /// Drops active transports so a cancelled chat stops receiving responses.
   void cancel() {
     final client = _activeStreamClient;
     _activeStreamClient = null;
     client?.close();
+    for (final request in _requestClients.toList()) {
+      request.close();
+    }
   }
 
   /// Send a message to the cloud API. Returns the response text.

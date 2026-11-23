@@ -297,3 +297,24 @@ String formatNumber(double v) {
   if (v == v.roundToDouble() && v.abs() < 1e15) return v.toInt().toString();
   return v.toString();
 }
+
+/// Exact decimal integer operations with fixed input and work limits.
+String evaluateBoundedIntegers(Map<String, dynamic> args) {
+    final values = (args['values'] as String).split(',');
+    if (values.length > 32 ||
+        values
+            .any((item) => !RegExp(r'^-?[0-9]{1,80}$').hasMatch(item.trim()))) {
+      throw const FormatException(
+          'Use up to 32 decimal integers of at most 80 digits.');
+    }
+    final integers = values.map((value) => BigInt.parse(value.trim()));
+    final value = switch (args['operation']) {
+      'sum' => integers.reduce((a, b) => a + b),
+      'product' => integers.reduce((a, b) => a * b),
+      'min' => integers.reduce((a, b) => a < b ? a : b),
+      'max' => integers.reduce((a, b) => a > b ? a : b),
+      'gcd' => integers.reduce((a, b) => a.gcd(b)).abs(),
+      _ => throw const FormatException('Unknown integer operation.'),
+    };
+    return value.toString();
+  }

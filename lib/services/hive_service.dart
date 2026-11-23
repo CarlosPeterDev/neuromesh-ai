@@ -13,11 +13,21 @@ class HiveService extends GetxService {
   Box get tasksBox => _tasksBox;
   Box get settingsBox => _settingsBox;
 
+  Future<Box> _openBox(String name) async {
+    // Hive 2.x completes an internal future for concurrent openers. Join that
+    // future so a failed open has an error listener on both code paths.
+    final opened = await Future.wait([
+      Hive.openBox(name, crashRecovery: false),
+      Hive.openBox(name, crashRecovery: false),
+    ]);
+    return opened.first;
+  }
+
   Future<HiveService> init() async {
-    _sessionsBox = await Hive.openBox(AppConstants.chatSessionsBox);
-    _messagesBox = await Hive.openBox(AppConstants.chatMessagesBox);
-    _tasksBox = await Hive.openBox(AppConstants.tasksBox);
-    _settingsBox = await Hive.openBox(AppConstants.settingsBox);
+    _sessionsBox = await _openBox(AppConstants.chatSessionsBox);
+    _messagesBox = await _openBox(AppConstants.chatMessagesBox);
+    _tasksBox = await _openBox(AppConstants.tasksBox);
+    _settingsBox = await _openBox(AppConstants.settingsBox);
     // Preserve current local-server settings and purge obsolete provider data.
     // Any new server_* setting must be added here or it is wiped on launch.
     const currentServerKeys = {
@@ -36,7 +46,8 @@ class HiveService extends GetxService {
   // ─── Settings helpers ───────────────────────────
 
   T? getSetting<T>(String key, {T? defaultValue}) {
-    return _settingsBox.get(key, defaultValue: defaultValue) as T?;
+    final value = _settingsBox.get(key);
+    return value is T ? value : defaultValue;
   }
 
   Future<void> setSetting(String key, dynamic value) async {
@@ -47,6 +58,7 @@ class HiveService extends GetxService {
 
   List<Map<dynamic, dynamic>> getAllSessions() {
     return _sessionsBox.values
+        .whereType<Map>()
         .map((v) => Map<dynamic, dynamic>.from(v))
         .toList();
   }
@@ -84,7 +96,10 @@ class HiveService extends GetxService {
   // ─── Tasks ─────────────────────────────────────
 
   List<Map<dynamic, dynamic>> getAllTasks() {
-    return _tasksBox.values.map((v) => Map<dynamic, dynamic>.from(v)).toList();
+    return _tasksBox.values
+        .whereType<Map>()
+        .map((v) => Map<dynamic, dynamic>.from(v))
+        .toList();
   }
 
   Future<void> saveTask(String id, Map<String, dynamic> data) async {

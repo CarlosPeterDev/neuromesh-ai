@@ -29,6 +29,7 @@ import '../utils/skill_context.dart';
 import '../services/rag_service.dart';
 import '../services/agent_service.dart';
 import '../services/agent_tools.dart';
+import '../services/chat_tool_loop.dart';
 import '../services/download_service.dart';
 import '../widgets/tool_confirm.dart';
 import '../services/web_search_service.dart';
@@ -110,6 +111,22 @@ class ChatController extends GetxController {
   bool _scrollListenerAttached = false;
   int _generationSerial = 0;
   bool _batchCancelled = false;
+  Future<void> _contextTransition = Future<void>.value();
+  Completer<void>? _toolCancellation;
+  Object? _contextError;
+
+  void _queueContextTransition(Future<void> Function() operation) {
+    _contextTransition = _contextTransition.then((_) async {
+      try {
+        await operation();
+        _contextError = null;
+      } catch (error) {
+        _contextError = error;
+        Get.find<AppLogService>()
+            .warning('Chat context transition failed', details: error);
+      }
+    });
+  }
 
   @override
   void onInit() {
@@ -170,6 +187,7 @@ class ChatController extends GetxController {
 
   @override
   void onClose() {
+    stopGenerating();
     if (_speech.isListening) unawaited(_speech.cancel());
     _scrollTimer?.cancel();
     if (_scrollListenerAttached) {
@@ -205,25 +223,17 @@ class ChatController extends GetxController {
   Future<void> _resetInferenceContext() async {
     final inference = Get.find<InferenceService>();
     if (!inference.isModelLoaded.value) return;
-    try {
-      await inference.resetConversation();
-    } catch (error) {
-      Get.find<AppLogService>()
-          .warning('Could not reset chat context', details: error);
-    }
+    await inference.resetConversation();
   }
 
   void openChat(String sessionId) {
     stopGenerating();
+    _generationSerial++;
     currentSessionId.value = sessionId;
     final raw = _hive.getMessagesForChat(sessionId);
     messages.value = raw.map((m) => ChatMessage.fromMap(m)).toList()
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    final inference = Get.find<InferenceService>();
-    if (inference.isModelLoaded.value) {
-      inference.refreshContextInfo();
-    }
-    unawaited(_resetInferenceContext());
+    _queueContextTransition(_resetInferenceContext);
     _scrollToBottom(force: true);
   }
 
@@ -814,10 +824,9 @@ class ChatController extends GetxController {
     var posted = false;
 
     try {
-      if (previous != null) {
-        await _resetInferenceContext();
-        if (generationId != _generationSerial) return;
-      }
+      final cancellation = Completer<void>();
+      _toolCancellation = cancellation;
+      if (previous != null) _queueContextTransition(_resetInferenceContext);
       // Copy non-media attachments into the agent workspace so the AI's file
       // tools can read the whole file (not just what fits in the prompt).
       String? workspaceName;
@@ -1144,14 +1153,10 @@ class ChatController extends GetxController {
           priorReply.startsWith('To edit your image')) {
         imageRequest = ImageRequest(ImageAction.edit, visibleText);
       }
-      final searchRequested = !narratesPriorReply &&
-          imageRequest == null &&
-          (explicitSearch ||
-              (evidenceName == null &&
-                  (!fileQuestion || narrationDraft != null) &&
-                  imagePath == null &&
-                  fileType != 'audio' &&
-                  web?.shouldSearch(narrationDraft ?? visibleText) == true));
+      final searchRequested = explicitSearch &&
+          narrationDraft != null &&
+          !narratesPriorReply &&
+          imageRequest == null;
       String? unavailableEvidence;
       if (textEvidence && !readable) {
         unavailableEvidence =
@@ -1170,32 +1175,28 @@ class ChatController extends GetxController {
         try {
           webCtx = await web?.buildContext(visibleText,
               previous: previous, refresh: explicitSearch);
-        } on Exception {
-          webCtx = null;
+        } on SearchUnavailable catch (error) {
+          unavailableEvidence =
+              '${error.report.emptyMessage} I couldn’t verify the answer.';
         }
         if (generationId != _generationSerial) return;
         streamingResponse.value = '';
         if (webCtx == null) {
-          unavailableEvidence =
+          unavailableEvidence ??=
               'Web search returned no usable sources. I couldn’t verify the answer.';
         } else {
           final question = searchQuery(visibleText, previous: previous);
-          if (narrationDraft != null) {
-            narrationTrace.add(AgentService.stepLine(
-                'web_search',
-                {'query': question},
-                'Searching the web',
-                webCtx.sources.map((source) => source.title).join('\n'),
-                ms: searchTimer.elapsedMilliseconds));
-            finalPrompt =
-                'Write one plain-language paragraph answering: $question. '
-                'Use the evidence below and put numeric citations such as [1] '
-                'after supported claims. Reply with just the paragraph.\n\n'
-                '${webCtx.block}';
-          } else {
-            finalPrompt =
-                '$visibleText\nResearch question: $question\n\n${webCtx.block}';
-          }
+          narrationTrace.add(AgentService.stepLine(
+              'web_search',
+              {'query': question},
+              'Searching the web',
+              webCtx.sources.map((source) => source.title).join('\n'),
+              ms: searchTimer.elapsedMilliseconds));
+          finalPrompt =
+              'Write one plain-language paragraph answering: $question. '
+              'Use the evidence below and put numeric citations such as [1] '
+              'after supported claims. Reply with just the paragraph.\n\n'
+              '${webCtx.block}';
         }
       }
 
@@ -1223,6 +1224,8 @@ class ChatController extends GetxController {
           'local';
 
       String rawResponse;
+      double? localOutputRate;
+      var toolSearches = const <Map<String, dynamic>>[];
 
       // Build conversation history
       final history = messages
@@ -1317,183 +1320,161 @@ class ChatController extends GetxController {
                   },
                 ));
         rawResponse = result.markdown;
-      } else if (inferenceMode == 'local') {
-        final inference = Get.find<InferenceService>();
-        final agent = Get.find<AgentService>();
-        final stops = Get.find<SettingsController>().stopSequences.toList();
-
-        // Explicit "remember that …" is handled directly, without the model.
-        final saved = await agent.rememberDirect(visibleText);
+      } else {
+        await _contextTransition;
         if (generationId != _generationSerial) return;
-        final readOnlyFileQuestion = readable &&
-            RegExp(r'^\s*(?:(?:ok|please)[,.]?\s+)*(?:read|summarize|summarise|describe|explain|what is)\b',
-                    caseSensitive: false)
-                .hasMatch(visibleText) &&
-            !RegExp(r'\b(?:create|write|save|edit|modify|change|delete|send|run)\b',
-                    caseSensitive: false)
-                .hasMatch(visibleText);
+        if (_contextError != null && inferenceMode == 'local') {
+          await _resetInferenceContext();
+          if (generationId != _generationSerial) return;
+          _contextError = null;
+        }
+        final cloud = Get.find<CloudService>();
+        final stops = settings.stopSequences.toList();
+        final baseSystem = [
+          contextAgent.composeSystem(_effectiveSystemPrompt, withTools: false),
+          if (skillContext != null && skillContext.documents.isNotEmpty)
+            skillContext.prompt(contextSize ~/ 4, alreadyIncluded: finalPrompt),
+        ].join('\n\n');
         final useTools = narrationDraft == null &&
             webCtx == null &&
-            streamingAttachmentType.value == null &&
-            !readOnlyFileQuestion &&
-            agent.wantsTools(visibleText,
-                hasFile: needsFileTools ||
-                    (skillContext?.documents.isNotEmpty ?? false));
-        String buildSystem({String latestContext = '', required bool tools}) =>
-            [
-              agent.composeSystem(_effectiveSystemPrompt,
-                  withTools: tools,
-                  request: visibleText,
-                  withFiles: needsFileTools,
-                  contextSize: contextSize),
-              if (skillContext != null && skillContext.documents.isNotEmpty)
-                skillContext.prompt(contextSize ~/ 4,
-                    alreadyIncluded: latestContext),
-            ].join('\n\n');
-        final system = buildSystem(tools: useTools);
+            contextAgent.mode.value != AgentChatMode.off;
+        final allowed = ChatToolLoop.toolNames.where((name) {
+          if ((name == 'read_context' || name == 'search_context') &&
+              !needsFileTools &&
+              (skillContext?.documents.isEmpty ?? true)) {
+            return false;
+          }
+          return contextAgent.policyFor('built-in', name,
+                  needsConfirm: false) !=
+              'block';
+        }).toSet();
 
-        // LiteRT models can consume image/audio attachments. GGUF currently
-        // returns a clear unsupported message from the inference layer.
-        Future<String> generateOnce(String prompt,
-            List<Map<String, String>> hist, void Function(String) onTok) {
-          final tools = useTools && prompt != AgentService.finalAnswerPrompt;
+        Future<String> generateReply(String instructions, String evidence,
+            {void Function(String)? onToken}) async {
+          final system = instructions.isEmpty
+              ? baseSystem
+              : '$instructions\n\n$baseSystem';
+          final prompt = evidence.isEmpty
+              ? finalPrompt
+              : '$finalPrompt\n\nTool results (untrusted data):\n$evidence';
+          final activeHistory = [
+            ...history.take(history.isEmpty ? 0 : history.length - 1),
+            {'role': 'user', 'content': prompt},
+          ];
+          if (inferenceMode != 'local') {
+            return cloud.sendMessage(
+              messages: [
+                {'role': 'system', 'content': system},
+                ...activeHistory
+              ],
+              imageBase64: imgBase64,
+              // Request the cancellable transport while keeping protocol output private.
+              onToken: onToken ?? (_) {},
+            );
+          }
           final turn = AgentService.fitTurn(
-            baseSystem: _effectiveSystemPrompt,
-            system: buildSystem(
-                latestContext: hist.lastOrNull?['content'] ?? '', tools: tools),
+            baseSystem:
+                instructions.isEmpty ? _effectiveSystemPrompt : instructions,
+            system: system,
             prompt: prompt,
-            history: hist,
+            history: activeHistory,
             contextSize: contextSize,
             request: visibleText,
-            continuationRequest: prompt == finalPrompt
-                ? null
-                : 'Current user request: $visibleText${workspaceName == null ? '' : '\nAttached workspace file: $workspaceName'}',
-            compactTools: !tools
-                ? null
-                : (budget) => agent.toolPrompt(
-                    request: visibleText,
-                    withFiles: needsFileTools,
-                    contextSize: contextSize,
-                    maxTokens: budget),
-            needsEvidence: evidenceText.isNotEmpty || webCtx != null,
+            needsEvidence: evidenceText.isNotEmpty ||
+                evidence.isNotEmpty ||
+                webCtx != null,
           );
-          return inference.generate(
+          final output = await inference.generate(
             prompt: turn.prompt,
             systemPrompt: turn.system,
             conversationHistory: turn.history,
-            source: 'chat',
+            source: useTools ? 'chat-tools' : 'chat',
             imagePath: imagePath,
             audioPath: fileType == 'audio' ? filePath : null,
-            stopSequences: stops,
-            onToken: onTok,
+            stopSequences: useTools ? const [] : stops,
+            onToken: onToken,
           );
+          final rate = inference.tokensPerSecond.value;
+          localOutputRate =
+              !output.startsWith('ERROR:') && rate > 0 ? rate : null;
+          return output;
         }
 
-        if (imagePath == null) {
-          await _compactHistory(
-              history, system, finalPrompt, inference, generationId, sessionId);
+        if (inferenceMode == 'local' && imagePath == null && !useTools) {
+          await _compactHistory(history, baseSystem, finalPrompt, inference,
+              generationId, sessionId);
         }
         if (generationId != _generationSerial) return;
 
         if (!useTools) {
-          void streamToken(String token) {
+          rawResponse = await generateReply('', '', onToken: (token) {
             if (generationId != _generationSerial) return;
             streamingResponse.value += token;
             trackThoughtTiming();
             _scrollToBottom();
-          }
-
-          rawResponse = await generateOnce(finalPrompt, history, streamToken);
-          if (generationId != _generationSerial) return;
-          if (AgentService.isGenericOffer(rawResponse) &&
-              visibleText.trim().split(RegExp(r'\s+')).length > 4) {
-            streamingResponse.value = '';
-            rawResponse = await generateOnce(
-              '$finalPrompt\n\nProvide the answer or requested result now. Ask a question only if a detail is essential.',
-              history,
-              streamToken,
-            );
-          }
+          });
         } else {
-          var traceMd = '';
-          var visible = '';
-          var status = '';
-          void render() {
-            if (generationId != _generationSerial) return;
-            final parts = <String>[
-              if (traceMd.isNotEmpty) traceMd,
-              if (status.isNotEmpty) '> ⏳ $status',
-            ];
-            streamingResponse.value = [
-              if (parts.isNotEmpty) parts.join('\n'),
-              visible
-            ].where((e) => e.isNotEmpty).join('\n\n');
-            trackThoughtTiming();
-            _scrollToBottom();
-          }
-
-          Future<ToolLoopResult> runAgentLoop() => agent.runToolLoop(
-                generate: generateOnce,
-                allowDirectActions:
-                    skillContext == null || skillContext.documents.isEmpty,
-                prompt: finalPrompt,
-                history: history,
-                confirm: confirmToolCall,
-                userText: visibleText,
-                researchQuestion: evidenceName == null &&
-                        !fileQuestion &&
-                        agent.needsResearch(visibleText)
-                    ? visibleText
-                    : null,
-                cancelled: () => generationId != _generationSerial,
-                onVisible: (v) {
-                  visible = v;
-                  render();
+          Future<ToolLoopResult> runLoop() => ChatToolLoop(
+                maxSteps: _hive.getSetting<int>('chat_tool_step_limit') ?? 5,
+              ).run(
+                reply: generateReply,
+                allowed: allowed,
+                execute: (call, abort) {
+                  final args = {...call.arguments};
+                  if (call.name == 'text_to_speech') {
+                    args['name'] = 'speech-${_uuid.v4()}.wav';
+                  }
+                  return contextAgent.executeChatTool(
+                    ParsedToolCall(call.name, args, ''),
+                    (name, server, args) async {
+                      final approved =
+                          await confirmToolCall(name, server, args);
+                      return approved && !cancellation.isCompleted;
+                    },
+                    abort: abort,
+                    cancelled: () => cancellation.isCompleted,
+                  );
                 },
-                onStatus: (st) {
-                  status = st;
-                  render();
+                search: (query, abort) async {
+                  if (web == null)
+                    return const SearchReport(
+                        [], {'Web search': SearchFailure.provider}, 0);
+                  if (contextAgent.policyFor('built-in', 'web_search',
+                              needsConfirm: false) ==
+                          'ask' &&
+                      !await confirmToolCall(
+                          'web_search', 'built-in', {'query': query})) {
+                    return const SearchReport(
+                        [], {'Permission denied': SearchFailure.provider}, 0);
+                  }
+                  if (cancellation.isCompleted) {
+                    return const SearchReport([], {}, 0);
+                  }
+                  return web.searchReport(query,
+                      max: 6, freshness: web.freshnessFor(query), abort: abort);
                 },
-                onTrace: (t) {
-                  traceMd = t.join('\n');
-                  visible = '';
-                  status = '';
-                  render();
+                cancellation: cancellation.future,
+                evidenceBudget: (contextSize ~/ 2).clamp(300, 1800),
+                compactPrompt: inferenceMode == 'local' && contextSize < 900,
+                onTrace: (trace) {
+                  if (generationId != _generationSerial) return;
+                  streamingResponse.value = trace.join('\n');
+                  _scrollToBottom();
+                },
+                onTimeout: () {
+                  if (!cancellation.isCompleted) cancellation.complete();
+                  _queueContextTransition(inference.stopGeneration);
+                  cloud.cancel();
                 },
               );
-          final result = await agent.inProject(
+          final result = await contextAgent.inProject(
               project,
               () => skillContext == null
-                  ? runAgentLoop()
-                  : SkillsService.inTurn(skillContext, runAgentLoop));
+                  ? runLoop()
+                  : SkillsService.inTurn(skillContext, runLoop));
           rawResponse = result.markdown;
+          toolSearches = result.searches;
         }
-        if (saved != null && !rawResponse.startsWith('ERROR')) {
-          rawResponse = '🧠 Saved to memory: $saved\n\n$rawResponse';
-        }
-      } else {
-        final cloud = Get.find<CloudService>();
-        final apiMessages = [
-          {
-            'role': 'system',
-            'content': Get.find<AgentService>()
-                    .composeSystem(_effectiveSystemPrompt, withTools: false) +
-                (skillContext == null || skillContext.documents.isEmpty
-                    ? ''
-                    : '\n\n${skillContext.prompt(2048)}')
-          },
-          ...history,
-        ];
-        rawResponse = await cloud.sendMessage(
-          messages: apiMessages,
-          imageBase64: imgBase64, // already encoded before clearImage()
-          onToken: (token) {
-            if (generationId != _generationSerial) return;
-            streamingResponse.value += token;
-            trackThoughtTiming();
-            _scrollToBottom();
-          },
-        );
       }
 
       if (thoughtStartedAt != null && thoughtDurationSeconds == null) {
@@ -1564,9 +1545,6 @@ class ChatController extends GetxController {
       if (webCtx != null && hasAnswer) rawResponse += webCtx.sourcesMarkdown();
 
       // Stop streaming UI
-      final tps = inferenceMode == 'local'
-          ? Get.find<InferenceService>().tokensPerSecond.value
-          : null;
       isStreaming.value = false;
       streamingAttachmentType.value = null;
       streamingResponse.value = '';
@@ -1588,14 +1566,15 @@ class ChatController extends GetxController {
       // Display response directly (no command processing)
       final aiMsg = ChatMessage(
         id: _uuid.v4(),
-        chatId: currentSessionId.value,
+        chatId: sessionId,
         role: 'assistant',
         workspaceProject: project,
         content: rawResponse,
         imageBase64: outImageBase64,
-        tokensPerSec: tps,
+        tokensPerSec: localOutputRate,
         thoughtDurationSeconds: thoughtDurationSeconds,
         imageGenDurationMs: genDurationMs,
+        toolSearches: toolSearches,
       );
       messages.add(aiMsg);
       _hive.saveMessage(aiMsg.id, aiMsg.toMap());
@@ -1649,6 +1628,7 @@ class ChatController extends GetxController {
     }
 
     if (generationId == _generationSerial) {
+      _toolCancellation = null;
       isLoading.value = false;
       _scrollToBottom();
       unawaited(_autoTitle(generationId));
@@ -1755,12 +1735,18 @@ class ChatController extends GetxController {
   }
 
   void stopGenerating() {
-    if (!isLoading.value && !isStreaming.value) return;
+    final inference = Get.find<InferenceService>();
+    final titling = inference.isGenerating.value &&
+        inference.generationSource.value == 'title';
+    if (!isLoading.value && !isStreaming.value && !titling) return;
+    final cancellation = _toolCancellation;
+    if (cancellation != null && !cancellation.isCompleted)
+      cancellation.complete();
     final partialResponse = streamingResponse.value.trim();
     if (partialResponse.isNotEmpty) {
-      final tps = Get.find<InferenceService>().tokensPerSecond.value;
+      final tps = inference.tokensPerSecond.value;
       _saveAssistantMessage(
-        content: partialResponse,
+        content: markToolTraceCancelled(partialResponse),
         tokensPerSec: tps > 0 ? tps : null,
       );
     }
@@ -1776,7 +1762,7 @@ class ChatController extends GetxController {
     imageGenStartTime.value = null;
     imageGenDecoding.value = false;
     _batchCancelled = true;
-    unawaited(Get.find<InferenceService>().stopGeneration());
+    _queueContextTransition(inference.stopGeneration);
     Get.find<CloudService>().cancel();
   }
 

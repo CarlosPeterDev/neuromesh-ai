@@ -32,7 +32,10 @@ class InferenceService extends GetxService {
   final loadedModelName = ''.obs;
   int get modelRevision => _modelRevision;
   int _modelRevision = 0;
+  // The runtimes deliver text chunks. Neither reports tokenizer counts here.
   final tokenCount = 0.obs;
+  int? firstOutputMs;
+  int? modelLoadMs;
   final tokensPerSecond = 0.0.obs;
   final contextTokensUsed = 0.obs;
   final contextTokensTotal = 0.obs;
@@ -42,6 +45,16 @@ class InferenceService extends GetxService {
   final gpuName = ''.obs;
   final gpuLayersUsed = 0.obs;
   int _generationId = 0;
+  Future<void> _nativeTransition = Future<void>.value();
+
+  Future<void> _changeNativeContext(Future<void> Function() change) {
+    final next = _nativeTransition.then((_) => change());
+    _nativeTransition = next.then<void>((_) {}, onError: (Object error) {
+      Get.find<AppLogService>().warning('Native context transition failed',
+          details: diagnosticText('$error'));
+    });
+    return next;
+  }
 
   /// Incremented whenever a generation is stopped early (by the user, a
   /// newer generation, or a disconnecting server client). Callers compare it
@@ -83,6 +96,7 @@ class InferenceService extends GetxService {
     if (isLoadingModel.value || _unloadingModel) {
       return 'ERROR: Wait for the current model operation to finish.';
     }
+    final loadClock = Stopwatch()..start();
     isLoadingModel.value = true;
     loadingModelName.value = modelName ?? modelPath.split('/').last;
     modelLoadProgress.value = 0.0;
@@ -134,7 +148,9 @@ class InferenceService extends GetxService {
 
       var finalContextSize = safeRetry
           ? contextSize.clamp(512, 1024)
-          : isLiteRt ? contextSize.clamp(512, 4096) : contextSize;
+          : isLiteRt
+              ? contextSize.clamp(512, 4096)
+              : contextSize;
       final autoContext =
           _hive.getSetting<bool>('auto_context', defaultValue: true) == true;
       final lastLoadedContext =
@@ -167,7 +183,9 @@ class InferenceService extends GetxService {
         finalContextSize = plan.context;
       }
       // Single-device auto mode can only shrink the requested window.
-      if (!isLiteRt && clusterWorkers == 0 && autoContext &&
+      if (!isLiteRt &&
+          clusterWorkers == 0 &&
+          autoContext &&
           Get.isRegistered<DeviceInfoService>()) {
         try {
           final dev = Get.find<DeviceInfoService>();
@@ -208,7 +226,8 @@ class InferenceService extends GetxService {
 
       if (!result.success) {
         diagnostics
-          ?..set('engineBackend', result.backend.isEmpty ? 'unknown' : result.backend)
+          ?..set('engineBackend',
+              result.backend.isEmpty ? 'unknown' : result.backend)
           ..set('progressPercent', (modelLoadProgress.value * 100).round());
         await _releaseEngine();
         return result.message;
@@ -255,6 +274,7 @@ class InferenceService extends GetxService {
         );
       }
 
+      modelLoadMs = loadClock.elapsedMilliseconds;
       isModelLoaded.value = true;
       if (clusterWorkers > 0) {
         try {
@@ -296,7 +316,17 @@ class InferenceService extends GetxService {
 
   Future<void> _releaseEngine() async {
     final engine = _engine;
+    if (engine != null) {
+      try {
+        await _stopEngine(engine);
+      } catch (error) {
+        Get.find<AppLogService>().warning(
+            'Could not stop inference before releasing the model',
+            details: diagnosticText('$error'));
+      }
+    }
     _engine = null;
+    modelLoadMs = null;
     isModelLoaded.value = false;
     isVisionLoaded.value = false;
     _loadedProjector = null;
@@ -313,8 +343,6 @@ class InferenceService extends GetxService {
       Get.find<ClusterService>().clearSplit();
     }
     if (engine != null) {
-      // dispose() stops native inference; invalidate Dart callbacks first.
-      await stopGeneration();
       try {
         await engine.dispose();
       } catch (error) {
@@ -342,16 +370,24 @@ class InferenceService extends GetxService {
       return 'ERROR: No model loaded. Go to Models tab to download and load one.';
     }
 
+    final stopAtEntry = _stopCount;
     if (isGenerating.value) {
-      // Wait for previous generation
-      for (int i = 0; i < 10; i++) {
+      for (var i = 0; i < 10 && isGenerating.value; i++) {
         await Future.delayed(const Duration(milliseconds: 500));
-        if (!isGenerating.value) break;
+        if (stopAtEntry != _stopCount) return '';
       }
       if (isGenerating.value) {
-        await stopGeneration();
-        await Future.delayed(const Duration(milliseconds: 300));
+        return 'ERROR: Inference is busy. Try again when the current request finishes.';
       }
+    }
+    Future<void> transition;
+    do {
+      transition = _nativeTransition;
+      await transition;
+    } while (!identical(transition, _nativeTransition));
+    if (stopAtEntry != _stopCount) return '';
+    if (isGenerating.value || _unloadingModel || isLoadingModel.value) {
+      return 'ERROR: Inference is busy. Try again when the current operation finishes.';
     }
 
     if (!identical(engine, _engine) || !isModelLoaded.value) {
@@ -370,7 +406,9 @@ class InferenceService extends GetxService {
     streamingText.value = '';
 
     final startTime = DateTime.now();
-    DateTime? firstVisibleTokenAt;
+    final generationClock = Stopwatch()..start();
+    int? firstVisibleOutputUs;
+    firstOutputMs = null;
     Timer? tokenFlushTimer;
     final tokenFlushBuffer = StringBuffer();
 
@@ -385,20 +423,25 @@ class InferenceService extends GetxService {
     var stopSequenceHit = false;
 
     Future<String?> recoverCluster() async {
-      if (Zone.current[_clusterRetry] == true || !isCurrent() || firstVisibleTokenAt != null ||
+      if (Zone.current[_clusterRetry] == true ||
+          !isCurrent() ||
+          firstVisibleOutputUs != null ||
           !Get.isRegistered<ClusterService>()) return null;
       final cluster = Get.find<ClusterService>();
       final path = _hive.getSetting<String>(AppConstants.keyLocalModelPath);
-      if (path == null || !await cluster.activeWorkerDisconnected() || !isCurrent()) {
+      if (path == null ||
+          !await cluster.activeWorkerDisconnected() ||
+          !isCurrent()) {
         return null;
       }
       final name = loadedModelName.value;
       final projector = _loadedProjector;
       // Releasing the current engine invalidates this generation once.
       final expectedStops = stopCount + 1;
-      Get.find<AppLogService>().warning('Cluster worker disconnected; attempting to reload model');
-      final loaded = await loadModel(path, modelName: name, mmprojPath: projector,
-          recoveringCluster: true);
+      Get.find<AppLogService>()
+          .warning('Cluster worker disconnected; attempting to reload model');
+      final loaded = await loadModel(path,
+          modelName: name, mmprojPath: projector, recoveringCluster: true);
       if (loaded.startsWith('ERROR:')) {
         return 'ERROR: A cluster worker disconnected and this model could not be reloaded. $loaded';
       }
@@ -487,14 +530,15 @@ class InferenceService extends GetxService {
             }
             if (token.isEmpty) return;
           }
-          firstVisibleTokenAt ??= DateTime.now();
+          final now = generationClock.elapsedMicroseconds;
+          firstVisibleOutputUs ??= now;
+          firstOutputMs ??= now ~/ 1000;
           tokenCount.value++;
           streamingText.value += token;
-          final speedStart = firstVisibleTokenAt ?? startTime;
-          final elapsedSeconds =
-              DateTime.now().difference(speedStart).inMilliseconds / 1000.0;
-          if (elapsedSeconds > 0) {
-            tokensPerSecond.value = tokenCount.value / elapsedSeconds;
+          final generationUs = now - firstVisibleOutputUs!;
+          if (generationUs > 0 && tokenCount.value > 1) {
+            tokensPerSecond.value =
+                (tokenCount.value - 1) * 1000000 / generationUs;
           }
           if (loadedModelRuntime.value == 'litert') {
             tokenFlushBuffer.write(token);
@@ -571,28 +615,33 @@ class InferenceService extends GetxService {
     }
   }
 
-  Future<void> stopGeneration() async {
+  Future<void> stopGeneration() => _stopEngine(_engine);
+
+  Future<void> _stopEngine(platform.InferenceEngine? engine) {
     _generationId++;
     _stopCount++;
     isGenerating.value = false;
     tokenCount.value = 0;
+    tokensPerSecond.value = 0;
     generationSource.value = '';
     streamingText.value = '';
-    final engine = _engine;
-    if (engine != null) {
-      unawaited(engine.stop().timeout(const Duration(seconds: 1)).catchError(
-            (_) {},
-          ));
-    }
+    return _changeNativeContext(() async {
+      if (engine != null) await engine.stop();
+    });
   }
 
-  /// Reset the native conversation context. Call this whenever the user
-  /// switches to a different chat session so old context doesn't leak.
-  Future<void> resetConversation() async {
+  /// Serialize resets with native cancellation and model changes.
+  Future<void> resetConversation() {
     final engine = _engine;
-    if (engine != null) {
-      await engine.resetConversation();
-    }
+    return _changeNativeContext(() async {
+      if (engine != null &&
+          identical(engine, _engine) &&
+          !_unloadingModel &&
+          !isLoadingModel.value &&
+          !isGenerating.value) {
+        await engine.resetConversation();
+      }
+    });
   }
 
   Future<void> refreshContextInfo() async {
@@ -600,8 +649,9 @@ class InferenceService extends GetxService {
       return;
     }
 
-    final info = await _engine!.getContextInfo();
-    if (info == null) return;
+    final engine = _engine!;
+    final info = await engine.getContextInfo();
+    if (info == null || !identical(engine, _engine)) return;
 
     contextTokensUsed.value = info.tokensUsed;
     contextTokensTotal.value = info.contextSize;
@@ -682,7 +732,8 @@ class InferenceService extends GetxService {
       } catch (error, stack) {
         diagnostics
           ?..set('engineExceptionType', error.runtimeType.toString())
-          ..set('engineDartStack', stack.toString().split('\n').take(16).join('\n'));
+          ..set('engineDartStack',
+              stack.toString().split('\n').take(16).join('\n'));
         if (error is PlatformException) {
           diagnostics?.set('enginePlatformErrorCode', error.code);
         }

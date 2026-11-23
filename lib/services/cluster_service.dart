@@ -118,6 +118,17 @@ class ClusterService extends GetxService {
   String deviceName = '';
   double? _localSpeed;
   Timer? _statusTimer;
+  Future<void> _workerTransition = Future<void>.value();
+  int _workerStatusRevision = 0;
+
+  Future<void> _changeWorker(Future<void> Function() operation) {
+    final transition = _workerTransition.then((_) => operation());
+    _workerTransition = transition.then<void>((_) {}, onError: (Object error) {
+      Get.find<AppLogService>()
+          .error('Cluster transition failed', details: error);
+    });
+    return transition;
+  }
 
   ClusterRole get role => _workerRequested.value || worker.value.running
       ? ClusterRole.worker
@@ -200,20 +211,24 @@ class ClusterService extends GetxService {
       final inference = Get.find<InferenceService>();
       if (inference.isLoadingModel.value || inference.isGenerating.value)
         return;
-      List<ClusterWorker> lost;
-      try {
-        lost = await relocateWorkers();
-      } catch (_) {
-        return;
-      }
-      if (lost.isEmpty) return;
-      final file = _hive.getSetting<String>(AppConstants.keyLocalModelName);
-      if (file == null || file.isEmpty) return;
+      final revision = inference.modelRevision;
       _reloading = true;
-      _lastReload = DateTime.now();
       try {
+        await relocateWorkers();
+        final needsReload = await activeWorkerDisconnected();
+        if (!needsReload ||
+            !enabled.value ||
+            role != ClusterRole.master ||
+            split.length < 2 ||
+            !inference.isModelLoaded.value ||
+            inference.modelRevision != revision ||
+            inference.isLoadingModel.value ||
+            inference.isGenerating.value) return;
+        final file = inference.loadedModelName.value;
+        if (file.isEmpty) return;
+        _lastReload = DateTime.now();
         showToast('Phone cluster',
-            '${lost.map((w) => w.model ?? w.name).join(', ')} left. Reloading the model without it…');
+            'An active worker changed address or stopped responding. Reloading the model…');
         Get.find<AppLogService>()
             .info('Phone cluster: worker lost, reloading $file');
         await Get.find<ModelController>().loadModel(file);
@@ -238,20 +253,21 @@ class ClusterService extends GetxService {
     LlamaCluster.setKeepScreenOn(on).catchError((_) {});
   }
 
-  Future<void> setRole(ClusterRole next) async {
-    if (next == role) return;
-    if (next != ClusterRole.worker && role == ClusterRole.worker) {
-      if (workerStopsWithApp) {
-        showToast(
-            'Still sharing', 'Close NeuroMesh AI to stop sharing this device.');
-        return;
-      }
-      await stopWorker();
-    }
-    await _setEnabled(next == ClusterRole.master);
-    if (next == ClusterRole.worker) await startWorker();
-    await refreshWifiAddress();
-  }
+  Future<void> setRole(ClusterRole next) => _changeWorker(() async {
+        if (next == role) return;
+        if (next != ClusterRole.worker && role == ClusterRole.worker) {
+          if (workerStopsWithApp) {
+            showToast('Still sharing',
+                'Close NeuroMesh AI to stop sharing this device.');
+            return;
+          }
+          await _stopWorker();
+          if (worker.value.running || worker.value.starting) return;
+        }
+        await _setEnabled(next == ClusterRole.master);
+        if (next == ClusterRole.worker) await _startWorker();
+        await refreshWifiAddress();
+      });
 
   // ── Worker ─────────────────────────────────────────────────────────────
 
@@ -276,65 +292,99 @@ class ClusterService extends GetxService {
     }).toString();
   }
 
-  Future<void> startWorker() async {
+  Future<void> startWorker() => setRole(ClusterRole.worker);
+
+  Future<void> _startWorker() async {
+    _workerStatusRevision++;
     _workerRequested.value = true;
     worker.value = const ClusterWorkerStatus(state: 'starting');
     try {
       await LlamaCluster.startWorker(port: workerPort.value);
       _watchWorker();
-    } on PlatformException catch (error) {
+    } catch (error) {
       _statusTimer?.cancel();
+      _workerRequested.value = false;
       worker.value = ClusterWorkerStatus(
           state: 'error',
-          error: error.message ?? 'Could not start the worker service.');
+          error: error is PlatformException
+              ? error.message ?? 'Could not start the worker service.'
+              : 'Could not start the worker service.');
+      Get.find<AppLogService>()
+          .error('Cluster worker start failed', details: error);
     }
   }
 
-  Future<void> setWorkerPort(int port) async {
-    if (port < 1024 || port > 65535 || port == workerPort.value) return;
-    if (workerStopsWithApp && worker.value.running) return;
-    final wasRunning = _workerRequested.value || worker.value.running;
-    if (wasRunning) await stopWorker();
-    await _hive.setSetting('cluster_worker_port', port);
-    workerPort.value = port;
-    if (wasRunning) await startWorker();
-  }
+  Future<void> setWorkerPort(int port) => _changeWorker(() async {
+        if (port < 1024 || port > 65535 || port == workerPort.value) return;
+        if (workerStopsWithApp && worker.value.running) return;
+        final wasRunning = role == ClusterRole.worker;
+        if (wasRunning) {
+          await _stopWorker();
+          if (worker.value.running || worker.value.starting) return;
+        }
+        await _hive.setSetting('cluster_worker_port', port);
+        workerPort.value = port;
+        if (wasRunning) await _startWorker();
+      });
 
-  Future<void> stopWorker() async {
+  Future<void> stopWorker() => _changeWorker(_stopWorker);
+
+  Future<void> _stopWorker() async {
+    _workerStatusRevision++;
     _workerRequested.value = false;
     _statusTimer?.cancel();
-    await LlamaCluster.stopWorker();
-    await Future.delayed(const Duration(milliseconds: 600));
-    await refreshWorkerStatus();
+    try {
+      await LlamaCluster.stopWorker();
+    } finally {
+      for (var attempt = 0; attempt < 10; attempt++) {
+        await refreshWorkerStatus();
+        if (!worker.value.running && !worker.value.starting) break;
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      }
+      if (worker.value.running || worker.value.starting) _watchWorker();
+    }
   }
 
-  /// Follows the worker service (its own process) while it runs: whether a
-  /// master is connected and how much it holds.
+  /// Follows the separate Android service process, including startup failure
+  /// and process death. Allow a brief grace period for foreground startup.
   void _watchWorker() {
     _statusTimer?.cancel();
     var checks = 0;
-    _statusTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+    var checking = false;
+    _statusTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
+      if (checking) return;
+      checking = true;
       await refreshWorkerStatus();
-      final s = worker.value;
-      if (s.running || s.starting) checks = 0;
-      if (s.state == 'error') {
-        _statusTimer?.cancel();
-        return;
-      }
-      // Give the service a few seconds to come up before calling it stopped.
-      if (!s.running && !s.starting && ++checks > 3) {
+      checking = false;
+      if (!timer.isActive) return;
+      final status = worker.value;
+      if (status.running) {
+        checks = 0;
         _workerRequested.value = false;
-        _statusTimer?.cancel();
+      } else if (status.state == 'error' || ++checks >= 5) {
+        _workerRequested.value = false;
+        if (status.starting || status.state == 'stopped' && checks >= 5) {
+          worker.value = const ClusterWorkerStatus(
+              state: 'error',
+              error: 'Worker is unavailable. Try starting it again.');
+        }
+        timer.cancel();
       }
     });
   }
 
   Future<void> refreshWorkerStatus() async {
+    final revision = _workerStatusRevision;
     try {
-      worker.value = await LlamaCluster.workerStatus();
-    } catch (e) {
+      final status =
+          await LlamaCluster.workerStatus().timeout(const Duration(seconds: 3));
+      if (revision != _workerStatusRevision) return;
+      if (_workerRequested.value && status.state == 'stopped') return;
+      worker.value = status;
+      if (status.state == 'error') _workerRequested.value = false;
+    } catch (error) {
       Get.find<AppLogService>()
-          .error('Cluster worker status failed', details: e);
+          .error('Cluster worker status failed', details: error);
     }
   }
 
@@ -416,7 +466,7 @@ class ClusterService extends GetxService {
     final reachable = await Future.wait(snapshot.map((w) async {
       final clock = Stopwatch()..start();
       try {
-        if (!await LlamaCluster.probe(w.endpoint)) return false;
+        if (!await _probeWorker(w)) return false;
         final observed = clock.elapsedMicroseconds / 1000;
         final previous = _workerRoundTripMs[w.endpoint];
         _workerRoundTripMs[w.endpoint] =
@@ -439,14 +489,16 @@ class ClusterService extends GetxService {
     final unreachable = <ClusterWorker>[];
     for (final w in missing) {
       final match = seen.firstWhereOrNull((s) => w.id != null && s.id == w.id);
-      final i = workers.indexWhere((x) => x.endpoint == w.endpoint);
       if (match == null ||
           match.endpoint == w.endpoint ||
-          i < 0 ||
           !await _probeWorker(match)) {
         unreachable.add(w);
         continue;
       }
+      final i = workers.indexWhere(
+          (entry) => entry.endpoint == w.endpoint && entry.id == w.id);
+      if (i < 0 || workers.any((entry) => entry.endpoint == match.endpoint))
+        continue;
       workers[i] = w.movedTo(match.host, match.port);
       lastWorkerReply.remove(w.endpoint);
       unreachableWorkers.remove(w.endpoint);
@@ -563,8 +615,8 @@ class ClusterService extends GetxService {
   }
 
   Future<void> _setEnabled(bool value) async {
-    enabled.value = value;
     await _hive.setSetting(AppConstants.keyClusterEnabled, value);
+    enabled.value = value;
   }
 
   Future<void> _save() => _hive.setSetting(

@@ -1,8 +1,21 @@
 # NeuroMesh AI development handoff
 
+## Current milestone — Android stability
+
+The `android-stability` branch starts at `bc0acc8`. Ordinary text and voice Chat now use a bounded, schema-validated tool loop. Android startup waits for Hive, Chat sequences context transitions, and failed worker starts clear the role. The standalone Agent tab, scheduled agent startup, and MCP connections are disabled. GitHub's release workflow builds and publishes Android artifacts individually. [Audit and evidence](docs/ANDROID_STABILITY_AUDIT.md) · [Physical Android test list](docs/ANDROID_DEVICE_TESTS.md)
+
+The current audit is against `main`. Open PRs #61 and #62 describe different Android agent work and were not merged into this branch. Their checks do not verify this branch. [PR #61](https://github.com/CarlosPeterDev/neuromesh-ai/pull/61) · [PR #62](https://github.com/CarlosPeterDev/neuromesh-ai/pull/62)
+
+### Verification on this branch
+
+- Flutter 3.38.9 full suite passed 233 tests, with four optional fixture and desktop smoke checks skipped. The final focused run passed all 25 Chat, tool-loop and LiteRT channel tests after the last UI metrics and trace changes. Static analysis completed with informational findings and no warnings or errors. The three Python build-configuration tests, workflow YAML check, publication script syntax check and `git diff --check` passed.
+- The Android ARM64 debug Flutter asset bundle compiled. The modified Kotlin LiteRT bridge compiled in an isolated API check against Android SDK 36, the Flutter embedding and the real LiteRT-LM 0.12.0 AAR. That check used the available Kotlin 2.0.21 compiler with dependency metadata validation bypassed. Production Kotlin compilation remains part of the Gradle build.
+- Release APK and AAB attempts did not produce artifacts. After configuring the proxy and reducing the Gradle heap, APK configuration hit HTTP 503 fetching `com.android.tools.utp:android-test-plugin-result-listener-gradle-proto:30.3.0` through `piper_phonemize`. The AAB configuration stopped on an incomplete local NDK 28.2.13676358 installation. Both NDK versions were requested by this build. No release was published or marked Latest from these changes.
+- Real Android model output, LiteRT cancellation on device, two-phone RPC, and native speech playback remain pending. Native function calling stays disabled while the LiteRT Android tool-registration path lacks verification. [Audit and device coverage](docs/ANDROID_STABILITY_AUDIT.md)
+
 ## Start here
 
-NeuroMesh AI is a Flutter workspace for private local AI with optional cloud providers. Users can download or import models, chat with files, work with a tool-using agent, and connect compatible devices. Android uses Kotlin/JNI and bundled llama.cpp. The Windows and Linux packages include a CPU llama-server. See [GitHub](https://github.com/carlospeter582011-prog/neuromesh-ai) and [installation and build instructions](README.md).
+NeuroMesh AI is a Flutter workspace for private local AI with optional cloud providers. Users can download or import models, chat with files and model-directed tools, and connect compatible devices. Android uses Kotlin/JNI and bundled llama.cpp. Historical Windows and Linux packages included a CPU llama-server. See [GitHub](https://github.com/carlospeter582011-prog/neuromesh-ai) and [installation and build instructions](README.md).
 
 Read this file, check the current branch and working tree, and review the latest GitHub runs and open pull requests before choosing work. Update this file when the next task, release status, or known limitations change.
 
@@ -21,7 +34,7 @@ The combined v1.0.150 Actions run passed. Windows and Linux produced native pack
 
 ## Automatic GitHub Releases
 
-Every push to `main` starts the Android, Linux, and Windows release workflow. The publish job verifies the build outputs and SHA-256 digests, then publishes one versioned GitHub Release with individual installer downloads. GitHub marks the newest eligible version **Latest**, and the Android updater uses GitHub’s Latest release endpoint with a fallback for the historical channel. Development-signed packages carry a development label and the `-dev` filename suffix. [Latest release](https://github.com/CarlosPeterDev/neuromesh-ai/releases/latest)
+Every push to `main` starts the Android release workflow. The publish job verifies the build outputs and SHA-256 digests, then publishes one versioned GitHub Release with individual installer downloads. GitHub marks the newest eligible version **Latest**, and the Android updater uses GitHub’s Latest release endpoint with a fallback for the historical channel. Development-signed packages carry a development label and the `-dev` filename suffix. [Latest release](https://github.com/CarlosPeterDev/neuromesh-ai/releases/latest)
 
 ## Persistent Android test APKs
 
@@ -81,7 +94,7 @@ Hugging Face files, the active download list, the download queue, and My models 
 ## Next tasks
 
 1. On a real ARM64 phone, record the release version, device and Android version. Install and open the app, load a small GGUF, generate a reply, and exercise chat attachments and project workspace recovery. Record pass or fail and link a redacted report for failures.
-2. Smoke-test the Windows installer and both Linux packages on target hosts. Record app launch, model loading and generation results. Verify signing and try the Play internal track before broader distribution.
+2. Run the Android device matrix, then verify signing and the Play internal track before broader distribution. [Physical Android test list](docs/ANDROID_DEVICE_TESTS.md)
 
 ## Android vision, cluster and device transfer follow-up
 
