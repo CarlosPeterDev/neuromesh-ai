@@ -1,6 +1,12 @@
 # NeuroMesh AI development handoff
 
-## Current milestone — Android stability
+## Current milestone — adaptive Android Chat
+
+The `android-adaptive-inference` branch starts at `a0cfa75`. Chat streams ordinary replies and validates model-selected tool requests. Android GGUF Chat counts tokens for the formatted prompt, and the capability check runs in the background when the model is idle. Chat retains attachment workspaces, saved media, memory, search, image generation, speech and cluster integration. The standalone Agent, MCP, Alpine and OpenCode integrations have been removed. [Dependency map and verification](docs/ANDROID_ADAPTIVE_INFERENCE.md)
+
+The package workflow for `ef8bbf1` is [Android run 45401242438](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/45401242438). The [physical Android matrix](docs/ANDROID_DEVICE_TESTS.md) includes the reported 0.8B scenario. All 204 Flutter tests passed with genuine projector and voice fixtures. Local analysis reported zero warnings or errors. The actual host Chat adapter streamed and saved replies with and without the projector. The phone reproduction remains in the device matrix.
+
+## Prior milestone — Android stability
 
 The `android-stability` branch starts at `bc0acc8`. Ordinary text and voice Chat now use a bounded, schema-validated tool loop. Android startup waits for Hive, Chat sequences context transitions, and failed worker starts clear the role. The standalone Agent tab, scheduled agent startup, and MCP connections are disabled. GitHub's release workflow builds and publishes Android artifacts individually. [Audit and evidence](docs/ANDROID_STABILITY_AUDIT.md) · [Physical Android test list](docs/ANDROID_DEVICE_TESTS.md)
 
@@ -27,7 +33,7 @@ The combined v1.0.150 Actions run passed. Windows and Linux produced native pack
 
 ## NeuroMesh 2.0 desktop OpenCode milestone
 
-- **Agents** discovers installed OpenCode and shows whether the local terminal preview is available. On Linux with OpenCode v1.19.6 and a supported terminal, it links the loaded model over a dedicated authenticated loopback endpoint. Provider configuration and CLI history are scoped to a temporary profile. [Setup, architecture, and upstream and distribution audit](docs/OPENCODE.md)
+- **Agents** discovers installed OpenCode and shows whether the local terminal preview is available. On Linux with OpenCode v1.19.6 and a supported terminal, it links the loaded model over a dedicated authenticated loopback endpoint. Provider configuration and CLI history are scoped to a temporary profile. [Historical OpenCode preview](https://github.com/CarlosPeterDev/neuromesh-ai/pull/54)
 - Local verification passed 217 Flutter tests and all three build-config tests. Four optional checks were skipped in the standard suite. The separate Linux smoke test passed with Xfce Terminal, real OpenCode and Artemis GGUF in a loopback-only network namespace. [Implementation and checks](https://github.com/carlospeter582011-prog/neuromesh-ai/pull/54/checks)
 - The preview exposes text completions. Next is the agent session API and native Chat UI, followed by structured tool support and approval tests. Windows and macOS launch, physical cluster operation through the bridge, Android runtime distribution, and a release from this branch remain pending.
 - The v1.0.139 AAB was 324,350,971 bytes. Meeting the 200 MB raw AAB requirement needs an Android packaging pass and a separate raw artifact check. The existing preview assets are pre-releases.
@@ -62,8 +68,8 @@ The v1.0.139 bundle was 324,350,971 bytes, including 124,471,709 bytes of native
 
 | Area | Entry points and current behavior |
 | --- | --- |
-| Chat and agent | `lib/controllers/chat_controller.dart`, `lib/views/chat_view.dart`, `lib/services/agent_service.dart`. Chat supports text, attachments, cloud and local inference. Agent tools cover files, approved actions, MCP, and memory. |
-| Projects, Skills and attachments | `lib/services/agent_service.dart`, `lib/services/skills_service.dart`, `lib/utils/skill_context.dart`, `lib/utils/page_text.dart`. Chats can use named workspaces. Explicit skill mentions are scoped to a chat. Local agent chat can retrieve additional context pages as needed. |
+| Chat and tools | `lib/controllers/chat_controller.dart`, `lib/views/chat_view.dart`, `lib/services/chat_tool_loop.dart`, `lib/services/chat_tool_service.dart`. Chat supports model-selected bounded tools, local and cloud inference, attachments and saved memory. |
+| Projects, Skills and attachments | `lib/services/chat_tool_service.dart`, `lib/services/skills_service.dart`, `lib/utils/skill_context.dart`, `lib/utils/page_text.dart`. Chats can use named workspaces. Explicit skill mentions are scoped to a chat. Chat can retrieve additional context pages as needed. |
 | Models and local inference | `lib/controllers/model_controller.dart`, `lib/services/hf_service.dart`, `lib/services/model_helper_service.dart`, `lib/services/inference_*.dart`. Some helper files are linked to a main model. Runtime and architecture compatibility depend on the model and platform. |
 | Voice, images and devices | `lib/services/voice_service.dart`, `lib/services/voice_worker.dart`, `lib/services/pollinations_image_service.dart`, `lib/services/cluster_service.dart`, `lib/services/cluster_backup.dart`, `lib/services/openai_server_service.dart`. Platform capabilities vary. |
 | Diagnostics | `lib/services/diagnostics_service.dart`, `lib/views/diagnostics_view.dart`, and `workers/diagnostics/`. The report UI previews the ZIP before sending. See [diagnostic delivery configuration](SECURITY.md#developer-diagnostic-delivery). |

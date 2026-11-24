@@ -11,3 +11,10 @@ Record Android version, RAM, SoC, ABI, model file and checksum, runtime/backend,
 7. Load a split model whose placement is independently confirmed from llama.cpp/RPC logs. Disconnect the worker before the first output and mid-stream. Kill worker and master processes separately. Reconnect with a different IP, move from Wi-Fi to a hotspot, and add latency and packet loss. Check partial-load recovery, unload during recovery and a user-cancelled recovery.
 8. Repeat local and split benchmarks with the same prompt/settings and process cold/warm states. Record load time and first output and compare with logs. Use tokenizer IDs from the runtime for token rate, and Android memory instrumentation for process PSS. Verify backend selection, no stale result after cancellation, and recovery after an out-of-memory failure.
 9. Exercise import/download/transfer with interrupted Wi-Fi, disappearing documents, permission revocation, full storage, and restart. Verify file integrity and retry. Validate model switches and persisted inference, voice, storage and cluster settings after abrupt process termination.
+
+## Artemis 0.8B regression
+
+- Use the same ARM64 phone and quantization from the original report if available. Load the GGUF at 512 and 1024 tokens, send `Hi` in a fresh Chat, and record the stage transitions and visible first output. Run with the matching BF16 Vision Helper loaded, with the helper disabled, and with a missing or mismatched helper.
+- Send the same text prompt without an attachment and then send a real image question. Record projector initialization and image evaluation separately. Verify the text-only turn has no image-evaluation stage.
+- Repeat with local model thinking enabled and disabled. Cancel while evaluating the prompt and during a tool call or approval dialog. Send another message immediately, then switch chats and repeat on a different model.
+- Record actual input tokens, prompt evaluation, first visible chunk, final time, native decode rate, and cancellation time from the app log and Android logcat. Record any tool request that failed schema validation or selected the wrong tool.

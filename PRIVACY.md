@@ -12,7 +12,7 @@ NeuroMesh AI runs language models on your device. This policy describes what the
 ## Network use
 The app uses the network only when you ask it to:
 - Searching and downloading models from Hugging Face (huggingface.co) and voice models from GitHub.
-- Optional features you turn on: a cloud provider with your own API key, MCP servers you add, the agent's "fetch web page" tool (asks first unless you choose Always allow), the local API server (reachable on your local network only while you run it), and Phone cluster over your Wi-Fi. If you assign a worker phone, that phone receives the text, audio or image prompt needed for that workload over your local network.
+- Optional features you turn on: a cloud provider with your own API key, model-selected web search (the search provider receives the tool query), Pollinations image creation and editing (the service receives the prompt and any image you approve for editing), the local API server (reachable on your local network only while you run it), and Phone cluster over your Wi-Fi. If you assign a worker phone, that phone receives the text, audio or image prompt needed for that workload over your local network.
 - Opening a public GitHub issue draft with the description you write when you choose "Send feedback".
 - When you tap "Send report", the app sends your description and diagnostic preview over HTTPS. The configured support relay delivers the report to the support team. The preview can include app version, device and memory information, model-load details, and recent app logs if you choose to include them.
 
