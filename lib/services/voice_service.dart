@@ -454,28 +454,35 @@ class VoiceService extends GetxService {
   }
 
   /// Transcribes an audio file (mp3, m4a, ogg, wav, mp4…) in 25-second pieces.
-  Future<String> transcribeFile(String path, {String language = '', String modelId = ''}) async {
+  Future<String> transcribeFile(String path, {String language = '', String modelId = '', Future<void>? cancelled}) async {
+    var aborted = false;
+    cancelled?.then((_) => aborted = true);
+    if (await File(path).length() > 24 * 1024 * 1024) {
+      throw const FormatException('Use an audio file smaller than 24 MB.');
+    }
     final requested = _requestedModel(VoiceKind.stt, modelId);
     Float32List? pcm;
     if (path.toLowerCase().endsWith('.wav')) {
       final decoded = decodeWav(await File(path).readAsBytes());
       if (decoded != null) pcm = resampleWav(decoded.samples, decoded.rate, 16000);
     }
+    if (aborted) return '';
     pcm ??= await Get.find<DeviceBridge>().decodeAudio(path);
     if (pcm == null || pcm.isEmpty) throw Exception('Could not read audio from this file.');
     const piece = 16000 * 25;
     final out = StringBuffer();
     for (var i = 0; i < pcm.length; i += piece) {
+      if (aborted) return '';
       final end = math.min(i + piece, pcm.length);
       final t = await transcribeSamples(
-          Float32List.sublistView(pcm, i, end), language: language, model: requested);
+          Float32List.sublistView(pcm, i, end), language: language, model: requested, cancelled: cancelled);
       if (t.isNotEmpty) out..write(t)..write(' ');
     }
     return out.toString().trim();
   }
 
   Future<String> transcribeSamples(Float32List samples,
-      {String language = '', bool allowWorker = true, VoiceModelInfo? model}) async {
+      {String language = '', bool allowWorker = true, VoiceModelInfo? model, Future<void>? cancelled}) async {
     final worker = allowWorker && model == null
         ? WorkloadPlacement.forWorkload(PhoneWorkload.transcription)
         : null;
@@ -485,6 +492,7 @@ class VoiceService extends GetxService {
           contentType: 'audio/wav',
           query: {'language': language},
           timeout: const Duration(seconds: 45),
+          cancelled: cancelled,
           maxBytes: 65536);
       return utf8.decode(bytes).trim();
     }
@@ -498,7 +506,9 @@ class VoiceService extends GetxService {
 
   /// Speaks [text] with the chosen voice into a WAV file's bytes.
   Future<Uint8List> synthesizeToWav(String text,
-      {String lang = '', bool allowWorker = true, String modelId = '', String speaker = ''}) async {
+      {String lang = '', bool allowWorker = true, String modelId = '', String speaker = '', Future<void>? cancelled}) async {
+    var aborted = false;
+    cancelled?.then((_) => aborted = true);
     final requested = _requestedModel(VoiceKind.tts, modelId);
     final worker = allowWorker && requested == null && speaker.trim().isEmpty
         ? WorkloadPlacement.forWorkload(PhoneWorkload.speech)
@@ -506,7 +516,7 @@ class VoiceService extends GetxService {
     if (worker != null) {
       return worker.request(PhoneWorkload.speech.path,
           payload: {'text': text, 'language': lang},
-          timeout: const Duration(seconds: 60));
+          timeout: const Duration(seconds: 60), cancelled: cancelled);
     }
     final m = requested ?? pickInstalled(VoiceKind.tts, lang: lang);
     if (m == null) {
@@ -520,6 +530,8 @@ class VoiceService extends GetxService {
       final parts = <Float32List>[];
       var rate = 22050;
       for (final c in speechChunks(text)) {
+        await Future<void>.delayed(Duration.zero);
+        if (aborted) return Uint8List(0);
         final r = synthesize(c, speakerIndex: voice, speakingSpeed: rateMultiplier);
         if (r == null) continue;
         parts.add(r.samples);

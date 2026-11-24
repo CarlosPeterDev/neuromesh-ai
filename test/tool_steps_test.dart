@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
-import 'package:neuromesh_ai/widgets/agent_steps.dart';
+import 'package:neuromesh_ai/widgets/tool_steps.dart';
 
 void main() {
   testWidgets('shows live steps and keeps finished details outside the chat',
@@ -17,10 +17,10 @@ void main() {
             body: ListView(
               children: [
                 if (!live) const Text('Here is your audio.'),
-                AgentStepsView(
+                ToolStepsView(
                   messageId: live ? 'live-1' : 'answer-1',
                   steps: [
-                    AgentStep(
+                    ToolStep(
                       'text_to_speech',
                       'Creating an audio file',
                       {'text': 'Hello Carlos! ' * 500},
@@ -60,11 +60,11 @@ void main() {
       (tester) async {
     Widget view(bool running) => MaterialApp(
             home: Scaffold(
-                body: AgentStepsView(
+                body: ToolStepsView(
           messageId: 'same-turn',
           live: true,
           steps: [
-            AgentStep('read_file', running ? 'Reading file' : 'Read file',
+            ToolStep('read_file', running ? 'Reading file' : 'Read file',
                 {'name': 'notes.md'}, running ? '' : 'notes', running, 12)
           ],
         )));
@@ -88,11 +88,11 @@ void main() {
     final source = ''.obs;
     await tester.pumpWidget(MaterialApp(
         home: Scaffold(
-            body: AgentStepsView(
+            body: ToolStepsView(
       messageId: 'direct-call',
       live: true,
       traceSource: source,
-      steps: const [AgentStep('write_file', 'Writing file', {}, '', true, 0)],
+      steps: const [ToolStep('write_file', 'Writing file', {}, '', true, 0)],
     ))));
     await tester.tap(find.textContaining('Working…'));
     await tester.pump(const Duration(milliseconds: 300));
@@ -113,11 +113,11 @@ void main() {
     final source = ''.obs;
     await tester.pumpWidget(MaterialApp(
         home: Scaffold(
-            body: AgentStepsView(
+            body: ToolStepsView(
       messageId: 'details',
       live: true,
       traceSource: source,
-      steps: const [AgentStep('write_file', 'Writing file', {}, '', true, 0)],
+      steps: const [ToolStep('write_file', 'Writing file', {}, '', true, 0)],
     ))));
     await tester.tap(find.textContaining('Working…'));
     await tester.pump(const Duration(milliseconds: 300));

@@ -10,13 +10,13 @@ import 'package:neuromesh_ai/services/cloud_service.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
 
 String _chunk(String token, {String? finish}) => 'data: ${jsonEncode({
-      'choices': [
-        {
-          'delta': {'content': token},
-          'finish_reason': finish,
-        }
-      ]
-    })}\n\n';
+          'choices': [
+            {
+              'delta': {'content': token},
+              'finish_reason': finish,
+            }
+          ]
+        })}\n\n';
 
 void main() {
   late Directory dir;
@@ -63,6 +63,59 @@ void main() {
         onToken: tokens.add,
       );
 
+  Future<String?> nativeTools() => cloud.tryNativeTools(
+        messages: const [
+          {'role': 'user', 'content': 'Use a calculator.'}
+        ],
+        allowed: {'calculator'},
+        onToken: (_) {},
+      );
+
+  test('joins a native function call split across stream events', () async {
+    respond = (res) async {
+      for (final (name, arguments, finish) in [
+        ('calculator', '{"expression":', null),
+        (null, '"2+2"}', 'tool_calls'),
+      ]) {
+        res.write('data: ${jsonEncode({
+              'choices': [
+                {
+                  'delta': {
+                    'tool_calls': [
+                      {
+                        'index': 0,
+                        'function': {
+                          'name': name,
+                          'arguments': arguments,
+                        }
+                      }
+                    ]
+                  },
+                  'finish_reason': finish,
+                }
+              ]
+            })}\n\n');
+      }
+      res.write('data: [DONE]\n\n');
+      await res.close();
+    };
+    expect(await nativeTools(),
+        '<tool_call>{"name":"calculator","arguments":{"expression":"2+2"}}</tool_call>');
+  });
+
+  test('a provider protocol rejection is cached for that endpoint and model',
+      () async {
+    var requests = 0;
+    respond = (res) async {
+      requests++;
+      res.statusCode = 400;
+      await res.close();
+    };
+    expect(await nativeTools(), isNull);
+    expect(await nativeTools(), isNull);
+    expect(requests, 1);
+  });
+
   test('a complete stream returns the text', () async {
     respond = (res) async {
       res.write(_chunk('Hello '));
@@ -75,8 +128,7 @@ void main() {
     expect(tokens.join(), 'Hello world');
   });
 
-  test('an error event mid-stream is reported, not shown as a reply',
-      () async {
+  test('an error event mid-stream is reported, not shown as a reply', () async {
     respond = (res) async {
       res.write(_chunk('Partial '));
       res.write('data: ${jsonEncode({

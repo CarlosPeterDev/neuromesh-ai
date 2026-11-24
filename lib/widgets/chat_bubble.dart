@@ -10,7 +10,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../models/chat_message.dart';
 import '../utils/text_direction.dart';
 import '../utils/thought_parser.dart';
-import 'agent_steps.dart';
+import 'tool_steps.dart';
 import 'attachment_preview.dart';
 import 'image_viewer.dart';
 import 'thought_disclosure.dart';
@@ -234,7 +234,7 @@ class ChatBubble extends StatelessWidget {
         ],
         if (steps.isNotEmpty) ...[
           if (answerContent.isNotEmpty) const SizedBox(height: 10),
-          AgentStepsView(steps: steps, messageId: message.id),
+          ToolStepsView(steps: steps, messageId: message.id),
         ],
         if (message.fileName != null) ...[
           const SizedBox(height: 10),
@@ -530,14 +530,14 @@ class AssistantMarkdown extends StatelessWidget {
         styleSheet: ChatBubble.answerStyle(context),
         sizedImageBuilder: (cfg) =>
             showWorkspaceImages && cfg.uri.toString().startsWith(nmFileScheme)
-                ? agentImage(cfg.uri, cfg.alt, project: workspaceProject)
+                ? chatImage(cfg.uri, cfg.alt, project: workspaceProject)
                 : const SizedBox.shrink(),
         onTapLink: (_, href, __) {
           if (href == null) return;
           if (href.startsWith(nmFileScheme)) {
             Get.find<ChatToolService>().inProject(
               workspaceProject ?? '',
-              () => openAgentFile(context, href.substring(nmFileScheme.length)),
+              () => openChatFile(context, href.substring(nmFileScheme.length)),
             );
           } else {
             ChatBubble.openLink(context, href);

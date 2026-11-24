@@ -6,7 +6,7 @@ import 'package:get/get.dart';
 
 import '../core/ui.dart';
 import '../controllers/chat_controller.dart';
-import '../widgets/agent_steps.dart';
+import '../widgets/tool_steps.dart';
 import '../services/chat_tool_service.dart';
 import '../services/chat_tool_loop.dart';
 import '../services/hive_service.dart';
@@ -349,7 +349,7 @@ class _WorkspaceState extends State<_Workspace> {
         AppRow(
           icon: Icons.insert_drive_file_outlined,
           title: f.name,
-          onTap: () => widget.agent.inProject(_project, () => openAgentFile(context, Uri.encodeComponent(f.name))),
+          onTap: () => widget.agent.inProject(_project, () => openChatFile(context, Uri.encodeComponent(f.name))),
           subtitle: '${(f.size / 1024).toStringAsFixed(f.size < 10240 ? 1 : 0)} KB · AI workspace',
           trailing: PopupMenuButton<String>(
             tooltip: 'File actions',

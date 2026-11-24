@@ -392,6 +392,7 @@ class ChatToolService extends GetxService {
           lang: (args['language'] ?? '').toString(),
           modelId: (args['model_id'] ?? '').toString(),
           speaker: (args['speaker'] ?? '').toString(),
+          cancelled: Zone.current[_chatToolAbort] as Future<void>?,
         );
         if (wav.length <= 44)
           return 'Error: the voice produced no playable audio.';
@@ -533,36 +534,31 @@ class ChatToolService extends GetxService {
     required List<Map<String, String>> history,
     required int contextSize,
     required String request,
-    String? continuationRequest,
-    String Function(int budget)? compactTools,
     bool needsEvidence = false,
+    bool nativeBudget = false,
   }) {
     final budget = contextBudget(contextSize);
     final originalPrompt = prompt;
-    if (continuationRequest != null) {
-      system = '$system\n\n$continuationRequest';
-    }
     if (contextSize > 0 &&
         contextTokens(system) + contextTokens(prompt) > budget) {
-      final required = continuationRequest ?? request;
-      final spare =
-          budget - contextTokens(baseSystem) - contextTokens(required);
-      final tools = compactTools?.call((spare ~/ 3).clamp(0, 260)) ?? '';
-      system = tools.isEmpty ? baseSystem : '$baseSystem\n\n$tools';
+      system = baseSystem;
       final remaining =
-          budget - contextTokens(system) - contextTokens(required) - 12;
-      final optional = continuationRequest == null && prompt.startsWith(request)
+          budget - contextTokens(system) - contextTokens(request) - 12;
+      final optional = prompt.startsWith(request)
           ? prompt.substring(request.length).trimLeft()
           : prompt;
       final supportingText = fitContextText(optional, remaining);
       if (needsEvidence &&
+          !nativeBudget &&
           supportingText.length < 80 &&
           optional.length >= 80) {
         throw StateError(
             'This model has too little room for the source text. Shorten the chat instructions or increase the context size.');
       }
-      prompt =
-          supportingText.isEmpty ? required : '$required\n\n$supportingText';
+      if (!nativeBudget || !needsEvidence || supportingText.length >= 80) {
+        prompt =
+            supportingText.isEmpty ? request : '$request\n\n$supportingText';
+      }
     }
     final fittedHistory = List<Map<String, String>>.of(history);
     if (fittedHistory.lastOrNull?['role'] == 'user' &&
@@ -574,7 +570,8 @@ class ChatToolService extends GetxService {
     } else {
       fittedHistory.add({'role': 'user', 'content': prompt});
     }
-    fitToContext(system, fittedHistory, prompt, contextSize);
+    fitToContext(system, fittedHistory, prompt, contextSize,
+        nativeBudget: nativeBudget);
     return (system: system, prompt: prompt, history: fittedHistory);
   }
 
@@ -582,7 +579,8 @@ class ChatToolService extends GetxService {
   /// with room left to answer; an overflow makes small models fail or go silent.
   /// Keeps the latest request intact; reports an oversized mandatory context.
   static String fitToContext(String system, List<Map<String, String>> hist,
-      String prompt, int ctxTokens) {
+      String prompt, int ctxTokens,
+      {bool nativeBudget = false}) {
     if (ctxTokens <= 0) return prompt;
     final budget = contextBudget(ctxTokens);
     int total() =>
@@ -599,8 +597,9 @@ class ChatToolService extends GetxService {
       }
     }
     // User instructions are mandatory: never silently crop the current request.
-    if (total() > budget ||
-        contextTokens(system) + contextTokens(prompt) > budget) {
+    if (!nativeBudget &&
+        (total() > budget ||
+            contextTokens(system) + contextTokens(prompt) > budget)) {
       throw StateError(
           'The current instructions and message exceed this model’s context. Use @file: references for large documents, shorten the pinned rules, or increase context size.');
     }

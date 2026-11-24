@@ -29,7 +29,7 @@ import '../utils/skill_context.dart';
 import '../services/hive_service.dart';
 import '../services/model_transfer_service.dart';
 import 'model_transfer_view.dart';
-import '../widgets/agent_steps.dart';
+import '../widgets/tool_steps.dart';
 import '../widgets/chat_bubble.dart';
 import '../widgets/tool_confirm.dart';
 import '../services/inference_service.dart';
@@ -384,7 +384,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
   final _history = <Map<String, String>>[];
   final _chat = Get.find<ChatController>();
   String _sessionId = '';
-  List<AgentStep> _steps = [];
+  List<ToolStep> _steps = [];
   int _turnNumber = 0;
   bool _addingFile = false;
   String? _attachedFile;
@@ -1089,7 +1089,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
           execute: (call, abort) => agent.executeChatTool(
             ParsedToolCall(call.name, call.arguments, ''),
             (name, server, args) async {
-              final approved = await confirmToolCall(name, server, args);
+              final approved = await confirmToolCall(name, server, args, abort: abort);
               return approved && !cancellation.isCompleted;
             },
             abort: abort,
@@ -1097,7 +1097,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
           ),
           search: (query, abort) async {
             if (agent.policyFor('built-in', 'web_search', needsConfirm: false) == 'ask' &&
-                !await confirmToolCall('web_search', 'built-in', {'query': query})) {
+                !await confirmToolCall('web_search', 'built-in', {'query': query}, abort: abort)) {
               return const SearchReport([], {'Permission denied': SearchFailure.provider}, 0);
             }
             if (cancellation.isCompleted) return const SearchReport([], {}, 0);
@@ -1494,7 +1494,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                       ),
                     ),
                   if (_steps.isNotEmpty)
-                    AgentStepsView(
+                    ToolStepsView(
                         steps: _steps,
                         messageId: 'voice-$_turnNumber',
                         live: _busy),

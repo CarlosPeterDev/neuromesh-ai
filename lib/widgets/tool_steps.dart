@@ -10,8 +10,8 @@ import 'package:share_plus/share_plus.dart';
 
 import '../services/chat_tool_service.dart';
 
-/// One tool step the agent took, parsed from a saved trace line.
-class AgentStep {
+/// One tool step Chat executed, parsed from a saved trace line.
+class ToolStep {
   final String name;
   final String label;
   final Map<String, dynamic> args;
@@ -19,15 +19,15 @@ class AgentStep {
   final bool running;
   final int ms;
   final bool failed;
-  const AgentStep(
+  const ToolStep(
       this.name, this.label, this.args, this.result, this.running, this.ms, {this.failed = false});
 
-  static AgentStep? parse(String line) {
+  static ToolStep? parse(String line) {
     if (!line.startsWith(ToolLoopResult.traceMark)) return null;
     try {
       final j = jsonDecode(line.substring(ToolLoopResult.traceMark.length));
       if (j is! Map) return null;
-      return AgentStep(
+      return ToolStep(
         '${j['n'] ?? ''}',
         '${j['l'] ?? j['n'] ?? ''}',
         (j['a'] is Map)
@@ -46,12 +46,12 @@ class AgentStep {
 
 /// Splits a message into its structured steps and the rest of the text.
 /// Old-style trace lines (plain markdown) stay in the text.
-(List<AgentStep>, String) splitSteps(String content) {
+(List<ToolStep>, String) splitSteps(String content) {
   if (!content.contains(ToolLoopResult.traceMark)) return (const [], content);
-  final steps = <AgentStep>[];
+  final steps = <ToolStep>[];
   final rest = <String>[];
   for (final l in content.split('\n')) {
-    final s = AgentStep.parse(l);
+    final s = ToolStep.parse(l);
     if (s != null) {
       steps.add(s);
     } else {
@@ -97,28 +97,28 @@ IconData _iconFor(String n) {
   }
 }
 
-/// A collapsible "what the agent did" list; tap a step for its details.
-class AgentStepsView extends StatefulWidget {
-  final List<AgentStep> steps;
+/// A collapsible "what Chat executed" list; tap a step for its details.
+class ToolStepsView extends StatefulWidget {
+  final List<ToolStep> steps;
   final String messageId;
   final bool live;
   final RxString? traceSource;
-  const AgentStepsView(
+  const ToolStepsView(
       {super.key,
       required this.steps,
       required this.messageId,
       this.live = false,
       this.traceSource});
   @override
-  State<AgentStepsView> createState() => _AgentStepsViewState();
+  State<ToolStepsView> createState() => _ToolStepsViewState();
 }
 
-class _AgentStepsViewState extends State<AgentStepsView> {
-  late final ValueNotifier<List<AgentStep>> changes =
+class _ToolStepsViewState extends State<ToolStepsView> {
+  late final ValueNotifier<List<ToolStep>> changes =
       ValueNotifier(widget.steps);
   bool open = false;
   @override
-  void didUpdateWidget(covariant AgentStepsView oldWidget) {
+  void didUpdateWidget(covariant ToolStepsView oldWidget) {
     super.didUpdateWidget(oldWidget);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) changes.value = widget.steps;
@@ -149,7 +149,7 @@ class _AgentStepsViewState extends State<AgentStepsView> {
                 constraints: BoxConstraints(
                     maxWidth: 600,
                     maxHeight: MediaQuery.sizeOf(ctx).height * .75),
-                child: ValueListenableBuilder<List<AgentStep>>(
+                child: ValueListenableBuilder<List<ToolStep>>(
                     valueListenable: changes,
                     builder: (ctx, steps, _) =>
                         Column(mainAxisSize: MainAxisSize.min, children: [
@@ -214,8 +214,8 @@ class _AgentStepsViewState extends State<AgentStepsView> {
 }
 
 class _StepTile extends StatelessWidget {
-  final AgentStep step;
-  final ValueNotifier<List<AgentStep>> updates;
+  final ToolStep step;
+  final ValueNotifier<List<ToolStep>> updates;
   final int index;
   const _StepTile(
       {required this.step, required this.updates, required this.index});
@@ -248,7 +248,7 @@ class _StepTile extends StatelessWidget {
         isScrollControlled: true,
         showDragHandle: true,
         useSafeArea: true,
-        builder: (context) => ValueListenableBuilder<List<AgentStep>>(
+        builder: (context) => ValueListenableBuilder<List<ToolStep>>(
           valueListenable: updates,
           builder: (context, current, _) => _StepDetails(
               step: index < current.length ? current[index] : step),
@@ -259,7 +259,7 @@ class _StepTile extends StatelessWidget {
 }
 
 class _StepDetails extends StatelessWidget {
-  final AgentStep step;
+  final ToolStep step;
   const _StepDetails({required this.step});
 
   @override
@@ -339,11 +339,11 @@ String _fieldValue(Object? value) {
   return value.toString();
 }
 
-// ── Files the agent produced: ![alt](nmfile:name) and [📎 name](nmfile:name) ──
+// ── Files Chat produced: ![alt](nmfile:name) and [📎 name](nmfile:name) ──
 
 const nmFileScheme = 'nmfile:';
 
-Future<File?> agentFile(String name) async {
+Future<File?> chatFile(String name) async {
   final dir = await Get.find<ChatToolService>().filesDir();
   final n = name.split('/').last.split('\\').last;
   final f = File('${dir.path}/$n');
@@ -351,13 +351,13 @@ Future<File?> agentFile(String name) async {
 }
 
 /// Inline image for `![alt](nmfile:name)`.
-Widget agentImage(Uri uri, String? alt, {String? project}) {
+Widget chatImage(Uri uri, String? alt, {String? project}) {
   final name =
       Uri.decodeComponent(uri.toString().substring(nmFileScheme.length));
   return FutureBuilder<File?>(
     future: project == null
-        ? agentFile(name)
-        : Get.find<ChatToolService>().inProject(project, () => agentFile(name)),
+        ? chatFile(name)
+        : Get.find<ChatToolService>().inProject(project, () => chatFile(name)),
     builder: (c, snap) {
       final f = snap.data;
       if (f == null)
@@ -378,8 +378,8 @@ Widget agentImage(Uri uri, String? alt, {String? project}) {
 }
 
 /// Tapping a produced file: play audio, otherwise share / save it.
-Future<void> openAgentFile(BuildContext context, String name) async {
-  final f = await agentFile(Uri.decodeComponent(name));
+Future<void> openChatFile(BuildContext context, String name) async {
+  final f = await chatFile(Uri.decodeComponent(name));
   if (f == null) {
     Get.snackbar('File not found', name);
     return;
@@ -432,7 +432,7 @@ const _textExts = {
 };
 const _imageExts = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'};
 
-/// Preview of a file the agent made, with copy, save to the phone, and share.
+/// Preview of a file Chat made, with copy, save to the phone, and share.
 class _FileSheet extends StatefulWidget {
   final File file;
   const _FileSheet({required this.file});

@@ -31,12 +31,7 @@ ${'<p>Filler sentence about nothing in particular here. </p>' * 12}
     expect(r, contains('Paris'));
   });
 
-  test('searchQuery strips filler and borrows context for follow-ups', () {
-    expect(searchQuery('Please search for the weather in Cairo?'),
-        'the weather in Cairo');
-    expect(searchQuery('and in 2025?', previous: 'Who won the Nile cup'),
-        'Who won the Nile cup and in 2025');
-  });
+
 
   test('dedupeByHost keeps one result per site', () {
     final r = dedupeByHost([

@@ -7,7 +7,7 @@ import 'package:neuromesh_ai/utils/skill_context.dart';
 import 'package:neuromesh_ai/services/chat_calculator.dart';
 import 'package:neuromesh_ai/services/web_search_service.dart';
 import 'package:neuromesh_ai/utils/web_search_parse.dart';
-import 'package:neuromesh_ai/widgets/agent_steps.dart';
+import 'package:neuromesh_ai/widgets/tool_steps.dart';
 
 void main() {
   const searchA =
@@ -109,7 +109,50 @@ void main() {
       onTimeout: () {},
     );
     expect(result.trace, hasLength(1));
-    expect(AgentStep.parse(result.trace.single)!.failed, isFalse);
+    expect(ToolStep.parse(result.trace.single)!.failed, isFalse);
+  });
+
+  test('a small model can emit a validated flat tool call', () async {
+    var passes = 0;
+    final result = await ChatToolLoop().run(
+      reply: (_, __) async => ++passes == 1
+          ? '<tool_call>{"name":"calculator","expression":"2+2"}</tool_call>'
+          : 'The result is 4.',
+      execute: (call, _) async => formatNumber(
+          evaluateExpression(call.arguments['expression'] as String)),
+      search: (_, __) async => throw StateError('unexpected search'),
+      allowed: {'calculator'},
+      cancellation: Completer<void>().future,
+      onTrace: (_) {},
+      onTimeout: () {},
+      compactPrompt: true,
+    );
+    expect(result.answer, 'The result is 4.');
+    expect(result.trace, hasLength(1));
+  });
+
+  test('slow first text can wait within the runtime deadline', () async {
+    final reply = Completer<String>();
+    final pending =
+        ChatToolLoop(timeLimit: const Duration(milliseconds: 10)).run(
+      reply: (_, __) => reply.future,
+      execute: (_, __) async => throw StateError('unexpected call'),
+      search: (_, __) async => throw StateError('unexpected search'),
+      allowed: {'calculator'},
+      cancellation: Completer<void>().future,
+      onTrace: (_) {},
+      onTimeout: () => fail('a local pass has its own deadline'),
+      generationHasOwnDeadline: true,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    reply.complete('Hello!');
+    expect((await pending).answer, 'Hello!');
+  });
+
+  test('unclosed reasoning is not shown as an answer or a tool request', () {
+    expect(ChatToolLoop.visibleText('<th'), isEmpty);
+    expect(ChatToolLoop.visibleText('<think>hidden'), isEmpty);
+    expect(ChatToolLoop.visibleText('<think>hidden</think>Bonjour'), 'Bonjour');
   });
 
   test('timeout aborts transport and leaves a failed trace', () async {
@@ -129,6 +172,6 @@ void main() {
     );
     await aborted.future;
     expect(result.answer, contains('timed out'));
-    expect(AgentStep.parse(result.trace.single)!.failed, isTrue);
+    expect(ToolStep.parse(result.trace.single)!.failed, isTrue);
   });
 }

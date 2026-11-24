@@ -22,9 +22,7 @@ void main() {
     ]);
   });
 
-  test(
-      'old tasks stay out of the model context and file saves are not memory requests',
-      () async {
+  test('old tasks stay out of the model context', () async {
     Get.put(HiveService());
     addTearDown(Get.reset);
     final agent = ChatToolService();
@@ -36,6 +34,5 @@ void main() {
     expect(
         agent.memoryBlock(), contains('User prefers Egyptian Arabic replies.'));
     expect(agent.memoryBlock(), isNot(contains('hello.txt')));
-    expect(
   });
 }

@@ -1098,7 +1098,10 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
 
     const char* prompt_str = env->GetStringUTFChars(prompt, nullptr);
     if (!prompt_str) return;
-    g_stop_flag = false;
+    if (g_stop_flag) {
+        env->ReleaseStringUTFChars(prompt, prompt_str);
+        return;
+    }
 
     std::string image_file;
     if (image_path) {
@@ -1370,6 +1373,12 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
 
     llama_batch_free(batch);
     env->DeleteLocalRef(callbackClass);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativePrepareGeneration(
+    JNIEnv*, jobject) {
+    g_stop_flag = false;
 }
 
 extern "C" JNIEXPORT void JNICALL

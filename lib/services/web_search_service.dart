@@ -8,19 +8,6 @@ import 'package:xml/xml.dart';
 import '../utils/page_text.dart';
 import '../utils/web_search_parse.dart';
 
-class WebContext {
-  final String block;
-  final List<WebResult> sources;
-  WebContext(this.block, this.sources);
-
-  String sourcesMarkdown() => sources.isEmpty
-      ? ''
-      : '\n\nSources:\n${[
-          for (var i = 0; i < sources.length; i++)
-            '${i + 1}. [${sources[i].title}](${sources[i].url})'
-        ].join('\n')}';
-}
-
 enum SearchFailure {
   network,
   timeout,
@@ -48,15 +35,13 @@ class SearchUnavailable implements Exception {
   String toString() => report.emptyMessage;
 }
 
-/// Automatic web search for time-sensitive and explicitly requested queries.
+/// Executes validated model-selected search queries.
 class WebSearchService extends GetxService {
   WebSearchService({http.Client Function()? clientFactory})
       : _clientFactory = clientFactory ?? http.Client.new;
   final http.Client Function() _clientFactory;
   static const _ua =
       'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36';
-
-  bool shouldSearch(String question) => needsWebSearch(question);
 
   static final _fresh = RegExp(
       r'\b(latest|newest|newly|recent(ly)?|current(ly)?|today|tonight|now|this (week|month|year)|just (released|launched)|new|release[sd]?|news|update[sd]?|202\d)\b|اليوم|الآن|آخر|أخر|أحدث|احدث|جديد',
@@ -65,34 +50,6 @@ class WebSearchService extends GetxService {
   /// DuckDuckGo date filter for questions about "the latest …": past month.
   String? freshnessFor(String question) =>
       _fresh.hasMatch(question) ? 'm' : null;
-
-  static const _months = [
-    'January',
-    'February',
-    'March',
-    'April',
-    'May',
-    'June',
-    'July',
-    'August',
-    'September',
-    'October',
-    'November',
-    'December'
-  ];
-
-  /// One or two search queries for a question: the cleaned question, plus the
-  /// same with the current month and year when it asks for fresh information.
-  List<String> researchQueries(String question, {String? previous}) {
-    final base = searchQuery(question, previous: previous);
-    final out = <String>[base];
-    if (freshnessFor(base) != null || freshnessFor(question) != null) {
-      final now = DateTime.now();
-      final stamp = '${_months[now.month - 1]} ${now.year}';
-      if (!base.contains('${now.year}')) out.add('$base $stamp');
-    }
-    return out;
-  }
 
   Future<List<WebResult>> search(String query,
       {int max = 4, String? freshness}) async {
@@ -289,49 +246,5 @@ class WebSearchService extends GetxService {
     } catch (_) {
       return '';
     }
-  }
-
-  final _cache = <String, (DateTime, WebContext?)>{};
-
-  /// Runs the search and builds the text block added to the prompt.
-  /// [previous] is the user's earlier question, used for short follow-ups.
-  Future<WebContext?> buildContext(String question,
-      {String? previous, bool refresh = false}) async {
-    final query = searchQuery(question, previous: previous);
-    final hit = _cache[query];
-    if (!refresh &&
-        hit != null &&
-        DateTime.now().difference(hit.$1).inMinutes < 10) {
-      return hit.$2;
-    }
-    final fresh = freshnessFor(question) ?? freshnessFor(query);
-    final matches = await Future.wait(
-      researchQueries(question, previous: previous)
-          .map((q) => search(q, max: 8, freshness: fresh)),
-    );
-    final results = dedupeByHost(matches.expand((group) => group).toList(),
-            (r) => r.publisher == null ? r.url : 'https://${r.publisher}')
-        .take(6)
-        .toList();
-    if (results.isEmpty) return null;
-    // Read the top four pages and keep only the passages that match.
-    final pages = await Future.wait(
-        results.take(4).map((r) => _pageText(r.url, query, maxChars: 1600)));
-    final b = StringBuffer(
-        'Web search results for "$query". Today is ${DateTime.now().toIso8601String().substring(0, 10)}. '
-        'Your own knowledge of recent events is out of date, so answer ONLY from these results. '
-        'Give a complete, specific answer (names, versions, dates, numbers) and never a one-word reply. '
-        'Prefer the newest information by date; if sources disagree, say so. Cite sources like [1]. '
-        'If the results do not answer the question, say that plainly.\n');
-    for (var i = 0; i < results.length; i++) {
-      final r = results[i];
-      final body = i < pages.length && pages[i].length > r.snippet.length
-          ? pages[i]
-          : r.snippet;
-      b.writeln('\n[${i + 1}] ${r.title} (${r.url})\n$body');
-    }
-    final ctx = WebContext(b.toString(), results);
-    _cache[query] = (DateTime.now(), ctx);
-    return ctx;
   }
 }

@@ -7,15 +7,20 @@ import '../services/chat_tool_service.dart';
 
 /// Asks the user whether the AI may run a tool. Used by chat.
 Future<bool> confirmToolCall(
-    String tool, String server, Map<String, dynamic> args) async {
+    String tool, String server, Map<String, dynamic> args,
+    {Future<void>? abort}) async {
+  final context = Get.context;
+  if (context == null) return false;
   final pretty = args.isEmpty
       ? '(no arguments)'
       : const JsonEncoder.withIndent('  ').convert(args);
   final shown = pretty.length > 900 ? '${pretty.substring(0, 900)}…' : pretty;
   final where = server == 'built-in' ? '' : ' on "$server"';
   final uploadsImage = tool == 'edit_image';
-  final choice = await Get.dialog<String>(
-    PopScope(
+  final navigator = Navigator.of(context, rootNavigator: true);
+  final route = DialogRoute<String>(
+    context: context,
+    builder: (dialogContext) => PopScope(
       canPop: false,
       child: AlertDialog(
         title: const Text('Allow this action?'),
@@ -42,8 +47,7 @@ Future<bool> confirmToolCall(
               ),
               if (uploadsImage) ...[
                 const SizedBox(height: 10),
-                const Text(
-                    'This sends your image to Pollinations.',
+                const Text('This sends your image to Pollinations.',
                     style: TextStyle(fontSize: 12)),
               ],
             ],
@@ -51,20 +55,28 @@ Future<bool> confirmToolCall(
         ),
         actions: [
           TextButton(
-              onPressed: () => Get.back(result: 'deny'),
+              onPressed: () => Navigator.of(dialogContext).pop('deny'),
               child: const Text('Deny')),
           if (!uploadsImage)
             TextButton(
-                onPressed: () => Get.back(result: 'always'),
+                onPressed: () => Navigator.of(dialogContext).pop('always'),
                 child: const Text('Always allow')),
           TextButton(
-              onPressed: () => Get.back(result: 'once'),
+              onPressed: () => Navigator.of(dialogContext).pop('once'),
               child: const Text('Allow once')),
         ],
       ),
     ),
     barrierDismissible: false,
   );
+  final pending = navigator.push(route);
+  var cancelled = false;
+  abort?.then((_) {
+    cancelled = true;
+    if (route.isActive) navigator.removeRoute(route);
+  });
+  final choice = await pending;
+  if (cancelled) return false;
   if (choice == 'always') {
     await Get.find<ChatToolService>().allowAlwaysFor(server, tool);
   }

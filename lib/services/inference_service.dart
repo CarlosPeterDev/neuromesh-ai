@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'chat_tool_loop.dart';
 import '../utils/thought_parser.dart';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:get/get.dart';
 
@@ -347,6 +349,8 @@ class InferenceService extends GetxService {
     }
     _engine = null;
     modelLoadMs = null;
+    _capabilityTimer?.cancel();
+    capabilityNotice.value = '';
     isModelLoaded.value = false;
     isVisionLoaded.value = false;
     _loadedProjector = null;
@@ -377,10 +381,17 @@ class InferenceService extends GetxService {
   Future<void> _checkCapabilities(String modelPath, int revision) async {
     try {
       final stat = await File(modelPath).stat();
+      final profile = jsonEncode([
+        modelPath,
+        stat.size,
+        stat.modified.millisecondsSinceEpoch,
+        loadedModelRuntime.value,
+        loadedBackend.value,
+        contextTokensTotal.value,
+        _loadedProjector,
+      ]);
       final key =
-          'chat_capabilities_v1:$modelPath:${stat.size}:${stat.modified.millisecondsSinceEpoch}:'
-          '${loadedModelRuntime.value}:${loadedBackend.value}:${contextTokensTotal.value}:'
-          '${_loadedProjector ?? ""}';
+          'chat_capabilities_v1:${sha256.convert(utf8.encode(profile))}';
       if (revision != modelRevision ||
           !isModelLoaded.value ||
           isGenerating.value) return;
@@ -488,6 +499,7 @@ class InferenceService extends GetxService {
     final startTime = DateTime.now();
     final generationClock = Stopwatch()..start();
     int? firstVisibleOutputUs;
+    var emittedChunks = 0;
     firstOutputMs = null;
     Timer? tokenFlushTimer;
     var probeExpired = false;
@@ -621,7 +633,8 @@ class InferenceService extends GetxService {
           final now = generationClock.elapsedMicroseconds;
           firstVisibleOutputUs ??= now;
           firstOutputMs ??= now ~/ 1000;
-          tokenCount.value++;
+          emittedChunks++;
+          tokenCount.value = emittedChunks;
           streamingText.value += token;
           final generationUs = now - firstVisibleOutputUs!;
           if (generationUs > 0 && tokenCount.value > 1) {
@@ -703,8 +716,9 @@ class InferenceService extends GetxService {
     } finally {
       probeDeadline?.cancel();
       Get.find<AppLogService>().info('Inference timing',
-          details: 'source=$source firstChunkMs=${firstOutputMs ?? -1} '
-              'chunks=${tokenCount.value} totalMs=${generationClock.elapsedMilliseconds}');
+          details:
+              'source=$source firstChunkMs=${(firstVisibleOutputUs ?? -1000) ~/ 1000} '
+              'chunks=$emittedChunks totalMs=${generationClock.elapsedMilliseconds}');
     }
   }
 

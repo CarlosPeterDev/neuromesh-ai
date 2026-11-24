@@ -16,21 +16,6 @@ class PollinationsImageService {
       'Pollinations requires a key for image editing. Add one under Models → Images. The app selects models listed as free.';
   static const _modernHost = 'gen.pollinations.ai';
 
-  static String? explicitPrompt(String text) {
-    final request = RegExp(
-      r'^\s*(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:please\s+)?(?:generate|create|make|draw|render|paint)\s+(?:(?:an?|the|me an?)\s+)?(?:(?:ai[- ]generated|realistic|photorealistic)\s+)?(?:image|picture|photo|illustration|portrait)(?:\s+(?:of|showing|depicting|with)\b|\s*:\s*|\s+)(.+)$',
-      caseSensitive: false,
-      dotAll: true,
-    ).firstMatch(text);
-    final subject = request?.group(1)?.trim();
-    if (subject == null ||
-        subject.isEmpty ||
-        RegExp(r'^(?:from|based on|using)\s+(?:this|the|my|our)\b|@(?:file|skill):',
-                caseSensitive: false)
-            .hasMatch(subject)) return null;
-    return text.trim();
-  }
-
   Future<Uint8List> generate(String prompt, {http.Client? client}) async {
     final text = prompt.trim();
     if (text.isEmpty || text.length > 1000) {

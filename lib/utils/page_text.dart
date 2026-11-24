@@ -65,40 +65,6 @@ String bestPassages(String text, String query, {int maxChars = 1000}) {
   return text.length > maxChars ? text.substring(0, maxChars) : text;
 }
 
-final _filler = RegExp(
-    r'^(please|pls|hey|hi|ok|okay|now|can you|could you|would you|i want you to|i want to know|tell me|search( the web| online)?( for)?|look up|find( out)?|google)\b[\s,:]*',
-    caseSensitive: false);
-
-/// Turns a chat message into a search query: drops politeness, and when the
-/// message is a short follow-up ("and in 2025?") borrows the previous
-/// question for context.
-String searchQuery(String question, {String? previous}) {
-  var q = question.trim();
-  for (var i = 0; i < 3; i++) {
-    final next = q.replaceFirst(_filler, '');
-    if (next == q) break;
-    q = next;
-  }
-  q = q.replaceFirst(
-      RegExp(r'\s*[,;]?\s+(?:and\s+)?then\s+(?:write|summari[sz]e|create|make|generate|read|turn)\b[\s\S]*$', caseSensitive: false),
-      '');
-  q = q.replaceAll(RegExp(r'[?؟!]+$'), '').trim();
-  if (q.isEmpty) q = question.trim();
-  final retry = RegExp(
-    r'^\s*(?:(?:ok(?:ay)?|yes|please)[,.!]?\s+)*(?:search|look up)(?:\s+(?:the web|online|again|please|for it))*(?:\s+(?:because|since|as)\b.*)?[.!?]*\s*$',
-    caseSensitive: false,
-  ).hasMatch(question);
-  if (retry && previous != null && previous.trim().isNotEmpty) {
-    return searchQuery(previous);
-  }
-  final words = q.split(RegExp(r'\s+')).length;
-  if (words <= 3 && previous != null && previous.trim().isNotEmpty) {
-    final prev = searchQuery(previous);
-    q = '$prev $q';
-  }
-  return q.length > 200 ? q.substring(0, 200) : q;
-}
-
 /// Keeps the first result per website so one site can't fill the list.
 List<T> dedupeByHost<T>(List<T> items, String Function(T) urlOf) {
   final seen = <String>{};

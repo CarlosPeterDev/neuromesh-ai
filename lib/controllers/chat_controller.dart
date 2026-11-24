@@ -473,7 +473,7 @@ class ChatController extends GetxController {
       if (result == null) return;
       final file = result.files.single;
       final extension = file.extension?.toLowerCase() ?? '';
-      var fileType = _attachmentTypeForExtension(extension);
+      final fileType = _attachmentTypeForExtension(extension);
 
       // Media input needs a compatible model or a selected transcription tool.
       if (documentsOnly && (fileType == 'image' || fileType == 'audio')) {
@@ -487,7 +487,6 @@ class ChatController extends GetxController {
           );
           return;
         }
-        fileType = 'file';
       }
 
       if (fileType == 'file' &&
@@ -936,6 +935,7 @@ class ChatController extends GetxController {
         await _hive.saveMessage(userMsg.id, userMsg.toMap());
       }
       if (generationId != _generationSerial) return;
+      isStreaming.value = true;
       _scrollToBottom(force: true);
 
       final sendingSession = currentSession;
@@ -953,14 +953,14 @@ class ChatController extends GetxController {
         }
       }
 
-      final contextAgent = Get.find<ChatToolService>();
+      final chatTools = Get.find<ChatToolService>();
       final explicitFiles = contextMentions(visibleText)
           .where((mention) => mention.$1 == 'file')
           .map((mention) => mention.$2)
           .toSet();
       final skillContext = Get.isRegistered<SkillsService>()
           ? await Get.find<SkillsService>().prepare(visibleText,
-              await contextAgent.inProject(project, contextAgent.filesDir),
+              await chatTools.inProject(project, chatTools.filesDir),
               attachment: workspaceName ??
                   messages.reversed
                       .where((message) => message.workspaceProject == project)
@@ -995,8 +995,8 @@ class ChatController extends GetxController {
           !kIsWeb) {
         final stored = workspaceName;
         if (stored != null) {
-          evidencePath = await contextAgent.inProject(project,
-                  () => contextAgent.workspaceAttachmentPath(stored)) ??
+          evidencePath = await chatTools.inProject(
+                  project, () => chatTools.workspaceAttachmentPath(stored)) ??
               evidencePath;
         }
         try {
@@ -1055,9 +1055,12 @@ class ChatController extends GetxController {
       }
       final genPrompt = evidenceText.isNotEmpty
           ? '$visibleText\n\n$evidenceText'
-          : Get.isRegistered<RagService>()
-              ? await Get.find<RagService>().augment(effectiveText, visibleText)
-              : effectiveText;
+          : fileType == 'audio'
+              ? '$visibleText\n\nAttached audio: $fileName.'
+              : Get.isRegistered<RagService>()
+                  ? await Get.find<RagService>()
+                      .augment(effectiveText, visibleText)
+                  : effectiveText;
 
       if (generationId != _generationSerial) return;
       isStreaming.value = true;
@@ -1067,7 +1070,7 @@ class ChatController extends GetxController {
       _followStreaming = true;
       _scrollToBottom(force: true);
 
-      final finalPrompt = genPrompt;
+      var finalPrompt = genPrompt;
       final web = Get.isRegistered<WebSearchService>()
           ? Get.find<WebSearchService>()
           : null;
@@ -1097,8 +1100,13 @@ class ChatController extends GetxController {
       } else {
         if (inferenceMode == 'local' && inference.isLoadingModel.value) {
           responseStage.value = 'Waiting for model';
+          final waiting = Stopwatch()..start();
           while (inference.isLoadingModel.value &&
               generationId == _generationSerial) {
+            if (waiting.elapsed >= const Duration(minutes: 3)) {
+              throw StateError(
+                  'The model is still loading. Check its progress in Models and retry when it is ready.');
+            }
             await Future<void>.delayed(const Duration(milliseconds: 200));
           }
         }
@@ -1110,14 +1118,25 @@ class ChatController extends GetxController {
           _contextError = null;
         }
         final cloud = Get.find<CloudService>();
+        final modelPath =
+            _hive.getSetting<String>(AppConstants.keyLocalModelPath);
         final stops = settings.stopSequences.toList();
         final baseSystem = [
-          contextAgent.composeSystem(_effectiveSystemPrompt,
+          chatTools.composeSystem(_effectiveSystemPrompt,
               request: visibleText, contextSize: contextSize),
           if (skillContext != null && skillContext.documents.isNotEmpty)
             skillContext.prompt(contextSize ~/ 4, alreadyIncluded: finalPrompt),
         ].join('\n\n');
-        final useTools = contextAgent.mode.value != ChatToolMode.off;
+        final useTools = chatTools.mode.value != ChatToolMode.off;
+        final textOnlyImage = inferenceMode == 'local' &&
+            imagePath != null &&
+            inference.isModelLoaded.value &&
+            !inference.isVisionLoaded.value &&
+            useTools;
+        if (textOnlyImage) {
+          finalPrompt += '\n\nAn image is attached. This model cannot view it. '
+              'For an edit requested by the user, the image is available to edit_image.';
+        }
         final allowed = ChatToolLoop.toolNames.where((name) {
           if (name == 'edit_image' &&
               imgBase64 == null &&
@@ -1137,18 +1156,23 @@ class ChatController extends GetxController {
               (skillContext?.documents.isEmpty ?? true)) {
             return false;
           }
-          return contextAgent.policyFor('built-in', name,
-                  needsConfirm: false) !=
+          return chatTools.policyFor('built-in', name, needsConfirm: false) !=
               'block';
         }).toSet();
 
         var liveTrace = const <String>[];
         var passes = 0;
         var invalidCalls = 0;
+        var omittedHistory = false;
         var toolMs = 0;
         Future<String> generateReply(String instructions, String evidence,
             {void Function(String)? onToken}) async {
           if (generationId != _generationSerial) return '';
+          if (inferenceMode == 'local' &&
+              modelPath !=
+                  _hive.getSetting<String>(AppConstants.keyLocalModelPath)) {
+            return 'ERROR: The active model changed. Retry this message with the loaded model.';
+          }
           passes++;
           final assembly = Stopwatch()..start();
           responseStage.value = 'Preparing context';
@@ -1216,7 +1240,11 @@ class ChatController extends GetxController {
             contextSize: contextSize,
             request: visibleText,
             needsEvidence: evidenceText.isNotEmpty || evidence.isNotEmpty,
+            nativeBudget: !kIsWeb &&
+                Platform.isAndroid &&
+                inference.loadedModelRuntime.value == 'llama',
           );
+          omittedHistory |= turn.history.length < activeHistory.length;
           responseStage.value = imagePath != null
               ? 'Evaluating image and prompt'
               : 'Evaluating prompt';
@@ -1228,7 +1256,7 @@ class ChatController extends GetxController {
             systemPrompt: turn.system,
             conversationHistory: turn.history,
             source: useTools ? 'chat-tools' : 'chat',
-            imagePath: imagePath,
+            imagePath: textOnlyImage ? null : imagePath,
             audioPath: fileType == 'audio' &&
                     inference.loadedModelRuntime.value == 'litert'
                 ? filePath
@@ -1265,13 +1293,21 @@ class ChatController extends GetxController {
                   final args = {...call.arguments};
                   if (call.name == 'transcribe_attachment') {
                     if (filePath == null) return 'Error: attach an audio file.';
+                    if (chatTools.policyFor('built-in', call.name,
+                                needsConfirm: false) ==
+                            'ask' &&
+                        !await confirmToolCall(call.name, 'built-in', args,
+                            abort: abort)) {
+                      return 'The user denied this tool call.';
+                    }
                     return Get.find<VoiceService>().transcribeFile(filePath,
-                        language: args['language'] as String? ?? '');
+                        language: args['language'] as String? ?? '',
+                        cancelled: abort);
                   }
                   if (call.name == 'edit_image') {
                     final source = imgBase64 ??
                         await _recentImageForEdit(
-                            contextAgent, project, userMsg.id);
+                            chatTools, project, userMsg.id);
                     if (source == null)
                       return 'Error: attach the image you want to edit.';
                     args['attachedImage'] = source;
@@ -1279,11 +1315,11 @@ class ChatController extends GetxController {
                   if (call.name == 'text_to_speech') {
                     args['name'] = 'speech-${_uuid.v4()}.wav';
                   }
-                  return contextAgent.executeChatTool(
+                  return chatTools.executeChatTool(
                     ParsedToolCall(call.name, args, ''),
                     (name, server, args) async {
-                      final approved =
-                          await confirmToolCall(name, server, args);
+                      final approved = await confirmToolCall(name, server, args,
+                          abort: abort);
                       return approved && !cancellation.isCompleted;
                     },
                     abort: abort,
@@ -1294,11 +1330,12 @@ class ChatController extends GetxController {
                   if (web == null)
                     return const SearchReport(
                         [], {'Web search': SearchFailure.provider}, 0);
-                  if (contextAgent.policyFor('built-in', 'web_search',
+                  if (chatTools.policyFor('built-in', 'web_search',
                               needsConfirm: false) ==
                           'ask' &&
                       !await confirmToolCall(
-                          'web_search', 'built-in', {'query': query})) {
+                          'web_search', 'built-in', {'query': query},
+                          abort: abort)) {
                     return const SearchReport(
                         [], {'Permission denied': SearchFailure.provider}, 0);
                   }
@@ -1311,7 +1348,7 @@ class ChatController extends GetxController {
                 cancellation: cancellation.future,
                 evidenceBudget: (contextSize ~/ 2).clamp(300, 1800),
                 compactPrompt: inferenceMode == 'local' &&
-                    (contextSize < 2048 || inference.preferCompactToolPrompt),
+                    (contextSize <= 2048 || inference.preferCompactToolPrompt),
                 generationHasOwnDeadline: inferenceMode == 'local',
                 onStage: (stage) {
                   if (generationId == _generationSerial)
@@ -1333,13 +1370,17 @@ class ChatController extends GetxController {
                   cloud.cancel();
                 },
               );
-          final result = await contextAgent.inProject(
+          final result = await chatTools.inProject(
               project,
               () => skillContext == null
                   ? runLoop()
                   : SkillsService.inTurn(skillContext, runLoop));
           rawResponse = result.markdown;
           toolSearches = result.searches;
+        }
+        if (omittedHistory && !rawResponse.startsWith('ERROR:')) {
+          rawResponse +=
+              '\n\n*Older messages were outside the context available for this reply.*';
         }
         Get.find<AppLogService>().info('Chat turn completed',
             details: 'passes=$passes invalidToolCalls=$invalidCalls '

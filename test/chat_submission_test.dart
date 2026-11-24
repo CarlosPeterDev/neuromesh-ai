@@ -411,15 +411,6 @@ class _TestWeb extends WebSearchService {
             'Benchmark', 'https://example.com/benchmark', 'First test'),
     ], {}, 1);
   }
-
-  @override
-  Future<WebContext?> buildContext(String question,
-      {String? previous, bool refresh = false}) async {
-    return WebContext('Published benchmark results', const [
-      WebResult('Coding benchmark', 'https://example.com/benchmark',
-          'Model comparison')
-    ]);
-  }
 }
 
 class _TestPaths extends PathProviderPlatform {

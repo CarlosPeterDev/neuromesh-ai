@@ -7,7 +7,7 @@ class LlamaController implements LlamaFlutterApi {
   final _api = LlamaHostApi();
   StreamController<String>? _tokenController;
   final _progressController = StreamController<double>.broadcast();
-  
+
   bool _isLoading = false;
   bool _isGenerating = false;
 
@@ -79,9 +79,11 @@ class LlamaController implements LlamaFlutterApi {
 
     _isGenerating = true;
     _tokenController = StreamController<String>.broadcast();
-    
+
     // Start generation
-    _api.generate(GenerateRequest(
+    final stream = _tokenController!;
+    unawaited(_api
+        .generate(GenerateRequest(
       prompt: prompt,
       maxTokens: maxTokens,
       temperature: temperature,
@@ -98,16 +100,26 @@ class LlamaController implements LlamaFlutterApi {
       mirostatEta: mirostatEta,
       seed: seed,
       penalizeNewline: penalizeNewline,
-    ));
+    ))
+        .catchError((Object error, StackTrace stack) {
+      if (!identical(_tokenController, stream)) return;
+      _isGenerating = false;
+      _tokenController = null;
+      stream.addError(error, stack);
+      unawaited(stream.close());
+    }));
 
-    return _tokenController!.stream;
+    return stream.stream;
   }
 
   /// Stop current generation
   Future<void> stop() async {
     if (!_isGenerating) return;
-    await _api.stop();
+    final stream = _tokenController;
     _isGenerating = false;
+    _tokenController = null;
+    if (stream != null) unawaited(stream.close());
+    await _api.stop();
   }
 
   /// Unload model and free resources
@@ -133,7 +145,8 @@ class LlamaController implements LlamaFlutterApi {
   }
 
   /// Get list of supported chat templates
-  Future<List<String>> getSupportedTemplates() async => await _api.getSupportedTemplates();
+  Future<List<String>> getSupportedTemplates() async =>
+      await _api.getSupportedTemplates();
 
   /// Generate chat response with automatic template formatting
   Stream<String> generateChat({
@@ -161,9 +174,11 @@ class LlamaController implements LlamaFlutterApi {
 
     _isGenerating = true;
     _tokenController = StreamController<String>.broadcast();
-    
+
     // Start chat generation
-    _api.generateChat(ChatRequest(
+    final stream = _tokenController!;
+    unawaited(_api
+        .generateChat(ChatRequest(
       messages: messages,
       template: template,
       maxTokens: maxTokens,
@@ -181,9 +196,16 @@ class LlamaController implements LlamaFlutterApi {
       mirostatEta: mirostatEta,
       seed: seed,
       penalizeNewline: penalizeNewline,
-    ));
+    ))
+        .catchError((Object error, StackTrace stack) {
+      if (!identical(_tokenController, stream)) return;
+      _isGenerating = false;
+      _tokenController = null;
+      stream.addError(error, stack);
+      unawaited(stream.close());
+    }));
 
-    return _tokenController!.stream;
+    return stream.stream;
   }
 
   /// Get loading progress stream (0.0 to 1.0)
@@ -208,12 +230,12 @@ class LlamaController implements LlamaFlutterApi {
   }
 
   /// Register a custom chat template
-  /// 
+  ///
   /// Template content should use placeholders:
   /// - {system} for system messages
   /// - {user} for user messages
   /// - {assistant} for assistant messages
-  /// 
+  ///
   /// Example: "<s>[INST]{user}[/INST]{assistant}</s>"
   Future<void> registerCustomTemplate(String name, String content) async {
     await _api.registerCustomTemplate(name, content);
@@ -267,4 +289,5 @@ class LlamaController implements LlamaFlutterApi {
   @override
   void onLoadProgress(double progress) {
     _progressController.add(progress);
-  }}
+  }
+}

@@ -128,9 +128,9 @@ class ToolboxView extends StatelessWidget {
         const AppGroup(dividerIndent: 60, children: [
           AppRow(
             icon: Icons.travel_explore_rounded,
-            title: 'Automatic web search',
+            title: 'Web search in Chat',
             subtitle:
-                'Questions that need current information are sent to search providers. Answers include available sources.',
+                'The chat model can query search providers and cite the sources it receives.',
           ),
         ]),
         const SectionHeader('Chat with documents'),

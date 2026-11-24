@@ -516,7 +516,7 @@ class _MenuPanel extends StatefulWidget {
 }
 
 class _MenuPanelState extends State<_MenuPanel> {
-  final _open = <String>{'Chat'};
+  final _open = <String>{'AI Chat'};
 
   @override
   Widget build(BuildContext context) {

@@ -16,7 +16,7 @@ import '../services/chat_tool_service.dart' show stripToolTrace;
 import '../services/cluster_service.dart';
 import '../services/inference_service.dart';
 import '../utils/thought_parser.dart';
-import '../widgets/agent_steps.dart';
+import '../widgets/tool_steps.dart';
 import '../widgets/context_mentions.dart';
 import '../widgets/attachment_preview.dart';
 import '../widgets/chat_bubble.dart';
@@ -62,6 +62,7 @@ class ChatView extends GetView<ChatController> {
             }
             final streaming = controller.isStreaming.value;
             final text = controller.streamingResponse.value;
+            final stage = controller.responseStage.value;
             final n = controller.messages.length;
             return ScrollToEnd(
               label: 'Go to latest message',
@@ -84,7 +85,7 @@ class ChatView extends GetView<ChatController> {
                   itemCount: n + (streaming ? 1 : 0),
                   itemBuilder: (_, i) {
                     if (i == n && streaming) {
-                      return _streamBubble(context, text, isDark);
+                      return _streamBubble(context, text, stage, isDark);
                     }
                     final message = controller.messages[i];
                     return ChatBubble(
@@ -481,7 +482,7 @@ class ChatView extends GetView<ChatController> {
       const HomeEmptyState();
 
   // ── Streaming Bubble ──
-  Widget _streamBubble(BuildContext context, String text, bool isDark) {
+  Widget _streamBubble(BuildContext context, String text, String stage, bool isDark) {
     final attType = controller.streamingAttachmentType.value;
     final clean = _cleanStream(text).trimLeft();
     final (steps, response) = splitSteps(clean);
@@ -496,7 +497,7 @@ class ChatView extends GetView<ChatController> {
         if (!hasText)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 6),
-            child: _typingHint(context, isDark, attachmentType: attType),
+            child: _typingHint(context, stage, isDark, attachmentType: attType),
           )
         else ...[
           if (parts.hasThought)
@@ -518,7 +519,7 @@ class ChatView extends GetView<ChatController> {
             ]),
         ],
         if (steps.isNotEmpty)
-          AgentStepsView(
+          ToolStepsView(
             steps: steps,
             messageId: 'live-${controller.messages.lastOrNull?.id}',
             live: true,
@@ -548,9 +549,8 @@ class ChatView extends GetView<ChatController> {
     );
   }
 
-  Widget _typingHint(BuildContext context, bool isDark,
+  Widget _typingHint(BuildContext context, String stage, bool isDark,
       {String? attachmentType}) {
-    final stage = controller.responseStage.value;
     final msg = stage.isNotEmpty
         ? '$stage…'
         : attachmentType == 'image'

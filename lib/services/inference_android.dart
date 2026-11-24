@@ -591,7 +591,7 @@ class InferenceEngine {
         _subscription?.cancel();
         _onStop = null;
         if (cancelNative) {
-          _nativeCancel = conversation?.cancel() ?? Future<void>.value();
+          _nativeCancel = conversation?.cancel().timeout(const Duration(seconds: 5)) ?? Future<void>.value();
           unawaited(_nativeCancel.then<void>((_) {}, onError: (Object error) {
             print('[Inference] LiteRT cancellation failed: $error');
           }));
@@ -784,7 +784,7 @@ class InferenceEngine {
       await _preparingLiteRt?.timeout(const Duration(seconds: 5));
       _liteConversationHasMessages = true;
       if (stopCallback == null) {
-        await _liteConversation?.cancel();
+        await _liteConversation?.cancel().timeout(const Duration(seconds: 5));
       } else {
         await _nativeCancel;
       }

@@ -131,34 +131,3 @@ List<WebResult> parseBingRss(String body, {int max = 5}) {
     return [];
   }
 }
-
-final _recency = RegExp(
-    r'\b(today|tonight|tomorrow|yesterday|right now|latest|current(ly)?|recent(ly)?|news|headline|price of|how much (is|does|are)|cost of|weather|forecast|score|who won|results?|release date|released|stock|exchange rate|trending|this (week|month|year)|202\d|search|look ?up|google|find out|what happened|is .* (open|available))\b',
-    caseSensitive: false);
-final _arabic = RegExp(
-    r'(اليوم|الآن|حاليا|حالياً|آخر|أخر|أخبار|اخبار|سعر|أسعار|طقس|الطقس|نتيجة|نتائج|ابحث|دور|بحث|ماذا حدث|هذا الأسبوع|هذا الشهر|202\d)');
-
-final _modelRanking = RegExp(
-    r'\b(?:best|strongest|leading|top)\b.{0,45}\b(?:ai|llm|language model|model)s?\b',
-    caseSensitive: false);
-
-/// Cheap check for "this question probably needs fresh information".
-bool needsWebSearch(String question) {
-  final q = question.trim();
-  if (q.length < 8) return false;
-  return _recency.hasMatch(q) ||
-      _arabic.hasMatch(q) ||
-      _modelRanking.hasMatch(q);
-}
-
-/// Questions whose answers depend on current information.
-bool asksForCurrentFacts(String question) => RegExp(
-      r'\b(?:today|tonight|right now|latest|currently|current|newest|recent|news|weather|forecast|trending|release date|this (?:week|month|year))\b|اليوم|الآن|الحالي|أحدث|آخر الأخبار|الطقس',
-      caseSensitive: false,
-    ).hasMatch(question);
-
-/// An explicit request can turn on search for one chat turn.
-bool explicitlyRequestsWebSearch(String question) => RegExp(
-      r'^\s*(?:(?:ok(?:ay)?|yes|please|now|can you|could you|would you)[,.!]?\s+)*(?:search(?:\s+(?:the web|online))?|look\s+up|google)\b(?!\s+(?:my|this|the)\s+(?:files?|attachments?|documents?|workspace)\b)|^\s*ابحث',
-      caseSensitive: false,
-    ).hasMatch(question);

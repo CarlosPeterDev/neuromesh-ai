@@ -19,6 +19,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
     private var generationJob: Job? = null
     private val isModelLoaded = AtomicBoolean(false)
     private val isStopping = AtomicBoolean(false)
+    private val generationState = Any()
     private var currentModelPath: String? = null
     private var nativeLoadError: Throwable? = null
     private var clusterChannel: ClusterChannel? = null
@@ -124,6 +125,12 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
         }
     }
 
+    private fun CoroutineScope.prepareGeneration() = synchronized(generationState) {
+        ensureActive()
+        nativePrepareGeneration()
+        isStopping.set(false)
+    }
+
     override fun generate(request: GenerateRequest, callback: (Result<Unit>) -> Unit) {
         ensureNativeLoaded()?.let {
             callback(Result.failure(it))
@@ -136,7 +143,11 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
         }
 
         val previous = generationJob
-        generationJob = scope.launch {
+        val delivered = AtomicBoolean(false)
+        fun complete(result: Result<Unit>) {
+            if (delivered.compareAndSet(false, true)) callback(result)
+        }
+        generationJob = scope.launch(start = CoroutineStart.LAZY) {
             // One generation at a time on the native context. A client that
             // hangs up mid-stream (API server) leaves the previous one still
             // stopping; starting another meanwhile crashed llama.cpp. Wait for
@@ -146,11 +157,11 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
             ensureActive()
             if (!isModelLoaded.get()) {
                 withContext(Dispatchers.Main) {
-                    callback(Result.failure(IllegalStateException("Model not loaded")))
+                    complete(Result.failure(IllegalStateException("Model not loaded")))
                 }
                 return@launch
             }
-            isStopping.set(false)
+            prepareGeneration()
             try {
                 nativeGenerate(
                     request.prompt,
@@ -180,7 +191,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
 
                 withContext(Dispatchers.Main) {
                     if (!isStopping.get()) flutterApi.onDone { }
-                    callback(Result.success(Unit))
+                    complete(Result.success(Unit))
                 }
             } catch (e: Exception) {
                 if (!isStopping.get()) {
@@ -189,19 +200,28 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
                             flutterApi.onError(e.message ?: "Generation failed") { result ->
                                 // Handle result if needed
                             }
-                            callback(Result.failure(e))
+                            complete(Result.failure(e))
                         }
                     }
                 }
             }
+        }.also { job ->
+            job.invokeOnCompletion { failure ->
+                if (failure != null) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        complete(if (failure is CancellationException) Result.success(Unit) else Result.failure(failure))
+                    }
+                }
+            }
         }
+        generationJob?.start()
     }
 
     override fun stop(callback: (Result<Unit>) -> Unit) {
-        isStopping.set(true)
-        generationJob?.cancel()
-        if (nativeLoadError == null) {
-            nativeStop()
+        synchronized(generationState) {
+            isStopping.set(true)
+            generationJob?.cancel()
+            if (isModelLoaded.get() || generationJob != null) nativeStop()
         }
         callback(Result.success(Unit))
     }
@@ -242,7 +262,11 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
         }
 
         val previous = generationJob
-        generationJob = scope.launch {
+        val delivered = AtomicBoolean(false)
+        fun complete(result: Result<Unit>) {
+            if (delivered.compareAndSet(false, true)) callback(result)
+        }
+        generationJob = scope.launch(start = CoroutineStart.LAZY) {
             // One generation at a time on the native context. A client that
             // hangs up mid-stream (API server) leaves the previous one still
             // stopping; starting another meanwhile crashed llama.cpp. Wait for
@@ -252,11 +276,11 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
             ensureActive()
             if (!isModelLoaded.get()) {
                 withContext(Dispatchers.Main) {
-                    callback(Result.failure(IllegalStateException("Model not loaded")))
+                    complete(Result.failure(IllegalStateException("Model not loaded")))
                 }
                 return@launch
             }
-            isStopping.set(false)
+            prepareGeneration()
             try {
                 // Only the newest image is sent (earlier ones stay as text).
                 // Its message gets llama.cpp's media marker, which the native
@@ -300,6 +324,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
                 android.util.Log.i(TAG, "prompt_assembly_ms=${android.os.SystemClock.elapsedRealtime() - assemblyStart} " +
                     "history_messages_omitted=${messages.size - history.size}")
 
+                ensureActive()
                 if (imagePath != null) {
                     android.util.Log.i(TAG, "Image turn: message $imageIndex of ${request.messages.size}, " +
                         "marker in prompt=${formattedPrompt.contains(MEDIA_MARKER)}")
@@ -332,7 +357,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
 
                 withContext(Dispatchers.Main) {
                     if (!isStopping.get()) flutterApi.onDone { }
-                    callback(Result.success(Unit))
+                    complete(Result.success(Unit))
                 }
             } catch (e: Exception) {
                 if (!isStopping.get()) {
@@ -341,12 +366,21 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
                             flutterApi.onError(e.message ?: "Generation failed") { result ->
                                 // Handle result if needed
                             }
-                            callback(Result.failure(e))
+                            complete(Result.failure(e))
                         }
                     }
                 }
             }
+        }.also { job ->
+            job.invokeOnCompletion { failure ->
+                if (failure != null) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        complete(if (failure is CancellationException) Result.success(Unit) else Result.failure(failure))
+                    }
+                }
+            }
         }
+        generationJob?.start()
     }
 
     override fun getSupportedTemplates(): List<String> {
@@ -381,8 +415,10 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
             return
         }
 
+        val previous = generationJob
         scope.launch {
             try {
+                previous?.join()
                 nativeClearContext()
                 withContext(Dispatchers.Main) {
                     callback(Result.success(Unit))
@@ -578,6 +614,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
 
     /** Returns null on success, otherwise why the vision file didn't load. */
     private external fun nativeLoadMmproj(path: String, nThreads: Long): String?
+    private external fun nativePrepareGeneration()
     private external fun nativeStop()
     private external fun nativeFreeModel()
     private external fun nativeGetTokensUsed(): Int
