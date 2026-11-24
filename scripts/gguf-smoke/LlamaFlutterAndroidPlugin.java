@@ -104,12 +104,16 @@ public final class LlamaFlutterAndroidPlugin {
             if (args.length >= 5) {
                 final String system = new String(Files.readAllBytes(Paths.get(args[4])), StandardCharsets.UTF_8);
                 smoke.checkVisualPlan(system, "Create image of a flying car", "artwork");
+                smoke.checkVisualPlan(system, "A flying car above Cairo", "artwork");
                 smoke.checkVisualPlan(system, "Could you show me what a flying car over a rainy Cairo might look like?", "artwork");
                 smoke.checkVisualPlan(system, "ارسم سيارة تطير فوق القاهرة ليلاً", "artwork");
                 smoke.checkVisualPlan(system, "Explain how a flying car would work.", "text");
                 smoke.checkVisualPlan(system, "Write a prompt I could give a painter to depict a flying car.", "text");
-                smoke.checkVisualPlan(system, "I need an illustration of a flying car and a list of current aerospace funding rounds.", "mixed");
                 smoke.checkVisualPlan(system, "Hi", "text");
+            }
+            if (args.length >= 6) {
+                final String system = new String(Files.readAllBytes(Paths.get(args[5])), StandardCharsets.UTF_8);
+                smoke.checkVisualPlan(system, "I need an illustration of a flying car and a list of current aerospace funding rounds.", "mixed");
             }
         } finally {
             smoke.nativeFreeModel();

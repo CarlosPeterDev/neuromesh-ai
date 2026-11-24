@@ -108,7 +108,7 @@ void main() {
     chat.textController.text = request;
     await chat.sendMessage();
 
-    expect(local.sources, [InferenceService.visualPlanSource]);
+    expect(local.sources, List.filled(2, InferenceService.visualPlanSource));
     expect(agent.imageCall?.name, 'generate_image');
     expect(agent.imageCall?.arguments['prompt'], request);
     expect(chat.messages.last.content, contains('nmfile:generated.jpg'));

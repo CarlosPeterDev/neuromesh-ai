@@ -1294,6 +1294,22 @@ class ChatController extends GetxController {
               explicitFiles.isEmpty &&
               visibleText.isNotEmpty &&
               visibleText.length <= 1000;
+          bool currentPlan() =>
+              generationId == _generationSerial &&
+              !cancellation.isCompleted &&
+              modelPath ==
+                  _hive.getSetting<String>(AppConstants.keyLocalModelPath);
+
+          Future<String> visualDecision(String system) {
+            passes++;
+            return inference.generate(
+              prompt: visibleText,
+              systemPrompt: system,
+              source: InferenceService.visualPlanSource,
+              maxTokens: 4,
+            );
+          }
+
           Future<ToolLoopResult> runLoop() => ChatToolLoop(
                 maxSteps: _hive.getSetting<int>('chat_tool_step_limit') ?? 5,
               ).run(
@@ -1301,26 +1317,23 @@ class ChatController extends GetxController {
                 allowed: allowed,
                 plan: canPlanImage
                     ? () async {
-                        if (generationId != _generationSerial ||
-                            cancellation.isCompleted) {
-                          return null;
-                        }
+                        if (!currentPlan()) return null;
                         responseStage.value = 'Choosing how to respond';
-                        passes++;
-                        final decision = await inference.generate(
-                          prompt: visibleText,
-                          systemPrompt: visualIntentInstructions,
-                          source: InferenceService.visualPlanSource,
-                          maxTokens: 4,
-                        );
-                        if (generationId != _generationSerial ||
-                            cancellation.isCompleted ||
-                            modelPath !=
-                                _hive.getSetting<String>(
-                                    AppConstants.keyLocalModelPath)) {
-                          return null;
-                        }
-                        return ChatToolLoop.visualPlan(decision, visibleText);
+                        final choice =
+                            await visualDecision(visualIntentInstructions);
+                        if (!currentPlan()) return null;
+                        final selected =
+                            ChatToolLoop.visualPlan(choice, visibleText);
+                        if (selected == null || selected.needsFollowUp)
+                          return selected;
+                        final remainder =
+                            await visualDecision(visualFollowUpInstructions);
+                        if (!currentPlan()) return null;
+                        final combined =
+                            ChatToolLoop.visualPlan(remainder, visibleText);
+                        return combined?.needsFollowUp == true
+                            ? combined
+                            : selected;
                       }
                     : null,
                 execute: (call, abort) async {
