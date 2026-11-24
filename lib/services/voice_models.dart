@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
 enum VoiceKind { stt, tts, vad }
+enum VoiceGender { female, male }
 
 class VoiceModelInfo {
   final String id;
@@ -31,6 +32,35 @@ class VoiceModelInfo {
   /// Names of the built-in voices, in the model's speaker order (multi-speaker
   /// models only). The user can audition them, so a wrong label is harmless.
   final List<String> speakers;
+  final VoiceGender? gender;
+
+  VoiceGender? genderForSpeaker(int index) {
+    if (speakers.isEmpty) return gender;
+    final label = speakers[index];
+    if (label.endsWith(' M)') || label.endsWith('(M)')) return VoiceGender.male;
+    if (label.endsWith(' F)') ||
+        label.endsWith('(F)') ||
+        label.endsWith('(af)')) {
+      return VoiceGender.female;
+    }
+    return null;
+  }
+
+  String languageForSpeaker(int index) {
+    if (lang != 'multi') return lang;
+    const languages = {
+      'UK': 'en',
+      'ES': 'es',
+      'FR': 'fr',
+      'HI': 'hi',
+      'IT': 'it',
+      'JA': 'ja',
+      'PT': 'pt',
+      'ZH': 'zh',
+    };
+    final region = RegExp(r'\(([A-Z]{2}) [FM]\)$').firstMatch(speakers[index]);
+    return languages[region?.group(1)] ?? 'en';
+  }
 
   int? speakerIndexFor(String name) {
     final query = name.trim().toLowerCase();
@@ -56,6 +86,7 @@ class VoiceModelInfo {
     this.clone = false,
     this.engine = '',
     this.speakers = const [],
+    this.gender,
   });
 }
 
@@ -90,7 +121,7 @@ const _kittenVoices = [
 ];
 
 VoiceModelInfo _piper(String id, String title, String lang, String espeak,
-        String dir, String size) =>
+        String dir, String size, {VoiceGender? gender}) =>
     VoiceModelInfo(
         id: id,
         kind: VoiceKind.tts,
@@ -100,7 +131,8 @@ VoiceModelInfo _piper(String id, String title, String lang, String espeak,
         dirName: dir,
         sizeLabel: size,
         espeakVoice: espeak,
-        engine: 'piper');
+        engine: 'piper',
+        gender: gender);
 
 final kVoiceModels = <VoiceModelInfo>[
   // ── Listening ──
@@ -160,15 +192,16 @@ final kVoiceModels = <VoiceModelInfo>[
       dirName: 'vits-piper-en_US-amy-low',
       sizeLabel: '67 MB',
       espeakVoice: 'en-us',
+      gender: VoiceGender.female,
       engine: 'piper'),
   _piper('piper-en-lessac', 'English: Lessac (female, natural)', 'en', 'en-us',
-      'vits-piper-en_US-lessac-medium', '64 MB'),
+      'vits-piper-en_US-lessac-medium', '64 MB', gender: VoiceGender.female),
   _piper('piper-en-ryan', 'English: Ryan (male, natural)', 'en', 'en-us',
-      'vits-piper-en_US-ryan-medium', '64 MB'),
+      'vits-piper-en_US-ryan-medium', '64 MB', gender: VoiceGender.male),
   _piper('piper-en-joe', 'English: Joe (male)', 'en', 'en-us',
-      'vits-piper-en_US-joe-medium', '64 MB'),
+      'vits-piper-en_US-joe-medium', '64 MB', gender: VoiceGender.male),
   _piper('piper-en-hfc-f', 'English: HFC (female)', 'en', 'en-us',
-      'vits-piper-en_US-hfc_female-medium', '64 MB'),
+      'vits-piper-en_US-hfc_female-medium', '64 MB', gender: VoiceGender.female),
   VoiceModelInfo(
       id: 'kokoro-en',
       kind: VoiceKind.tts,
@@ -210,6 +243,7 @@ final kVoiceModels = <VoiceModelInfo>[
       dirName: 'vits-piper-ar_JO-kareem-medium',
       sizeLabel: '67 MB',
       espeakVoice: 'ar',
+      gender: VoiceGender.male,
       engine: 'piper'),
   _piper('piper-ar-miro2', 'Arabic: Miro V2 (high quality)', 'ar', 'ar',
       'vits-piper-ar_JO-SA_miro_V2-high', '64 MB'),

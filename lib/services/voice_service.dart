@@ -506,25 +506,32 @@ class VoiceService extends GetxService {
 
   /// Speaks [text] with the chosen voice into a WAV file's bytes.
   Future<Uint8List> synthesizeToWav(String text,
-      {String lang = '', bool allowWorker = true, String modelId = '', String speaker = '', Future<void>? cancelled}) async {
+      {String lang = '',
+      bool allowWorker = true,
+      String modelId = '',
+      String speaker = '',
+      String voice = '',
+      void Function(String)? onVoiceSelected,
+      Future<void>? cancelled}) async {
     var aborted = false;
     cancelled?.then((_) => aborted = true);
-    final requested = _requestedModel(VoiceKind.tts, modelId);
-    final worker = allowWorker && requested == null && speaker.trim().isEmpty
+    final language = lang.trim().toLowerCase().split(RegExp(r'[-_]')).first;
+    final worker = allowWorker &&
+            modelId.trim().isEmpty &&
+            speaker.trim().isEmpty &&
+            voice.trim().isEmpty
         ? WorkloadPlacement.forWorkload(PhoneWorkload.speech)
         : null;
     if (worker != null) {
       return worker.request(PhoneWorkload.speech.path,
-          payload: {'text': text, 'language': lang},
-          timeout: const Duration(seconds: 60), cancelled: cancelled);
+          payload: {'text': text, 'language': language},
+          timeout: const Duration(seconds: 60),
+          cancelled: cancelled);
     }
-    final m = requested ?? pickInstalled(VoiceKind.tts, lang: lang);
-    if (m == null) {
-      throw StateError('Download a speaking model in Models → Voice.');
-    }
-    final voice = speaker.trim().isEmpty ? savedSpeaker(m) : m.speakerIndexFor(speaker);
-    if (voice == null) throw ArgumentError('Choose a speaker listed for ${m.id} in models_status.');
-    final rateMultiplier = Get.find<HiveService>().getSetting<double>('voice_speed') ?? 1.0;
+    final (m, index) = _resolveSpeechVoice(
+        modelId.trim(), speaker.trim(), voice.trim(), language);
+    final rateMultiplier =
+        Get.find<HiveService>().getSetting<double>('voice_speed') ?? 1.0;
     return _withTts(() async {
       await _loadTts(m);
       final parts = <Float32List>[];
@@ -532,7 +539,8 @@ class VoiceService extends GetxService {
       for (final c in speechChunks(text)) {
         await Future<void>.delayed(Duration.zero);
         if (aborted) return Uint8List(0);
-        final r = synthesize(c, speakerIndex: voice, speakingSpeed: rateMultiplier);
+        final r =
+            synthesize(c, speakerIndex: index, speakingSpeed: rateMultiplier);
         if (r == null) continue;
         parts.add(r.samples);
         rate = r.rate;
@@ -544,8 +552,77 @@ class VoiceService extends GetxService {
         all.setRange(o, o + p.length, p);
         o += p.length;
       }
+      onVoiceSelected?.call(
+          m.speakers.isEmpty ? m.title : '${m.speakers[index]} · ${m.id}');
       return encodeWav(all, rate);
     });
+  }
+
+  (VoiceModelInfo, int) _resolveSpeechVoice(
+      String modelId, String speaker, String voice, String language) {
+    final store = Get.find<VoiceModelStore>();
+    final installed = kVoiceModels
+        .where((model) =>
+            model.kind == VoiceKind.tts &&
+            !model.clone &&
+            store.installed.contains(model.id))
+        .toList();
+    if (installed.isEmpty) {
+      throw const FormatException(
+          'Download a speaking model in Models → Voice.');
+    }
+    VoiceGender? gender(String value) => switch (value.toLowerCase()) {
+          'male' => VoiceGender.male,
+          'female' => VoiceGender.female,
+          _ => null,
+        };
+    final legacyPreference = gender(speaker);
+    final preference = gender(voice) ?? legacyPreference;
+    if (voice.isNotEmpty && gender(voice) == null ||
+        legacyPreference != null && preference != legacyPreference) {
+      throw const FormatException('Use male or female for a voice preference.');
+    }
+    final namedSpeaker = legacyPreference == null ? speaker : '';
+    final model = installed.firstWhereOrNull((model) => model.id == modelId);
+    if (modelId.isNotEmpty && model == null && preference == null) {
+      throw FormatException(
+          'Speaking model "$modelId" is unavailable. Installed models: ${installed.map((model) => model.id).join(', ')}.');
+    }
+    final preferred = pickInstalled(VoiceKind.tts, lang: language);
+    final candidates = [
+      if (model != null) model,
+      if (model == null) ...[
+        if (preferred != null) preferred,
+        ...installed.where((model) => model != preferred),
+      ],
+    ];
+    for (final candidate in candidates) {
+      final exact = candidate.speakerIndexFor(namedSpeaker);
+      if (namedSpeaker.isNotEmpty && exact == null) continue;
+      final saved = savedSpeaker(candidate);
+      final indices = exact == null
+          ? [
+              saved,
+              for (var i = 0; i < candidate.speakers.length; i++)
+                if (i != saved) i
+            ]
+          : [exact];
+      for (final index in indices) {
+        if (language.isNotEmpty &&
+            candidate.languageForSpeaker(index) != language) continue;
+        if (preference != null &&
+            candidate.genderForSpeaker(index) != preference) continue;
+        return (candidate, index);
+      }
+    }
+    final requested = [
+      if (preference != null) preference.name,
+      if (language.isNotEmpty) language,
+      if (namedSpeaker.isNotEmpty) namedSpeaker
+    ].join(' ');
+    final scope = model == null ? 'the installed speaking models' : model.id;
+    throw FormatException(
+        'No matching ${requested.isEmpty ? 'speaking' : requested} voice in $scope. Check available voices in Models → Voice.');
   }
 
   bool ttsLoadedFor(VoiceModelInfo m) => _tts != null && _ttsId == m.id;

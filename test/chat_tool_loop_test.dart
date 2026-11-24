@@ -39,6 +39,26 @@ void main() {
     expect(result.trace, isEmpty);
   });
 
+  test('speech uses the chosen catalog voice in the saved reply', () async {
+    var replies = 0;
+    final result = await ChatToolLoop().run(
+      reply: (_, __) async => ++replies == 1
+          ? '<tool_call>{"name":"text_to_speech","arguments":{"text":"Hello, Carlos!","voice":"male","language":"en-US"}}</tool_call>'
+          : 'Audio ready.',
+      execute: (call, _) async {
+        expect(call.arguments['voice'], 'male');
+        return 'Voice: Voice 2 (M) · kitten-nano\n[Listen](nmfile:voice.wav)';
+      },
+      search: (_, __) async => throw StateError('unexpected search'),
+      allowed: {'text_to_speech'},
+      cancellation: Completer<void>().future,
+      onTrace: (_) {},
+      onTimeout: () {},
+    );
+    expect(result.answer, contains('Voice: Voice 2 (M) · kitten-nano'));
+    expect(result.answer, contains('nmfile:voice.wav'));
+  });
+
   test('visual planning accepts only the allowed decision and a valid argument',
       () {
     const request = 'A vintage spaceport on a postcard, please.';

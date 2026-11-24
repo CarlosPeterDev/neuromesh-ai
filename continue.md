@@ -1,5 +1,11 @@
 # NeuroMesh AI development handoff
 
+## Chat speech voice selection
+
+The reported Artemis call used `model_id: tts-1`, `speaker: male` and `language: en-US`. The local executor rejected the unknown model ID before synthesis. Chat now advertises a typed voice preference and resolves it against the installed speaker catalog, including the older speaker field for male and female preferences. The resolver matches the primary language from a locale tag. An unavailable model ID can be bypassed only if there is a voice preference and a matching installed voice. The saved reply and tool result name the voice actually used. No matching voice produces an actionable error. Age is not a catalog capability.
+
+The host regression passed the exact reported arguments through Chat's speech tool with the real Kitten Nano model. It selected `Voice 2 (M) · kitten-nano`, produced a non-silent WAV and kept the saved speaker preference. Kokoro synthesized its default-voice fixture, and a French request against the English-only fixture produced a targeted error. [Kitten speaker order](https://github.com/k2-fsa/sherpa-onnx/blob/master/scripts/kitten-tts/v0_8/generate_voices_bin.py)
+
 ## Model-directed Pollinations in Android Chat
 
 Interactive inference preempts automatic titles and capability checks, including while a background call is waiting for the native context. A repeatable Artemis test showed that the full tool catalog could produce prose where an image was requested. Eligible local text turns now use a short deterministic model decision on the current request. Once the model selects an image, a separate short check looks for independent follow-up work. The user’s description passes through the normal argument validator and tool policy. A standalone image turn finishes with the provider result and its attachment. A mixed turn can follow up with the other tools.

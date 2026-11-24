@@ -76,22 +76,51 @@ void main() {
       Get.put<VoiceModelStore>(_TestModels(root!, model));
       Get.put(VoiceService(player: _UnusedPlayer()));
       final agent = ChatToolService();
+      final reportedCall = id == 'kitten-nano';
+      if (reportedCall) {
+        await Get.find<HiveService>().setSetting('voice_speaker_$id', 1);
+      }
       final result = await agent.executeTool(
-        const ParsedToolCall('text_to_speech', {
-          'text': 'Playing sports builds fitness and teaches teamwork.',
-        }, ''),
-        (_, __, ___) async => false,
-      );
+          ParsedToolCall(
+              'text_to_speech',
+              {
+                'text': reportedCall
+                    ? 'Hello, Carlos!'
+                    : 'Playing sports builds fitness and teaches teamwork.',
+                if (reportedCall) ...{
+                  'model_id': 'tts-1',
+                  'speaker': 'male',
+                  'language': 'en-US',
+                },
+              },
+              ''),
+          (_, __, ___) async => false);
 
-      final name =
-          RegExp(r'nmfile:([^)]+)').firstMatch(result)?.group(1);
+      final name = RegExp(r'nmfile:([^)]+)').firstMatch(result)?.group(1);
       expect(name, isNotNull, reason: result);
       final file = await agent.workspaceFile(name!);
       expect(file, isNotNull, reason: result);
       final wav = decodeWav(await file!.readAsBytes());
       expect(wav, isNotNull);
-      expect(wav!.samples.length, greaterThan(wav.rate * 2));
+      expect(wav!.samples.length,
+          greaterThan(wav.rate * (reportedCall ? 0.3 : 2)));
       expect(wav.samples.any((sample) => sample.abs() > 0.05), isTrue);
+      if (reportedCall) {
+        expect(result, contains('Voice: Voice 2 (M) · kitten-nano'));
+        expect(VoiceService.savedSpeaker(model), 1);
+        await expectLater(
+          Get.find<VoiceService>().synthesizeToWav(
+            'Hello',
+            lang: 'fr-FR',
+            voice: 'male',
+          ),
+          throwsA(isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            contains('No matching male fr voice'),
+          )),
+        );
+      }
     },
         skip: root == null
             ? 'Download the two voice model fixtures to run.'

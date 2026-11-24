@@ -390,16 +390,19 @@ class ChatToolService extends GetxService {
     ),
     ChatTool(
       'text_to_speech',
-      'Create a WAV in the workspace. Use models_status to choose a speaking model and exact speaker when the user requests a voice or asks you to choose. Omit overrides to use the user’s defaults. Show it with [📎 name](nmfile:name).',
-      '{"text":"string","name":"output file name ending in .wav","language":"optional voice language such as en or ar","model_id":"optional installed speaking model ID","speaker":"optional speaker name from that model"}',
+      'Create a WAV in the workspace. Set voice for a male or female preference. Use models_status for exact model and speaker names. Omit overrides to use the user’s defaults.',
+      '{"text":"string","name":"output file name ending in .wav","language":"optional voice language such as en or ar","voice":"male|female","model_id":"optional installed speaking model ID","speaker":"optional exact speaker name"}',
       (args) async {
         var name = (args['name'] ?? 'speech.wav').toString();
         if (!name.toLowerCase().endsWith('.wav')) name = '$name.wav';
+        String? selectedVoice;
         final wav = await Get.find<VoiceService>().synthesizeToWav(
           (args['text'] ?? '').toString(),
           lang: (args['language'] ?? '').toString(),
           modelId: (args['model_id'] ?? '').toString(),
           speaker: (args['speaker'] ?? '').toString(),
+          voice: (args['voice'] ?? '').toString(),
+          onVoiceSelected: (label) => selectedVoice = label,
           cancelled: Zone.current[_chatToolAbort] as Future<void>?,
         );
         if (wav.length <= 44)
@@ -407,7 +410,10 @@ class ChatToolService extends GetxService {
         if (chatToolCancelled) return 'Error: audio generation cancelled.';
         final f = await _safeFile(name);
         await f.writeAsBytes(wav, flush: true);
-        return 'Saved ${f.path.split('/').last} (${wav.length ~/ 1024} KB). Show it with [📎 ${f.path.split('/').last}](nmfile:${f.path.split('/').last}).';
+        final filename = f.uri.pathSegments.last;
+        return 'Saved $filename (${wav.length ~/ 1024} KB).\n'
+            '${selectedVoice == null ? '' : 'Voice: $selectedVoice\n'}'
+            '[📎 $filename](nmfile:$filename)';
       },
     ),
     ChatTool(
