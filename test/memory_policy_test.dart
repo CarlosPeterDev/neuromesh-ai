@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
-import 'package:neuromesh_ai/services/agent_service.dart';
+import 'package:neuromesh_ai/services/chat_tool_service.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
 import 'package:neuromesh_ai/services/memory_service.dart';
 
@@ -27,7 +27,7 @@ void main() {
       () async {
     Get.put(HiveService());
     addTearDown(Get.reset);
-    final agent = AgentService();
+    final agent = ChatToolService();
     agent.memory.addAll([
       'Create hello.txt in the workspace.',
       'User prefers Egyptian Arabic replies.',
@@ -37,8 +37,5 @@ void main() {
         agent.memoryBlock(), contains('User prefers Egyptian Arabic replies.'));
     expect(agent.memoryBlock(), isNot(contains('hello.txt')));
     expect(
-        await agent.rememberDirect('save hello.txt in the workspace'), isNull);
-    expect(await agent.rememberDirect('remember to send the report'), isNull);
-    expect(await agent.rememberDirect('remember that send the report'), isNull);
   });
 }

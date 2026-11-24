@@ -30,17 +30,6 @@ void main() {
     },
   ];
 
-  test('distinguishes vague creation, photo edits and ordinary writing', () {
-    expect(ImageRequest.parse('Make an image of a fox')?.action,
-        ImageAction.create);
-    expect(ImageRequest.parse('Create an image')?.description, isEmpty);
-    expect(ImageRequest.parse('Edit this photo')?.description, isEmpty);
-    expect(ImageRequest.parse('Add snow', hasImage: true)?.action,
-        ImageAction.edit);
-    expect(ImageRequest.parse('Edit the introduction'), isNull);
-    expect(ImageRequest.parse('Describe this photo', hasImage: true), isNull);
-  });
-
   test('model routing skips paid and text-only models for edits', () {
     expect(
         PollinationsImageService.chooseFreeModel(catalog,
@@ -93,24 +82,6 @@ void main() {
     expect(result.model, freeEditor);
     expect(result.extension, 'png');
     expect(requests, 2);
-  });
-
-  test('only explicit standalone image requests dispatch automatically', () {
-    for (final request in [
-      'Create an image of a fox',
-      'Could you generate a photo of an orange?',
-      'Draw me a picture of a cat',
-    ]) {
-      expect(PollinationsImageService.explicitPrompt(request), request);
-    }
-    for (final question in [
-      'Explain how to make an image of a fox',
-      'Describe this image',
-      'Create an image based on my file',
-      'Create an image using @file:private.txt',
-    ]) {
-      expect(PollinationsImageService.explicitPrompt(question), isNull);
-    }
   });
 
   test('uses the anonymous URL without redirects, and returns JPEG bytes',

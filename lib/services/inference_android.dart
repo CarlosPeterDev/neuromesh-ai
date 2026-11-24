@@ -455,8 +455,6 @@ class InferenceEngine {
       finish(buffer.toString());
     };
 
-    final qwen3 = RegExp(r'qwen[-_ ]?3(?![0-9])', caseSensitive: false)
-        .hasMatch(modelName);
     // ── Use generateChat() for native template handling ──
     Stream<String>? stream;
     try {
@@ -465,7 +463,7 @@ class InferenceEngine {
           imagePath: imagePath);
       stream = _controller!.generateChat(
         messages: messages,
-        template: qwen3 && !normalThinking ? 'qwen3-direct' : null,
+        template: normalThinking ? null : 'model-direct',
         maxTokens: maxTokens,
         temperature: temperature,
         topP: 0.9,
@@ -526,16 +524,10 @@ class InferenceEngine {
       },
     );
 
-    // Prefill timeout
-    _idleTimer = Timer(const Duration(seconds: 60), () {
-      if (tokenCount == 0) {
-        finish(imagePath == null
-            ? 'ERROR: Model did not respond. Try a smaller model or shorter conversation.'
-            : 'ERROR: Image processing took too long. Try a smaller image and check the model’s vision helper.');
-      }
+    _idleTimer = Timer(const Duration(seconds: 30), () {
+      print(
+          '[Inference] GGUF prompt still evaluating; the hard deadline remains active.');
     });
-
-    // Hard timeout
     Future.delayed(_hardTimeout(maxTokens, minSeconds: 180), () {
       if (!completed) {
         final partial = buffer.toString();
@@ -576,7 +568,7 @@ class InferenceEngine {
     }();
     _preparingLiteRt = prepare;
     try {
-      await prepare;
+      await prepare.timeout(const Duration(minutes: 3));
     } finally {
       if (identical(_preparingLiteRt, prepare)) _preparingLiteRt = null;
     }
@@ -663,12 +655,10 @@ class InferenceEngine {
         },
       );
 
-      _idleTimer = Timer(const Duration(seconds: 90), () {
-        if (tokenCount == 0) {
-          finish('ERROR: LiteRT-LM multimodal model did not respond.');
-        }
+      _idleTimer = Timer(const Duration(seconds: 30), () {
+        print(
+            '[Inference] LiteRT media prompt still evaluating; the hard deadline remains active.');
       });
-
       Future.delayed(_hardTimeout(maxTokens, minSeconds: 240), () {
         if (!completed) {
           final partial = buffer.toString();
@@ -721,12 +711,10 @@ class InferenceEngine {
       },
     );
 
-    _idleTimer = Timer(const Duration(seconds: 60), () {
-      if (tokenCount == 0) {
-        finish('ERROR: LiteRT-LM model did not respond. Try a smaller model.');
-      }
+    _idleTimer = Timer(const Duration(seconds: 30), () {
+      print(
+          '[Inference] LiteRT prompt still evaluating; the hard deadline remains active.');
     });
-
     Future.delayed(_hardTimeout(maxTokens, minSeconds: 180), () {
       if (!completed) {
         final partial = buffer.toString();
@@ -793,7 +781,7 @@ class InferenceEngine {
     stopCallback?.call();
     await _subscription?.cancel();
     if (_isLiteRt) {
-      await _preparingLiteRt;
+      await _preparingLiteRt?.timeout(const Duration(seconds: 5));
       _liteConversationHasMessages = true;
       if (stopCallback == null) {
         await _liteConversation?.cancel();

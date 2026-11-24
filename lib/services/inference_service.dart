@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:io';
+import 'chat_tool_loop.dart';
+import '../utils/thought_parser.dart';
 
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:get/get.dart';
@@ -71,6 +74,10 @@ class InferenceService extends GetxService {
   // Platform-specific engine
   platform.InferenceEngine? _engine;
   String _sessionNativeRuntime = '';
+  Timer? _capabilityTimer;
+  final capabilityNotice = ''.obs;
+  bool get preferCompactToolPrompt => capabilityNotice.value.isNotEmpty;
+  static const _probeSource = 'capability-check';
   bool _unloadingModel = false;
   String? _loadedProjector;
   static final _clusterRetry = Object();
@@ -276,6 +283,19 @@ class InferenceService extends GetxService {
 
       modelLoadMs = loadClock.elapsedMilliseconds;
       isModelLoaded.value = true;
+      _capabilityTimer?.cancel();
+      capabilityNotice.value = '';
+      if (Platform.isAndroid && !recoveringCluster) {
+        final revision = modelRevision;
+        _capabilityTimer = Timer(const Duration(seconds: 8), () {
+          if (revision != modelRevision ||
+              !isModelLoaded.value ||
+              isLoadingModel.value ||
+              isGenerating.value) return;
+          unawaited(_checkCapabilities(modelPath, revision));
+        });
+      }
+
       if (clusterWorkers > 0) {
         try {
           final cluster = Get.find<ClusterService>();
@@ -354,6 +374,63 @@ class InferenceService extends GetxService {
     }
   }
 
+  Future<void> _checkCapabilities(String modelPath, int revision) async {
+    try {
+      final stat = await File(modelPath).stat();
+      final key =
+          'chat_capabilities_v1:$modelPath:${stat.size}:${stat.modified.millisecondsSinceEpoch}:'
+          '${loadedModelRuntime.value}:${loadedBackend.value}:${contextTokensTotal.value}:'
+          '${_loadedProjector ?? ""}';
+      if (revision != modelRevision ||
+          !isModelLoaded.value ||
+          isGenerating.value) return;
+      final saved = _hive.getSetting<Map>(key);
+      if (saved != null) {
+        _showCapabilities(saved);
+        return;
+      }
+      final stops = stopCount;
+      var chunks = 0;
+      final text = await generate(
+        prompt: 'Reply with OK.',
+        systemPrompt: 'Give a short ordinary text reply.',
+        source: _probeSource,
+        maxTokens: 8,
+        onToken: (_) => chunks++,
+      );
+      if (stops != stopCount || revision != modelRevision || isGenerating.value)
+        return;
+      final call = await generate(
+        prompt: 'Use the calculator tool to evaluate 2+2.',
+        systemPrompt: ChatToolLoop.instructions({'calculator'}, compact: true),
+        source: _probeSource,
+        maxTokens: 48,
+      );
+      if (stops != stopCount ||
+          revision != modelRevision ||
+          !isModelLoaded.value) return;
+      final result = <String, bool>{
+        'ordinaryText':
+            !text.startsWith('ERROR:') && splitThoughtTags(text).hasAnswer,
+        'streamed': chunks > 0,
+        'validatedToolCall': ChatToolLoop.validProbeCall(call),
+      };
+      _showCapabilities(result);
+      await _hive.setSetting(key, result);
+    } on Exception {
+      // Probe errors may be transient, so let the next load retry.
+    }
+  }
+
+  void _showCapabilities(Map result) {
+    capabilityNotice.value = result['ordinaryText'] != true ||
+            result['streamed'] != true
+        ? 'The model check did not verify usable streaming. Try another model if it returns an empty reply.'
+        : result['validatedToolCall'] != true
+            ? 'The model check did not verify tool calls. Chat will use shorter tool instructions.'
+            : '';
+  }
+
   Future<String> generate({
     required String prompt,
     String? systemPrompt,
@@ -365,6 +442,9 @@ class InferenceService extends GetxService {
     List<String> stopSequences = const [],
     void Function(String token)? onToken,
   }) async {
+    if (source != _probeSource) {
+      if (generationSource.value == _probeSource) await stopGeneration();
+    }
     final engine = _engine;
     if (!supportsLocalInference || engine == null || !isModelLoaded.value) {
       return 'ERROR: No model loaded. Go to Models tab to download and load one.';
@@ -410,6 +490,14 @@ class InferenceService extends GetxService {
     int? firstVisibleOutputUs;
     firstOutputMs = null;
     Timer? tokenFlushTimer;
+    var probeExpired = false;
+    final probeDeadline = source == _probeSource
+        ? Timer(const Duration(seconds: 18), () {
+            if (!isCurrent()) return;
+            probeExpired = true;
+            unawaited(engine.stop().catchError((_) {}));
+          })
+        : null;
     final tokenFlushBuffer = StringBuffer();
 
     void flushTokenBuffer() {
@@ -513,7 +601,7 @@ class InferenceService extends GetxService {
         imagePath: imagePath,
         audioPath: audioPath,
         source: source,
-        normalThinking: source == 'chat' &&
+        normalThinking: (source == 'chat' || source == 'chat-tools') &&
             (_hive.getSetting<bool>('local_normal_thinking') ?? false),
         onToken: (rawToken) {
           if (!isCurrent()) return;
@@ -596,7 +684,7 @@ class InferenceService extends GetxService {
         }
       }
 
-      return finalText;
+      return probeExpired ? 'ERROR: Capability check timed out.' : finalText;
     } catch (e) {
       tokenFlushTimer?.cancel();
       if (visionAttempt != null) {
@@ -612,6 +700,11 @@ class InferenceService extends GetxService {
       }
       Get.find<AppLogService>().error('Local generation failed', details: e);
       return 'ERROR: $e';
+    } finally {
+      probeDeadline?.cancel();
+      Get.find<AppLogService>().info('Inference timing',
+          details: 'source=$source firstChunkMs=${firstOutputMs ?? -1} '
+              'chunks=${tokenCount.value} totalMs=${generationClock.elapsedMilliseconds}');
     }
   }
 
@@ -625,8 +718,14 @@ class InferenceService extends GetxService {
     tokensPerSecond.value = 0;
     generationSource.value = '';
     streamingText.value = '';
+    final clock = Stopwatch()..start();
     return _changeNativeContext(() async {
-      if (engine != null) await engine.stop();
+      try {
+        if (engine != null) await engine.stop();
+      } finally {
+        Get.find<AppLogService>().info('Inference cancellation settled',
+            details: 'elapsedMs=${clock.elapsedMilliseconds}');
+      }
     });
   }
 

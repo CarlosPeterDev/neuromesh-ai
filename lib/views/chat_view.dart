@@ -12,7 +12,7 @@ import '../controllers/settings_controller.dart';
 import '../controllers/model_controller.dart';
 import '../controllers/home_controller.dart';
 import '../models/chat_message.dart';
-import '../services/agent_service.dart' show stripToolTrace;
+import '../services/chat_tool_service.dart' show stripToolTrace;
 import '../services/cluster_service.dart';
 import '../services/inference_service.dart';
 import '../utils/thought_parser.dart';
@@ -49,6 +49,12 @@ class ChatView extends GetView<ChatController> {
       body: Column(
         children: [
           _modelLoadingBar(context, isDark),
+          Obx(() {
+            final notice = Get.find<InferenceService>().capabilityNotice.value;
+            return notice.isEmpty ? const SizedBox.shrink() :
+                Padding(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+                    child: Text(notice, style: Theme.of(context).textTheme.bodySmall));
+          }),
           Expanded(child: Obx(() {
             if (controller.currentSessionId.value.isEmpty ||
                 controller.messages.isEmpty) {
@@ -544,7 +550,10 @@ class ChatView extends GetView<ChatController> {
 
   Widget _typingHint(BuildContext context, bool isDark,
       {String? attachmentType}) {
-    final msg = attachmentType == 'image'
+    final stage = controller.responseStage.value;
+    final msg = stage.isNotEmpty
+        ? '$stage…'
+        : attachmentType == 'image'
         ? 'Reading image…'
         : attachmentType == 'audio'
             ? 'Listening to audio…'
@@ -691,8 +700,8 @@ class ChatView extends GetView<ChatController> {
                           isDense: true,
                           filled: false,
                         ),
-                        onSubmitted: (text) {
-                          if (!noModel || controller.canSendOnlineImage(text)) {
+                        onSubmitted: (_) {
+                          if (!noModel) {
                             controller.sendMessage();
                           } else {
                             Get.find<HomeController>().changeTab(1);
@@ -726,9 +735,7 @@ class ChatView extends GetView<ChatController> {
                       bgColor = const Color(0xFFFF3B30);
                       iconData = Icons.stop_rounded;
                       onTap = controller.toggleListening;
-                    } else if (noModel &&
-                        !controller
-                            .canSendOnlineImage(controller.inputText.value)) {
+                    } else if (noModel) {
                       bgColor = Colors.transparent;
                       iconData = hasContent
                           ? Icons.memory_outlined
@@ -786,7 +793,8 @@ class ChatView extends GetView<ChatController> {
     if (Get.find<SettingsController>().inferenceMode.value != 'local') {
       return false;
     }
-    return !Get.find<InferenceService>().isModelLoaded.value;
+    final inference = Get.find<InferenceService>();
+    return !inference.isModelLoaded.value && !inference.isLoadingModel.value;
   }
 
   // ── Markdown styles ──

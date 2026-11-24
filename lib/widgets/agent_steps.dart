@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../services/agent_service.dart';
+import '../services/chat_tool_service.dart';
 
 /// One tool step the agent took, parsed from a saved trace line.
 class AgentStep {
@@ -344,7 +344,7 @@ String _fieldValue(Object? value) {
 const nmFileScheme = 'nmfile:';
 
 Future<File?> agentFile(String name) async {
-  final dir = await Get.find<AgentService>().filesDir();
+  final dir = await Get.find<ChatToolService>().filesDir();
   final n = name.split('/').last.split('\\').last;
   final f = File('${dir.path}/$n');
   return await f.exists() ? f : null;
@@ -357,7 +357,7 @@ Widget agentImage(Uri uri, String? alt, {String? project}) {
   return FutureBuilder<File?>(
     future: project == null
         ? agentFile(name)
-        : Get.find<AgentService>().inProject(project, () => agentFile(name)),
+        : Get.find<ChatToolService>().inProject(project, () => agentFile(name)),
     builder: (c, snap) {
       final f = snap.data;
       if (f == null)

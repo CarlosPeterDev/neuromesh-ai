@@ -1,8 +1,6 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
@@ -10,7 +8,6 @@ import 'package:neuromesh_ai/services/lan_network.dart';
 import 'package:hive/hive.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
 import 'package:neuromesh_ai/services/cluster_service.dart';
-import 'package:neuromesh_ai/services/mcp_oauth.dart';
 import 'package:neuromesh_ai/services/model_transfer_service.dart';
 import 'package:neuromesh_ai/services/workload_placement.dart';
 
@@ -185,26 +182,6 @@ void main() {
     expect(WorkloadPlacement.forWorkload(PhoneWorkload.speech), isNull);
   });
 
-  test('legacy OAuth tokens migrate out of Hive and sign-out removes them',
-      () async {
-    final dir = await Directory.systemTemp.createTemp('oauth_migration');
-    Hive.init(dir.path);
-    addTearDown(() async {
-      Get.reset();
-      await Hive.close();
-      await dir.delete(recursive: true);
-    });
-    FlutterSecureStorage.setMockInitialValues({});
-    final hive = Get.put(await HiveService().init());
-    const url = 'https://example.com/mcp';
-    final key = 'mcp_oauth_${base64Url.encode(utf8.encode(url))}';
-    await hive.setSetting(key, jsonEncode({'access': 'sample'}));
-    await McpOAuth.prepareSecureStorage();
-    expect(hive.settingsBox.containsKey(key), isFalse);
-    expect(await McpOAuth.accessToken(url), 'sample');
-    await McpOAuth.signOut(url);
-    expect(await McpOAuth.accessToken(url), isNull);
-  });
 }
 
 class _LanTestHttpOverrides extends HttpOverrides {}

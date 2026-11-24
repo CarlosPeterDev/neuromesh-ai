@@ -6,67 +6,6 @@ import 'package:http/http.dart' as http;
 
 typedef PollinationsImage = ({Uint8List bytes, String model, String extension});
 
-enum ImageAction { create, edit }
-
-class ImageRequest {
-  const ImageRequest(this.action, this.description);
-  final ImageAction action;
-  final String description;
-
-  static ImageRequest? parse(String value, {bool hasImage = false}) {
-    final text = value.trim();
-    final instruction = text.replaceFirst(
-        RegExp(r'^\s*(?:(?:ok|please|can you|could you|would you)\b[ ,.!]+)+',
-            caseSensitive: false),
-        '');
-    final edit = RegExp(
-            r'^(?:retouch|restyle)\b|^(?:edit|remove|replace|change|add|crop|brighten|fix|turn)\b.*\b(?:image|picture|photo|background)\b',
-            caseSensitive: false,
-            dotAll: true)
-        .hasMatch(instruction);
-    final explicitCreation =
-        PollinationsImageService.explicitPrompt(text) != null;
-    final editExisting = RegExp(r'^(?:make|turn)\s+(?:this|the|my|attached)\b',
-            caseSensitive: false)
-        .hasMatch(instruction);
-    if (explicitCreation && !edit && !editExisting) {
-      return ImageRequest(ImageAction.create, text);
-    }
-    if (edit ||
-        (hasImage &&
-            RegExp(r'^(?:edit|remove|replace|change|add|make|crop|brighten|fix|turn)\b',
-                    caseSensitive: false)
-                .hasMatch(instruction))) {
-      final bare = RegExp(
-              r'^(?:edit|retouch|restyle)(?:\s+(?:this|the|my|an?)\s+(?:image|photo|picture))?[.!?]*$',
-              caseSensitive: false)
-          .hasMatch(instruction);
-      return ImageRequest(ImageAction.edit, bare ? '' : text);
-    }
-    if (RegExp(
-            r'^(?:draw|paint)\s+(?!(?:me\s+)?(?:an?\s+)?(?:image|picture|photo|illustration|portrait)\b)\S',
-            caseSensitive: false)
-        .hasMatch(instruction)) {
-      return ImageRequest(ImageAction.create, text);
-    }
-    final match = RegExp(
-      r'^(?:generate|create|make|render|design)\s+(?:me\s+)?(?:an?\s+)?(?:image|picture|photo|illustration|portrait|logo|poster|icon|banner|wallpaper)(?:\s+(.+))?[.!?]*$',
-      caseSensitive: false,
-      dotAll: true,
-    ).firstMatch(instruction);
-    if (match == null) return null;
-    final subject = match.group(1)?.trim() ?? '';
-    return ImageRequest(
-        ImageAction.create,
-        RegExp(r'^(?:please|for me|something|anything|nice)?[.!?]*$',
-                    caseSensitive: false)
-                .hasMatch(subject)
-            ? ''
-            : text);
-  }
-}
-
-/// Sana is available anonymously through Pollinations' public image endpoint.
 class PollinationsImageService {
   static const attribution = 'Generated online with Pollinations (Sana).';
   static const _maxBytes = 12 * 1024 * 1024;

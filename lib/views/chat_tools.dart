@@ -2,16 +2,14 @@ import 'dart:io' show File, FileSystemEntityType;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import '../services/sandbox_service.dart';
 import 'package:get/get.dart';
 
 import '../core/ui.dart';
 import '../controllers/chat_controller.dart';
 import '../widgets/agent_steps.dart';
-import '../services/agent_service.dart';
+import '../services/chat_tool_service.dart';
 import '../services/chat_tool_loop.dart';
 import '../services/hive_service.dart';
-import '../services/user_files.dart';
 
 class ChatToolsView extends StatefulWidget {
   const ChatToolsView({super.key});
@@ -21,8 +19,7 @@ class ChatToolsView extends StatefulWidget {
 }
 
 class _ChatToolsViewState extends State<ChatToolsView> {
-  final _agent = Get.find<AgentService>();
-  final _files = Get.find<UserFilesService>();
+  final _agent = Get.find<ChatToolService>();
   final _note = TextEditingController();
 
   @override
@@ -48,8 +45,8 @@ class _ChatToolsViewState extends State<ChatToolsView> {
         Obx(() => SwitchListTile(
           title: const Text('Let the model use tools'),
           subtitle: const Text('The model selects tools and searches to verify external facts.'),
-          value: _agent.mode.value != AgentChatMode.off,
-          onChanged: (enabled) => _agent.setMode(enabled ? AgentChatMode.auto : AgentChatMode.off),
+          value: _agent.mode.value != ChatToolMode.off,
+          onChanged: (enabled) => _agent.setMode(enabled ? ChatToolMode.auto : ChatToolMode.off),
         )),
         ListTile(
           title: const Text('Maximum tool executions per message'),
@@ -68,12 +65,6 @@ class _ChatToolsViewState extends State<ChatToolsView> {
         // ── memory ──
         const SectionHeader('Memory'),
         Obx(() => AppGroup(children: [
-              AppRow(
-                icon: Icons.psychology_alt_rounded,
-                title: 'Remember things automatically',
-                subtitle: 'Say "remember that…" or let the AI save facts. Notes are added to every chat.',
-                trailing: Switch(value: _agent.autoMemory.value, onChanged: _agent.setAutoMemory),
-              ),
               for (final n in _agent.memory.toList())
                 AppRow(
                   icon: Icons.notes_rounded,
@@ -109,36 +100,6 @@ class _ChatToolsViewState extends State<ChatToolsView> {
                 child: TextButton(
                     onPressed: _agent.clearMemory, child: const Text('Clear all memory')))),
 
-        // ── files ──
-        const SectionHeader('Files the AI can see'),
-        const AppNotice(
-            'You choose the folders. Android shows its own picker, and the AI can only reach what is inside them. No storage permission is needed. Remove a folder any time.'),
-        const SizedBox(height: 8),
-        Obx(() => AppGroup(children: [
-              for (final f in _files.folders.toList())
-                AppRow(
-                  icon: Icons.folder_open_rounded,
-                  title: f.name,
-                  subtitle: 'Available to the AI under your tool permissions',
-                  trailing: IconButton(
-                      tooltip: 'Stop sharing',
-                      icon: const Icon(Icons.close_rounded, size: 18),
-                      onPressed: () => _files.removeFolder(f)),
-                ),
-              AppRow(
-                icon: Icons.create_new_folder_outlined,
-                title: 'Share a folder…',
-                chevron: true,
-                onTap: () async {
-                  try {
-                    await _files.addFolder();
-                  } catch (e) {
-                    showToast('Could not open the picker', '$e', tone: ToastTone.error);
-                  }
-                },
-              ),
-            ])),
-        const SizedBox(height: 8),
         _Workspace(agent: _agent),
 
         // ── permissions ──
@@ -238,151 +199,20 @@ class _PolicyRow extends StatelessWidget {
   }
 }
 
-class AgentWorkspaceView extends StatelessWidget {
-  const AgentWorkspaceView({super.key});
+class ChatWorkspaceView extends StatelessWidget {
+  const ChatWorkspaceView({super.key});
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: appScreenBar(context, title: 'Agent workspace', showBack: true),
+        appBar: appScreenBar(context, title: 'Chat workspace', showBack: true),
         body: ListView(padding: kPagePadding, children: [
-          _Workspace(agent: Get.find<AgentService>()),
-          if (SandboxService.supported)
-            AppGroup(children: [
-              AppRow(
-                icon: Icons.terminal_rounded,
-                title: 'Alpine terminal',
-                chevron: true,
-                onTap: () => Get.to(() => const AlpineTerminalView()),
-              ),
-            ]),
+          _Workspace(agent: Get.find<ChatToolService>()),
         ]),
       );
 }
 
-class AlpineTerminalView extends StatefulWidget {
-  const AlpineTerminalView({super.key});
-
-  @override
-  State<AlpineTerminalView> createState() => AlpineTerminalViewState();
-}
-
-class AlpineTerminalViewState extends State<AlpineTerminalView> {
-  final _sandbox = Get.find<SandboxService>();
-  final _input = TextEditingController();
-  final _output = ScrollController();
-  final _entries = <String>[];
-  late final _agent = Get.find<AgentService>();
-  late final _project = _agent.projectForChat(Get.find<ChatController>().currentSessionId.value);
-  bool _running = false;
-  String _cwd = '/workspace';
-
-  @override
-  void dispose() {
-    _input.dispose();
-    _output.dispose();
-    super.dispose();
-  }
-
-  Future<void> _run() async {
-    final command = _input.text.trim();
-    if (_running || command.isEmpty || !_sandbox.installed.value) return;
-    setState(() {
-      _running = true;
-      _entries.add('\$ $command');
-      _input.clear();
-    });
-    try {
-      const marker = '__neuromesh_working_directory__=';
-      final script = """trap 'printf "\n$marker%s\n" "\$(pwd -P)"' EXIT
-$command""";
-      final result = await _agent.inProject(
-          _project, () => _sandbox.run(script, workingDirectory: _cwd));
-      final lines = result.split('\n');
-      final finalDirectory =
-          lines.lastIndexWhere((line) => line.startsWith(marker));
-      if (mounted)
-        setState(() {
-          if (finalDirectory >= 0) {
-            final path =
-                lines.removeAt(finalDirectory).substring(marker.length);
-            if (path.startsWith('/')) _cwd = path;
-          }
-          _entries.add(lines.join('\n').trim());
-        });
-    } finally {
-      if (mounted) {
-        setState(() => _running = false);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _output.hasClients) {
-            _output.jumpTo(_output.position.maxScrollExtent);
-          }
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: appScreenBar(context, title: 'Alpine terminal', showBack: true),
-        body: SafeArea(child: Obx(() {
-          if (!_sandbox.installed.value) {
-            return Center(
-              child: FilledButton(
-                onPressed: _sandbox.busy.value ? null : () async {
-                  try {
-                    await _sandbox.install();
-                  } catch (error) {
-                    if (context.mounted) showToast('Install failed', '$error');
-                  }
-                },
-                child: Text(_sandbox.busy.value ? _sandbox.status.value : 'Install Alpine Linux'),
-              ),
-            );
-          }
-          return Column(children: [
-            ListTile(
-              title: Text(_cwd),
-              subtitle: const Text(
-                  '/workspace contains the files shared with this chat’s agent.'),
-            ),
-            Expanded(
-              child: ListView.builder(
-                controller: _output,
-                padding: const EdgeInsets.all(16),
-                itemCount: _entries.length,
-                itemBuilder: (_, index) => SelectableText(
-                  _entries[index],
-                  style: const TextStyle(fontFamily: 'monospace'),
-                ),
-              ),
-            ),
-            if (_running) const LinearProgressIndicator(),
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(children: [
-                Expanded(
-                  child: TextField(
-                    controller: _input,
-                    decoration: const InputDecoration(labelText: 'Command'),
-                    autocorrect: false,
-                    onSubmitted: (_) => _run(),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Run command',
-                  onPressed: _running ? null : _run,
-                  icon: const Icon(Icons.play_arrow_rounded),
-                ),
-              ]),
-            ),
-          ]);
-        })),
-      );
-}
-
-/// Files in the AI's private workspace (attachments land here too).
 class _Workspace extends StatefulWidget {
-  final AgentService agent;
+  final ChatToolService agent;
   const _Workspace({required this.agent});
 
   @override

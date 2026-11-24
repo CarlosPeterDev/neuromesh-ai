@@ -1116,6 +1116,11 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         return;
     }
 
+    const auto prompt_start = std::chrono::steady_clock::now();
+    const auto elapsed_ms = [](auto start) {
+        return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+    };
     int image_generation_budget = 0;
     if (with_image) {
         const std::string sanitized = sanitizeUTF8(prompt_str, strlen(prompt_str));
@@ -1162,7 +1167,7 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
 
     // Leave room for the reply. If the conversation is longer than that, keep
     // its start (system prompt) and its most recent part, dropping the middle.
-    const int reserve = (int)std::min<jlong>(std::max<jlong>(max_tokens, 64), n_ctx / 2);
+    const int reserve = (int)std::min<jlong>(std::max<jlong>(max_tokens, 1), n_ctx / 3);
     const int budget = n_ctx - reserve;
     if ((int)tokens.size() > budget) {
         const int head = std::min(256, budget / 4);
@@ -1240,6 +1245,8 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
     g_cached_tokens = tokens;
     }  // end text-only prompt path
 
+    const auto decode_start = std::chrono::steady_clock::now();
+    LOGI("prompt_eval_ms=%lld image=%d", elapsed_ms(prompt_start), with_image);
     // Create sampler chain with all parameters
     if (g_sampler) {
         llama_sampler_free(g_sampler);
@@ -1311,6 +1318,7 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
     LOGI("Starting generation loop: max_tokens=%lld", max_tokens);
     const auto budget = std::min<jlong>(max_tokens, with_image
         ? image_generation_budget : (int)llama_n_ctx(g_ctx) - g_n_past.load());
+    int sampled_tokens = 0;
     for (int i = 0; i < budget && !g_stop_flag; i++) {
         llama_token new_token_id = llama_sampler_sample(g_sampler, g_ctx, -1);
 
@@ -1320,6 +1328,9 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
             break;
         }
 
+        if (++sampled_tokens == 1) {
+            LOGI("first_sample_ms=%lld", elapsed_ms(prompt_start));
+        }
         // A model can split one Unicode character across multiple tokens.
         char buffer[256];
         const int32_t length =
@@ -1354,7 +1365,8 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         g_n_past++;
         if (g_cache_reusable) g_cached_tokens.push_back(new_token_id);
     }
-    LOGI("Generation loop finished.");
+    LOGI("generated_tokens=%d decode_ms=%lld cancelled=%d",
+         sampled_tokens, elapsed_ms(decode_start), g_stop_flag.load());
 
     llama_batch_free(batch);
     env->DeleteLocalRef(callbackClass);
@@ -1392,6 +1404,28 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeFreeM
     g_cached_tokens.clear();
     
     LOGI("Model freed");
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeCountPromptTokens(
+    JNIEnv* env, jobject, jstring prompt) {
+    if (!g_vocab || !prompt) return 0;
+    const char* chars = env->GetStringUTFChars(prompt, nullptr);
+    if (!chars) return 0;
+    const auto text = sanitizeUTF8(chars, strlen(chars));
+    env->ReleaseStringUTFChars(prompt, chars);
+    return -llama_tokenize(g_vocab, text.c_str(), text.size(), nullptr, 0, true, true);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeHasQwenThinkingTemplate(
+    JNIEnv*, jobject) {
+    if (!g_model) return JNI_FALSE;
+    const char* raw = llama_model_chat_template(g_model, nullptr);
+    if (!raw) return JNI_FALSE;
+    const std::string text(raw);
+    return text.find("<|im_start|>") != std::string::npos &&
+        text.find("</think>") != std::string::npos;
 }
 
 extern "C" JNIEXPORT jint JNICALL

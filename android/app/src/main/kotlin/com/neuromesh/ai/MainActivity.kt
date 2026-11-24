@@ -709,7 +709,6 @@ class MainActivity : FlutterActivity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (deviceBridge.onActivityResult(requestCode, resultCode, data)) return
         if (requestCode == folderRequestCode) {
             handleFolderResult(resultCode, data)
             return

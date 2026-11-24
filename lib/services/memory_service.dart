@@ -6,14 +6,14 @@ import 'package:get/get.dart';
 
 import '../controllers/chat_controller.dart';
 import '../utils/memory_text.dart';
-import 'agent_service.dart';
+import 'chat_tool_service.dart';
 import 'hive_service.dart';
 import 'inference_service.dart';
 
 /// Keeps the AI's memory of the user fresh by itself: every so often it reads
 /// the chat messages written since the last run and asks the loaded model for
 /// lasting facts about the user. New facts are merged into the same memory
-/// list the agent already injects into every chat ([AgentService.memory]),
+/// list the agent already injects into every chat ([ChatToolService.memory]),
 /// marked as "added automatically" so the user can review and edit them.
 class MemoryService extends GetxService with WidgetsBindingObserver {
   static const _kEnabled = 'memory_auto_update';
@@ -47,7 +47,7 @@ class MemoryService extends GetxService with WidgetsBindingObserver {
   Timer? _timer;
 
   HiveService get _hive => Get.find<HiveService>();
-  AgentService get _agent => Get.find<AgentService>();
+  ChatToolService get _agent => Get.find<ChatToolService>();
 
   /// Returns the running service, creating it if main.dart did not.
   static MemoryService ensure() => Get.isRegistered<MemoryService>()
@@ -311,7 +311,7 @@ class MemoryService extends GetxService with WidgetsBindingObserver {
     for (final f in facts) {
       if (_agent.memory.any((n) => similar(n, f))) continue;
       // Keep room: drop the oldest automatic note before touching the user's own.
-      if (_agent.memory.length >= AgentService.maxMemory) {
+      if (_agent.memory.length >= ChatToolService.maxMemory) {
         final old = _agent.memory.firstWhereOrNull(autoNotes.contains);
         if (old == null) break;
         await _agent.removeNote(old);

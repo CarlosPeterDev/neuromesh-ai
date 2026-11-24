@@ -1,10 +1,11 @@
+import 'package:neuromesh_ai/services/chat_calculator.dart';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
-import 'package:neuromesh_ai/services/agent_service.dart';
+import 'package:neuromesh_ai/services/chat_tool_service.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
 import 'package:neuromesh_ai/services/voice_models.dart';
 import 'package:neuromesh_ai/services/voice_service.dart';
@@ -74,25 +75,19 @@ void main() {
       Get.put(await HiveService().init());
       Get.put<VoiceModelStore>(_TestModels(root!, model));
       Get.put(VoiceService(player: _UnusedPlayer()));
-      final agent = AgentService();
-      const prompt =
-          'Create a WAV file saying "Playing sports builds fitness and teaches teamwork."';
-      final result = await agent.runToolLoop(
-        generate: (_, __, ___) async =>
-            throw StateError('No text model needed'),
-        prompt: prompt,
-        history: const [],
-        confirm: (_, __, ___) async => false,
-        onVisible: (_) {},
-        onStatus: (_) {},
-        cancelled: () => false,
+      final agent = ChatToolService();
+      final result = await agent.executeTool(
+        const ParsedToolCall('text_to_speech', {
+          'text': 'Playing sports builds fitness and teaches teamwork.',
+        }, ''),
+        (_, __, ___) async => false,
       );
 
       final name =
-          RegExp(r'nmfile:([^)]+)').firstMatch(result.answer)?.group(1);
-      expect(name, isNotNull, reason: result.answer);
+          RegExp(r'nmfile:([^)]+)').firstMatch(result)?.group(1);
+      expect(name, isNotNull, reason: result);
       final file = await agent.workspaceFile(name!);
-      expect(file, isNotNull, reason: result.answer);
+      expect(file, isNotNull, reason: result);
       final wav = decodeWav(await file!.readAsBytes());
       expect(wav, isNotNull);
       expect(wav!.samples.length, greaterThan(wav.rate * 2));

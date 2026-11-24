@@ -6,7 +6,6 @@ import 'package:get/get.dart';
 import '../controllers/model_controller.dart';
 import '../models/ai_model.dart';
 import '../utils/model_file_role.dart';
-import 'agent_service.dart';
 import 'hf_service.dart';
 import 'installed_vision_helper.dart';
 
@@ -235,89 +234,4 @@ class ModelHelperService {
         .firstWhere((m) => m.filename == model.filename);
     await controller.downloadVisionFile(updated);
   }
-}
-
-void registerModelHelperTools(AgentService agent) {
-  AiModel modelFor(Map<String, dynamic> args) {
-    final name = args['model']?.toString() ?? '';
-    return Get.find<ModelController>().availableModels.firstWhere(
-        (m) => m.filename == name || m.name == name,
-        orElse: () => throw const FormatException(
-            'Use the exact installed model filename from models_status.'));
-  }
-
-  agent.addTool(AgentTool(
-    'find_model_helpers',
-    'Find vision and FastMTP helpers for an installed model, or find a main model for a helper. Same-repository candidates still need compatibility review. FastMTP requires a patched runtime and cannot be attached here.',
-    '{"model":"exact filename","repository":"optional owner/name"}',
-    (args) async {
-      final model = modelFor(args);
-      final controller = Get.find<ModelController>();
-      final matches = await ModelHelperService.installedCompanions(
-        selected: model,
-        isHelper: model.fileKind == ModelFileKind.helper,
-        installed: controller.availableModels
-            .where((item) => controller.isDownloaded(item.filename))
-            .toList(),
-        identify: controller.identifyInstalledVisionHelper,
-      );
-      final installed = matches.installed.map((item) => item.filename).toList();
-      final hf = HfService();
-      try {
-        final repo = args['repository']?.toString() ??
-            matches.source?.repository ??
-            ModelHelperService.companionRepository(model);
-        if (repo == null) {
-          final query = ModelHelperService.searchQuery(model);
-          final repos = query.isEmpty
-              ? <HfRepo>[]
-              : await hf.searchModels(query,
-                  limit: 8, images: model.runtime == AiModel.runtimeSd);
-          return jsonEncode({
-            'installedCompanions': installed,
-            'repositories': repos.map((r) => r.id).toList(),
-            'next':
-                'Choose the original model repository, then call this tool again with repository.'
-          });
-        }
-        final files = await ModelHelperService.files(hf, model, repo);
-        return jsonEncode({
-          'repository': repo,
-          'installedCompanions': installed,
-          'verifiedHelperPath': matches.source?.path,
-          'files': files
-              .map((f) => {
-                    'path': f.path,
-                    'bytes': f.size,
-                    'role': f.role.label,
-                    'instructions': f.role.help,
-                    'canAttachVision':
-                        ModelHelperService.canAttach(model, repo, files, f),
-                  })
-              .toList()
-        });
-      } finally {
-        hf.dispose();
-      }
-    },
-  ));
-  agent.addTool(AgentTool(
-    'attach_model_helper',
-    'Attach and download a vision projector from the model repository. Reload the main model afterward. This does not turn text-only architectures into vision models.',
-    '{"model":"exact filename","repository":"owner/name","helper":"repository file path"}',
-    (args) async {
-      final model = modelFor(args);
-      final repo = args['repository']?.toString() ?? '';
-      final hf = HfService();
-      try {
-        final files = await ModelHelperService.files(hf, model, repo);
-        final helper = files.firstWhere((f) => f.path == args['helper']);
-        await ModelHelperService.attach(model, repo, files, helper);
-        return 'Vision helper linked. Check download progress in Models, then reload ${model.filename}. The runtime checks compatibility during loading.';
-      } finally {
-        hf.dispose();
-      }
-    },
-    needsConfirm: true,
-  ));
 }

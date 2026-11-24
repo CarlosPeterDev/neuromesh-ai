@@ -2,33 +2,32 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:neuromesh_ai/services/chat_tool_loop.dart';
-import 'package:neuromesh_ai/services/agent_service.dart';
+import 'package:neuromesh_ai/services/chat_tool_service.dart';
 import 'package:neuromesh_ai/utils/skill_context.dart';
-import 'package:neuromesh_ai/services/agent_tools.dart';
+import 'package:neuromesh_ai/services/chat_calculator.dart';
 import 'package:neuromesh_ai/services/web_search_service.dart';
 import 'package:neuromesh_ai/utils/web_search_parse.dart';
 import 'package:neuromesh_ai/widgets/agent_steps.dart';
 
 void main() {
   const searchA =
-      '{"type":"tool","name":"web_search","arguments":{"query":"model benchmark"}}';
+      '<tool_call>{"name":"web_search","arguments":{"query":"model benchmark"}}</tool_call>';
   const searchB =
-      '{"type":"tool","name":"web_search","arguments":{"query":"model benchmark fresh"}}';
+      '<tool_call>{"name":"web_search","arguments":{"query":"model benchmark fresh"}}</tool_call>';
   const searchC =
-      '{"type":"tool","name":"web_search","arguments":{"query":"model benchmark fresh 2026"}}';
+      '<tool_call>{"name":"web_search","arguments":{"query":"model benchmark fresh 2026"}}</tool_call>';
 
   test('the compact tool catalog fits a short request in 512 context', () {
     final instructions =
         ChatToolLoop.instructions(ChatToolLoop.toolNames, compact: true);
     final tokens = contextTokens(instructions) + contextTokens('Hello.');
-    expect(tokens, lessThan(AgentService.contextBudget(512)));
+    expect(tokens, lessThan(ChatToolService.contextBudget(512)));
   });
 
-  test('a fabricated action outcome without a tool result is rejected',
-      () async {
+  test('ordinary JSON that resembles a command is never executed', () async {
     final result = await ChatToolLoop().run(
       reply: (_, __) async =>
-          '{"type":"action","name":"generate_image","text":"Done!"}',
+          '{"name":"generate_image","arguments":{"prompt":"A fox"}}',
       execute: (_, __) async => throw StateError('unexpected execution'),
       search: (_, __) async => throw StateError('unexpected search'),
       allowed: {'generate_image'},
@@ -36,14 +35,14 @@ void main() {
       onTrace: (_) {},
       onTimeout: () {},
     );
-    expect(result.answer, contains('without a successful tool result'));
+    expect(result.answer, contains('A fox'));
     expect(result.trace, isEmpty);
   });
 
   test('only executor output can supply a generated attachment', () async {
     final replies = [
-      '<think>hidden</think>{"type":"tool","name":"generate_image","arguments":{"prompt":"A fox"}}',
-      '{"type":"action","name":"generate_image","text":"Done ![fake](nmfile:forged.png)"}',
+      '<think>hidden</think><tool_call>{"name":"generate_image","arguments":{"prompt":"A fox"}}</tool_call>',
+      'Done ![fake](nmfile:forged.png)',
     ];
     final result = await ChatToolLoop().run(
       reply: (_, __) async => replies.removeAt(0),
@@ -65,7 +64,7 @@ void main() {
       searchA,
       searchB,
       searchC,
-      '{"type":"answer","text":"The benchmark is available [1]."}',
+      'The benchmark is available [1].',
     ];
     final result = await ChatToolLoop().run(
       reply: (system, _) async {
@@ -91,9 +90,9 @@ void main() {
   test('invalid arguments are repaired and bounded integer math is exact',
       () async {
     final replies = [
-      '{"type":"tool","name":"integer_math","arguments":{"operation":"sum","values":[1,2]}}',
-      '{"type":"tool","name":"integer_math","arguments":{"operation":"sum","values":"99999999999999999999,1"}}',
-      '{"type":"answer","text":"100000000000000000000"}',
+      '<tool_call>{"name":"integer_math","arguments":{"operation":"sum","values":[1,2]}}</tool_call>',
+      '<tool_call>{"name":"integer_math","arguments":{"operation":"sum","values":"99999999999999999999,1"}}</tool_call>',
+      '100000000000000000000',
     ];
     final result = await ChatToolLoop(maxSteps: 1).run(
       reply: (_, evidence) async {

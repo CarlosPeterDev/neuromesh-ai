@@ -12,9 +12,8 @@ import '../controllers/chat_controller.dart';
 import '../core/constants.dart';
 import '../utils/chat_io.dart';
 import '../utils/memory_text.dart';
-import 'agent_service.dart';
+import 'chat_tool_service.dart';
 import 'hive_service.dart';
-import 'sandbox_service.dart';
 import '../utils/model_file_role.dart';
 import 'voice_clone_store.dart';
 
@@ -322,8 +321,6 @@ class ClusterBackup {
               key: hive.settingsBox.get(key),
         };
         data['modelHelpers'] = hive.getSetting<Map>('model_helper_links') ?? {};
-        data['alpineInstalled'] = Get.isRegistered<SandboxService>() &&
-            Get.find<SandboxService>().installed.value;
       case ClusterBackupPart.memory:
         data['notes'] = (hive.getSetting<List>('agent_memory') ?? const [])
             .whereType<String>()
@@ -465,14 +462,11 @@ class ClusterBackup {
           }
           await hive.setSetting('model_helper_links', existing);
         }
-        if (data['alpineInstalled'] == true) {
-          await hive.setSetting('restore_alpine_recommended', true);
-        }
       case ClusterBackupPart.memory:
-        final agent = Get.find<AgentService>();
+        final agent = Get.find<ChatToolService>();
         final notes = (data['notes'] as List).whereType<String>();
         for (final note in notes) {
-          if (agent.memory.length >= AgentService.maxMemory) break;
+          if (agent.memory.length >= ChatToolService.maxMemory) break;
           await agent.addNote(note);
         }
       case ClusterBackupPart.files:

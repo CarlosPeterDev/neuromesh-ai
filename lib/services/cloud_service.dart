@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../core/constants.dart';
 import 'hive_service.dart';
 import 'app_log_service.dart';
+import 'chat_tool_loop.dart';
 
 /// Cloud API service supporting native and OpenAI-compatible providers.
 class CloudService extends GetxService {
@@ -93,7 +94,8 @@ class CloudService extends GetxService {
     final client = http.Client();
     _requestClients.add(client);
     try {
-      return await client.post(url, headers: headers, body: body)
+      return await client
+          .post(url, headers: headers, body: body)
           .timeout(_responseTimeout);
     } finally {
       _requestClients.remove(client);
@@ -173,6 +175,42 @@ class CloudService extends GetxService {
     } catch (e) {
       Get.find<AppLogService>().error('Cloud API request failed', details: e);
       return 'ERROR: Cloud API request failed — $e';
+    }
+  }
+
+  final _rejectedNativeTools = <String>{};
+
+  /// Uses native function deltas on compatible endpoints. A null response
+  /// means this endpoint/model rejected the protocol or has no native adapter.
+  Future<String?> tryNativeTools({
+    required List<Map<String, String>> messages,
+    required Set<String> allowed,
+    String? imageBase64,
+    required void Function(String) onToken,
+  }) async {
+    if (!isConfigured ||
+        allowed.isEmpty ||
+        !const {'openai', 'openrouter', 'custom'}.contains(_provider))
+      return null;
+    final key = '$_provider:$_openAICompatibleEndpoint:$_model';
+    if (_rejectedNativeTools.contains(key)) return null;
+    try {
+      return await _streamOpenAICompatible(
+        endpoint: _openAICompatibleEndpoint,
+        providerLabel: _providerLabel,
+        messages: messages,
+        imageBase64: imageBase64,
+        temperature: null,
+        maxTokens: null,
+        onToken: onToken,
+        extraHeaders: _openAICompatibleExtraHeaders,
+        nativeTools: ChatToolLoop.nativeSchemas(allowed),
+      );
+    } on _NativeToolsUnsupported {
+      _rejectedNativeTools.add(key);
+      return null;
+    } on Exception {
+      return 'ERROR: The provider tool request failed. Check the connection and try again.';
     }
   }
 
@@ -599,6 +637,7 @@ class CloudService extends GetxService {
     required int? maxTokens,
     required void Function(String token) onToken,
     Map<String, String> extraHeaders = const {},
+    List<Map<String, Object>>? nativeTools,
   }) async {
     final request = http.Request('POST', Uri.parse(endpoint));
     request.headers.addAll({
@@ -613,6 +652,8 @@ class CloudService extends GetxService {
       'temperature': temperature ?? AppConstants.defaultTemperature,
       'max_tokens': maxTokens ?? AppConstants.defaultMaxTokens,
       'stream': true,
+      if (nativeTools != null) 'tools': nativeTools,
+      if (nativeTools != null) 'parallel_tool_calls': false,
     });
 
     final client = http.Client();
@@ -620,11 +661,20 @@ class CloudService extends GetxService {
     try {
       final response = await client.send(request).timeout(_connectTimeout);
       if (response.statusCode != 200) {
+        if (nativeTools != null &&
+            const {400, 404, 422, 501}.contains(response.statusCode)) {
+          throw const _NativeToolsUnsupported();
+        }
         final body = await response.stream.bytesToString();
         return 'ERROR: $providerLabel returned ${response.statusCode} — $body';
       }
 
       final buffer = StringBuffer();
+      final toolName = StringBuffer();
+      final arguments = StringBuffer();
+      var unexpectedCall = false;
+      var nativeCallSeen = false;
+      var nativeCallFinished = false;
       final lines = response.stream
           .timeout(streamIdleTimeout)
           .transform(utf8.decoder)
@@ -669,10 +719,33 @@ class CloudService extends GetxService {
         if (choice is! Map) continue;
         if (choice['finish_reason'] != null) finished = true;
         final delta = choice['delta'];
+        if (nativeTools != null) {
+          if (choice['finish_reason'] == 'tool_calls')
+            nativeCallFinished = true;
+          final calls = delta is Map ? delta['tool_calls'] : null;
+          if (calls is List) {
+            for (final call in calls) {
+              nativeCallSeen = true;
+              if (call is! Map ||
+                  call['index'] != 0 ||
+                  call['function'] is! Map) {
+                unexpectedCall = true;
+                continue;
+              }
+              final function = call['function'] as Map;
+              if (function['name'] is String) toolName.write(function['name']);
+              if (function['arguments'] is String)
+                arguments.write(function['arguments']);
+              if (toolName.length > 100 || arguments.length > 15000) {
+                return 'ERROR: The provider returned an oversized tool call.';
+              }
+            }
+          }
+        }
         final token = delta is Map ? delta['content']?.toString() : null;
         if (token != null && token.isNotEmpty) {
           buffer.write(token);
-          onToken(token);
+          if (!nativeCallSeen) onToken(token);
         }
       }
 
@@ -681,6 +754,24 @@ class CloudService extends GetxService {
         return text.isEmpty
             ? 'ERROR: $providerLabel returned an error — $streamError'
             : '$text\n\n⚠️ $providerLabel stopped with an error: $streamError';
+      }
+      if (nativeCallSeen) {
+        if (unexpectedCall || !nativeCallFinished) {
+          return 'ERROR: The provider did not complete a single tool call.';
+        }
+        try {
+          final args = jsonDecode(arguments.toString());
+          return '${ChatToolLoop.callPrefix}${jsonEncode({
+                'name': toolName.toString(),
+                'arguments': args,
+              })}${ChatToolLoop.callSuffix}';
+        } on FormatException {
+          return '${ChatToolLoop.callPrefix}${ChatToolLoop.callSuffix}';
+        }
+      }
+      if (nativeTools != null &&
+          text.trimLeft().startsWith(ChatToolLoop.callPrefix)) {
+        return 'ERROR: The provider returned a tool command as plain text.';
       }
       if (text.isEmpty) {
         return 'ERROR: $providerLabel returned an empty response.';
@@ -722,4 +813,8 @@ class CloudService extends GetxService {
 
     return apiMessages;
   }
+}
+
+class _NativeToolsUnsupported implements Exception {
+  const _NativeToolsUnsupported();
 }

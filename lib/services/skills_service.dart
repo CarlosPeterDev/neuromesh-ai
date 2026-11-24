@@ -7,7 +7,7 @@ import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 import '../utils/skill_context.dart';
 import '../utils/bm25.dart';
-import 'agent_service.dart';
+import 'chat_tool_service.dart';
 import 'document_extractor_service.dart';
 
 class SkillsService extends GetxService {
@@ -202,8 +202,8 @@ class SkillsService extends GetxService {
     return ContextDocument('file:$name', text);
   }
 
-  void registerTools(AgentService agent) {
-    agent.addTool(AgentTool(
+  void registerTools(ChatToolService agent) {
+    agent.addTool(ChatTool(
         'list_skill_files',
         'List resources bundled with an active skill.',
         '{"name":"skill-name"}', (args) async {
@@ -220,7 +220,7 @@ class SkillsService extends GetxService {
       }
       return 'Read with read_context(source,page):\n${files.join('\n')}';
     }, available: () => current?.documents.isNotEmpty == true));
-    agent.addTool(AgentTool(
+    agent.addTool(ChatTool(
         'read_context',
         'Read a selected skill, its bundled resource, or a mentioned workspace file by page (starting at 1).',
         '{"source":"skill:name","page":1}', (args) async {
@@ -243,7 +243,7 @@ class SkillsService extends GetxService {
       }
       return turn.read(id, (args['page'] as num?)?.toInt() ?? 1);
     }, available: () => current?.documents.isNotEmpty == true));
-    agent.addTool(AgentTool(
+    agent.addTool(ChatTool(
         'search_context',
         'Find relevant excerpts in selected skills and mentioned files.',
         '{"query":"keywords"}', (args) async {

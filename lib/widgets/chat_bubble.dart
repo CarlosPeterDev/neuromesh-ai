@@ -15,7 +15,7 @@ import 'attachment_preview.dart';
 import 'image_viewer.dart';
 import 'thought_disclosure.dart';
 import '../core/haptics.dart';
-import '../services/agent_service.dart';
+import '../services/chat_tool_service.dart';
 
 class ChatBubble extends StatelessWidget {
   final ChatMessage message;
@@ -535,7 +535,7 @@ class AssistantMarkdown extends StatelessWidget {
         onTapLink: (_, href, __) {
           if (href == null) return;
           if (href.startsWith(nmFileScheme)) {
-            Get.find<AgentService>().inProject(
+            Get.find<ChatToolService>().inProject(
               workspaceProject ?? '',
               () => openAgentFile(context, href.substring(nmFileScheme.length)),
             );

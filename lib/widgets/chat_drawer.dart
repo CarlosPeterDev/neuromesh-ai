@@ -4,7 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../controllers/chat_controller.dart';
 import '../controllers/home_controller.dart';
 import '../models/chat_session.dart';
-import '../services/agent_service.dart' show stripToolTrace;
+import '../services/chat_tool_service.dart' show stripToolTrace;
 import '../services/hive_service.dart';
 import 'tonal_button.dart';
 import '../core/haptics.dart';
@@ -516,7 +516,7 @@ class _MenuPanel extends StatefulWidget {
 }
 
 class _MenuPanelState extends State<_MenuPanel> {
-  final _open = <String>{'AI & agent'};
+  final _open = <String>{'Chat'};
 
   @override
   Widget build(BuildContext context) {

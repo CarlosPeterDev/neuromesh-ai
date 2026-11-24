@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -8,13 +7,13 @@ import 'package:hive/hive.dart';
 // Platform mock for the app's existing path_provider dependency.
 // ignore: depend_on_referenced_packages
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
-import 'package:neuromesh_ai/services/agent_tools.dart';
+import 'package:neuromesh_ai/services/chat_calculator.dart';
 import 'package:neuromesh_ai/controllers/chat_controller.dart';
 import 'package:neuromesh_ai/controllers/settings_controller.dart';
 import 'package:neuromesh_ai/core/constants.dart';
 import 'package:neuromesh_ai/models/chat_message.dart';
 import 'package:neuromesh_ai/models/chat_session.dart';
-import 'package:neuromesh_ai/services/agent_service.dart';
+import 'package:neuromesh_ai/services/chat_tool_service.dart';
 import 'package:neuromesh_ai/services/app_log_service.dart';
 import 'package:neuromesh_ai/services/cloud_service.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
@@ -45,7 +44,7 @@ void main() {
     Get.put(ImageGenerationNotificationService());
     Get.put(LocalImageService());
     cloud = Get.put<CloudService>(_TestCloud()) as _TestCloud;
-    agent = Get.put<AgentService>(_WorkspaceAgent()) as _WorkspaceAgent;
+    agent = Get.put<ChatToolService>(_WorkspaceAgent()) as _WorkspaceAgent;
     chat = Get.put(ChatController());
   });
 
@@ -64,99 +63,40 @@ void main() {
     chat.textController.text = 'Read this';
   }
 
-  test('explicit image generation works without an active chat model',
-      () async {
-    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
-    chat.textController.text = 'Create an image of a fox';
+  test('a plain reply is shown without forcing a tool call', () async {
+    cloud.answer = 'مرحبًا! كيف يمكنني مساعدتك؟';
+    chat.textController.text = 'مرحبًا';
     await chat.sendMessage();
-    expect(agent.imageCall?.arguments['prompt'], 'Create an image of a fox');
-    expect(agent.directImageRequest, isTrue);
-    expect(chat.messages.last.content, contains('Generated online'));
-    expect(cloud.calls, 0);
-  });
-
-  test('vague image requests ask once and use the reply as the description',
-      () async {
-    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
-    chat.textController.text = 'Create an image';
-    await chat.sendMessage();
+    expect(chat.messages.last.content, cloud.answer);
+    expect(cloud.calls, 1);
     expect(agent.imageCall, isNull);
-    expect(chat.messages.last.content, contains('what should it show'));
-    chat.textController.text = 'A fox in a snowy forest';
-    await chat.sendMessage();
-    expect(agent.imageCall?.arguments['prompt'], 'A fox in a snowy forest');
+    expect(agent.narration, isNull);
   });
 
-  test('an edit routes the attached image to the editor', () async {
-    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+  test('only a model tool call sends an attachment to the image editor',
+      () async {
+    cloud.replies.addAll([
+      '<tool_call>{"name":"edit_image","arguments":{"prompt":"Add a beach"}}</tool_call>',
+      'Here is the edited image.',
+    ]);
     chat.selectedImageBase64.value = 'cGljdHVyZQ==';
     chat.textController.text = 'Replace the background with a beach';
     await chat.sendMessage();
     expect(agent.imageCall?.name, 'edit_image');
     expect(agent.imageCall?.arguments['attachedImage'], 'cGljdHVyZQ==');
+    expect(chat.messages.last.content, contains('nmfile:edited.jpg'));
   });
 
-  test('chat refines prompts using the selected language model', () async {
-    cloud.answer =
-        '{"prompt":"A fox in a snowy forest, soft watercolor","question":"","style":"illustration"}';
-    chat.textController.text = 'Create an image of a fox';
+  test('a model-directed narration returns playable media', () async {
+    cloud.replies.addAll([
+      '<tool_call>{"name":"text_to_speech","arguments":{"text":"Playing sports builds fitness."}}</tool_call>',
+      'I created a recording.',
+    ]);
+    chat.textController.text = 'Write a paragraph and read it aloud';
     await chat.sendMessage();
-    expect(agent.imageCall?.arguments['prompt'],
-        'A fox in a snowy forest, soft watercolor');
-    expect(agent.imageCall?.arguments['style'], 'illustration');
-  });
-
-  test('local writing goes directly to TTS without creating a text file',
-      () async {
-    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
-    agent.mode.value = AgentChatMode.always;
-    local.answer = 'Playing sports builds fitness and teaches teamwork.';
-    for (final request in [
-      'Write a paragraph about the importance of sports then use the tts tool to convert it to audio file',
-      'A paragraph you write about sports and be in audio file',
-      'Create audio file talk about the importance of sports',
-    ]) {
-      chat.textController.text = request;
-      await chat.sendMessage();
-      expect(local.lastPrompt, contains('Return only the finished text'));
-      expect(local.lastPrompt, isNot(contains('audio file')));
-      expect(local.lastSystem, isNot(contains('<tool_call>')));
-      expect(agent.narration?.arguments['text'], local.answer);
-      expect(chat.messages.last.content, contains('nmfile:research.wav'));
-      expect(chat.messages.last.content, isNot(contains('notes.txt')));
-    }
-    expect(local.calls, 3);
-    expect(cloud.calls, 0);
-  });
-
-  test('TTS follow-up narrates the last reply without using a file converter',
-      () async {
-    cloud.answer = 'Sports help people stay active and build teamwork.';
-    chat.textController.text = 'Write a short introduction about sports';
-    await chat.sendMessage();
-    chat.textController.text = 'Use the tts tool to convert it to tts';
-    await chat.sendMessage();
-
-    expect(cloud.calls, 1);
-    expect(agent.narration?.arguments['text'], cloud.answer);
+    expect(
+        agent.narration?.arguments['text'], 'Playing sports builds fitness.');
     expect(chat.messages.last.content, contains('nmfile:research.wav'));
-    expect(chat.messages.last.content, isNot(contains('convert_file')));
-  });
-
-  test('web research writes a paragraph, then narrates exactly that paragraph',
-      () async {
-    Get.put<WebSearchService>(_TestWeb());
-    cloud.answer =
-        'Sport improves fitness and brings communities together [1].';
-    chat.textController.text =
-        'OK now search for the importance of sport in modern society '
-        'then write a paragraph then create an audio file that reads it';
-    await chat.sendMessage();
-    expect(cloud.lastInput, contains('Write one plain-language paragraph'));
-    expect(agent.narration?.arguments['text'],
-        'Sport improves fitness and brings communities together.');
-    expect(chat.messages.last.content, contains('nmfile:research.wav'));
-    expect(chat.messages.last.content, contains('Sources:'));
   });
 
   test('a second send during attachment import cannot duplicate the request',
@@ -227,7 +167,7 @@ void main() {
     expect(hive.getMessagesForChat(session.id), hasLength(2));
   });
 
-  test('an HTML attachment and its follow-up receive the actual file text',
+  test('an HTML attachment is read without repeating it in the next prompt',
       () async {
     final html = File('${dir.path}/platformer_quest.html');
     await html.writeAsString(
@@ -242,7 +182,7 @@ void main() {
     expect(cloud.lastInput, contains('<canvas id="game">'));
     chat.textController.text = 'Please read the file and summarize it';
     await chat.sendMessage();
-    expect(cloud.lastInput, contains('<title>Platformer Quest</title>'));
+    expect(cloud.lastInput, isNot(contains('<title>Platformer Quest</title>')));
     expect(cloud.lastInput, contains('Please read the file and summarize it'));
   });
 
@@ -260,9 +200,9 @@ void main() {
       () async {
     final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
     cloud.replies.addAll([
-      '{"type":"tool","name":"web_search","arguments":{"query":"coding model benchmark"}}',
-      '{"type":"tool","name":"web_search","arguments":{"query":"coding model benchmark methodology"},"missing":"benchmark methodology"}',
-      '{"type":"answer","text":"The tests cover different workloads [1] and [2]."}',
+      '<tool_call>{"name":"web_search","arguments":{"query":"coding model benchmark"}}</tool_call>',
+      '<tool_call>{"name":"web_search","arguments":{"query":"coding model benchmark methodology"},"missing":"benchmark methodology"}</tool_call>',
+      'The tests cover different workloads [1] and [2].',
     ]);
     chat.textController.text = 'Which model is strongest at coding today?';
     await chat.sendMessage();
@@ -289,7 +229,7 @@ void main() {
     local.pendingReset = Completer<void>();
     await hive.setSetting(AppConstants.keyInferenceMode, 'local');
     await hive.setSetting('auto_title', false);
-    agent.mode.value = AgentChatMode.off;
+    agent.mode.value = ChatToolMode.off;
     chat.createNewChat();
     chat.textController.text = 'After switching';
     final send = chat.sendMessage();
@@ -329,17 +269,18 @@ void main() {
     PathProviderPlatform.instance = _TestPaths(dir.path);
     addTearDown(() => PathProviderPlatform.instance = original);
 
-    Future<String> write(String project, String text) => agent.inProject(
+    Future<void> write(String project, String text) => agent.inProject(
           project,
-          () => agent.executeTool(
-            ParsedToolCall(
-                'write_file', {'name': 'notes.txt', 'content': text}, ''),
-            (_, __, ___) async => true,
-          ),
+          () async {
+            final file = await agent.newWorkspaceFile('notes.txt');
+            await file.writeAsString(text);
+          },
         );
-    expect(await write('Project A', 'first draft'), startsWith('Wrote'));
-    expect(await write('Project A', 'second draft'), startsWith('Wrote'));
-    expect(await write('Project B', 'other project'), startsWith('Wrote'));
+    await write('Project A', 'first draft');
+    await agent.inProject(
+        'Project A', () => agent.deleteWorkspaceFile('notes.txt'));
+    await write('Project A', 'second draft');
+    await write('Project B', 'other project');
     await agent.inProject('Project A', () async {
       final versions = await agent.workspaceVersions('notes.txt');
       expect(versions, hasLength(1));
@@ -372,27 +313,23 @@ void main() {
   });
 }
 
-class _WorkspaceAgent extends AgentService {
+class _WorkspaceAgent extends ChatToolService {
   final imported = Completer<String>();
   int imports = 0;
   ParsedToolCall? imageCall;
   ParsedToolCall? narration;
-  bool directImageRequest = false;
 
   @override
-  Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm,
-      {bool userRequestedOnlineImage = false}) async {
+  Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm) async {
     if (call.name == 'generate_image' || call.name == 'edit_image') {
       imageCall = call;
-      directImageRequest = userRequestedOnlineImage;
-      return 'Generated online with Pollinations (Sana).';
+      return 'Edited online with Pollinations. ![Edited](nmfile:edited.jpg)';
     }
     if (call.name == 'text_to_speech') {
       narration = call;
       return 'Saved research.wav. Show it with [Audio](nmfile:research.wav).';
     }
-    return super.executeTool(call, confirm,
-        userRequestedOnlineImage: userRequestedOnlineImage);
+    return super.executeTool(call, confirm);
   }
 
   @override
@@ -453,10 +390,6 @@ class _TestCloud extends CloudService {
     calls++;
     lastInput = messages.last['content'];
     if (replies.isNotEmpty) return replies.removeAt(0);
-    if (messages.first['content']?.startsWith('Return exactly one JSON') ==
-        true) {
-      return jsonEncode({'type': 'answer', 'text': answer});
-    }
     return answer;
   }
 }

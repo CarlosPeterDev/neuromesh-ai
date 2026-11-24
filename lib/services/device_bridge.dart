@@ -51,9 +51,6 @@ class DeviceBridge extends GetxService {
     }
   }
 
-  Future<String> nativeLibDir() async =>
-      (await _ch.invokeMethod<String>('nativeLibDir')) ?? '';
-
   /// Decodes mp3/m4a/ogg/wav/mp4… to 16 kHz mono floats (null if unsupported).
   Future<Float32List?> decodeAudio(String path) async {
     final out = await _ch.invokeMethod<String>('decodeAudio', {'path': path, 'rate': 16000});

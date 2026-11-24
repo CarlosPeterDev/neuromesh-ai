@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../core/ui.dart';
-import '../services/agent_service.dart';
+import '../services/chat_tool_service.dart';
 import '../services/memory_service.dart';
 
 /// Everything the AI remembers about you. You can add, edit and delete notes,
@@ -13,7 +13,7 @@ class MemoryView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = AppTokens.of(context);
-    final agent = Get.find<AgentService>();
+    final agent = Get.find<ChatToolService>();
     final mem = MemoryService.ensure();
     return Scaffold(
       backgroundColor: t.bg,
@@ -64,12 +64,6 @@ class MemoryView extends StatelessWidget {
                   onSelected: mem.setIntervalHours,
                 ),
               ),
-            AppRow(
-              icon: Icons.edit_note_rounded,
-              title: 'Save when I say "remember…"',
-              subtitle: 'Messages like "remember that I use Flutter" are saved straight away.',
-              trailing: Switch(value: agent.autoMemory.value, onChanged: agent.setAutoMemory),
-            ),
           ]),
           const SizedBox(height: 10),
           if (mem.status.value.isNotEmpty)
@@ -94,7 +88,7 @@ class MemoryView extends StatelessWidget {
             busy: mem.running.value,
             onPressed: () => mem.updateNow(),
           ),
-          SectionHeader('Saved memories (${notes.length}/${AgentService.maxMemory})'),
+          SectionHeader('Saved memories (${notes.length}/${ChatToolService.maxMemory})'),
           if (notes.isEmpty)
             const Padding(
               padding: EdgeInsets.all(24),
@@ -156,7 +150,7 @@ class MemoryView extends StatelessWidget {
   }
 
   Future<void> _editNote(
-      BuildContext context, AgentService agent, MemoryService mem, String? old) async {
+      BuildContext context, ChatToolService agent, MemoryService mem, String? old) async {
     final c = TextEditingController(text: old ?? '');
     final saved = await showDialog<String>(
       context: context,

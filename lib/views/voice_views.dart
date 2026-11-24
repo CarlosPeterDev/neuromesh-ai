@@ -20,8 +20,8 @@ import '../utils/spoken_answer.dart';
 import 'voice_clone_view.dart';
 import 'chat_tools.dart';
 import '../core/ui.dart';
-import '../services/agent_service.dart';
-import '../services/agent_tools.dart';
+import '../services/chat_tool_service.dart';
+import '../services/chat_calculator.dart';
 import '../services/chat_tool_loop.dart';
 import '../services/web_search_service.dart';
 import '../services/skills_service.dart';
@@ -896,8 +896,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
 
   Future<void> _attachFile() async {
     if (_addingFile || _busy) return;
-    if (Get.find<AgentService>().mode.value == AgentChatMode.off) {
-      showToast('Agent tools are off',
+    if (Get.find<ChatToolService>().mode.value == ChatToolMode.off) {
+      showToast('Chat tools are off',
           'Enable tools to use workspace files in the call.');
       return;
     }
@@ -910,7 +910,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         _chat.createNewChat();
         _sessionId = _chat.currentSessionId.value;
       }
-      final agent = Get.find<AgentService>();
+      final agent = Get.find<ChatToolService>();
       final project = agent.projectForChat(_sessionId);
       final name = await agent.inProject(
           project, () => agent.importToWorkspace(file!.path!, file.name));
@@ -952,7 +952,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
     }
     final sessionId = _sessionId;
     final project = (file == null ? null : _attachmentProject) ??
-        Get.find<AgentService>().projectForChat(sessionId);
+        Get.find<ChatToolService>().projectForChat(sessionId);
     await _chat.saveVoiceMessage(sessionId, 'user', message,
         fileName: file, workspaceProject: project);
     _history.add({'role': 'user', 'content': message});
@@ -1013,7 +1013,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
 
       final shot = await _snap();
       if (_ended) return;
-      final agent = Get.find<AgentService>();
+      final agent = Get.find<ChatToolService>();
       final inference = Get.find<InferenceService>();
       final session = _chat.currentSession;
       final basePrompt =
@@ -1021,6 +1021,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       final skillContext = Get.isRegistered<SkillsService>()
           ? await Get.find<SkillsService>().prepare(
               heard, await agent.inProject(project, agent.filesDir),
+              attachment: file,
               activeSkills: previouslyMentionedSkills(_chat.messages
                   .where((m) => m.chatId == sessionId && m.role == 'user')
                   .map((m) => m.content)))
@@ -1028,11 +1029,11 @@ class _VoiceCallViewState extends State<VoiceCallView> {
       final contextSize = inference.contextTokensTotal.value > 0
           ? inference.contextTokensTotal.value
           : 2048;
-      final useTools = agent.mode.value != AgentChatMode.off;
+      final useTools = agent.mode.value != ChatToolMode.off;
       final voiceSystem = '${basePrompt ?? settings.globalSystemPrompt.value}\n'
           'You are on a voice call. Speak naturally in one to three short sentences.';
       final baseSystem = [
-        agent.composeSystem(voiceSystem, withTools: false),
+        agent.composeSystem(voiceSystem, request: heard, contextSize: contextSize),
         if (skillContext != null && skillContext.documents.isNotEmpty)
           skillContext.prompt(contextSize ~/ 4),
       ].join('\n\n');
@@ -1044,7 +1045,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
         final system = instructions.isEmpty
             ? baseSystem
             : '$instructions\n\n$baseSystem';
-        final turn = AgentService.fitTurn(
+        final turn = ChatToolService.fitTurn(
           baseSystem: instructions.isEmpty ? voiceSystem : instructions,
           system: system,
           prompt: prompt,
@@ -1106,6 +1107,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
             agent.policyFor('built-in', name, needsConfirm: false) != 'block').toSet(),
           cancellation: cancellation.future,
           compactPrompt: contextSize < 900,
+          generationHasOwnDeadline: true,
+          onStage: (stage) => _set(_CallState.thinking, '$stage…'),
           onTrace: (trace) {
             if (!mounted || _ended) return;
             setState(() => _steps = splitSteps(trace.join('\n')).$1);
@@ -1405,7 +1408,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
             IconButton(
               tooltip: 'Agent workspace',
               icon: const Icon(Icons.folder_open_outlined),
-              onPressed: () => Get.to(() => const AgentWorkspaceView()),
+              onPressed: () => Get.to(() => const ChatWorkspaceView()),
             ),
             IconButton(
               tooltip: 'Choose speaking voice',
@@ -1483,7 +1486,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
                             else
                               _VoiceAnswer(
                                 text: l.text,
-                                workspaceProject: Get.find<AgentService>()
+                                workspaceProject: Get.find<ChatToolService>()
                                     .projectForChat(_sessionId),
                               ),
                           ],

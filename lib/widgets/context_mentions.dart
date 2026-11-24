@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../controllers/chat_controller.dart';
-import '../services/agent_service.dart';
+import '../services/chat_tool_service.dart';
 import '../services/skills_service.dart';
 
 /// Explicit picker so skills and files are discoverable without memorising syntax.
@@ -10,7 +10,7 @@ class ContextMentionButton extends StatelessWidget {
   final ChatController controller;
   const ContextMentionButton({super.key, required this.controller});
   Future<void> _pick(BuildContext context) async {
-    final agent = Get.find<AgentService>();
+    final agent = Get.find<ChatToolService>();
     final choices = <(String, String)>[
       if (Get.isRegistered<SkillsService>())
         for (final s in Get.find<SkillsService>().skills)

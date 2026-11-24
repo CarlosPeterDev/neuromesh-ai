@@ -16,11 +16,9 @@ import 'core/theme.dart';
 import 'core/routes.dart';
 import 'views/home_view.dart' show homeRouteObserver;
 import 'widgets/startup_gate.dart';
-import 'services/agent_service.dart';
-import 'services/agent_extra_tools.dart' show registerVoiceModelStatus;
+import 'services/chat_tool_service.dart';
+import 'services/chat_voice_tools.dart' show registerVoiceModelStatus;
 import 'services/skills_service.dart';
-import 'services/sandbox_service.dart';
-import 'services/user_files.dart';
 import 'services/toolbox_service.dart';
 import 'services/rag_service.dart';
 import 'services/favorites_service.dart';
@@ -28,7 +26,6 @@ import 'services/memory_service.dart';
 import 'services/web_search_service.dart';
 import 'services/device_bridge.dart';
 import 'services/relay_service.dart';
-import 'services/model_helper_service.dart';
 import 'services/download_queue.dart';
 import 'services/voice_models.dart';
 import 'services/voice_service.dart';
@@ -103,20 +100,16 @@ void main() {
         if (ClusterService.isSupported)
           Get.put(ClusterService(), permanent: true);
         Get.put(InferenceService());
-        Get.put(UserFilesService(), permanent: true);
-        Get.put(AgentService());
-        registerVoiceModelStatus(Get.find<AgentService>());
+        Get.put(ChatToolService());
+        registerVoiceModelStatus(Get.find<ChatToolService>());
         final skills = await Get.putAsync(() => SkillsService().init());
-        skills.registerTools(Get.find<AgentService>());
+        skills.registerTools(Get.find<ChatToolService>());
         Get.put(ToolboxService());
         Get.put(RagService());
         Get.put(FavoritesService(), permanent: true);
         MemoryService.ensure();
         Get.put(WebSearchService());
         Get.put(DeviceBridge(), permanent: true);
-        if (SandboxService.supported) {
-          Get.put(SandboxService(), permanent: true);
-        }
         Get.put(VoiceModelStore(), permanent: true);
         Get.put(VoiceService(), permanent: true);
         Get.put(VoiceCloneStore(), permanent: true);
@@ -163,7 +156,6 @@ void main() {
         Get.put(ServerController(), permanent: true);
         Get.put(RelayService(), permanent: true);
         Get.put(ModelController());
-        registerModelHelperTools(Get.find<AgentService>());
         Get.put(DownloadQueue(), permanent: true);
         appLog.info('All services initialized, launching app');
 

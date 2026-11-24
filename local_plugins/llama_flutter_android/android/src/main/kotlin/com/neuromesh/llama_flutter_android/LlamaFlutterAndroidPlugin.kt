@@ -265,14 +265,40 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
                 val imagePath = if (imageIndex >= 0) request.messages[imageIndex].imagePath else null
 
                 // Format the chat messages using the template manager
-                val formattedPrompt = ChatTemplateManager.formatMessages(
-                    request.messages.mapIndexed { i, msg ->
+                val assemblyStart = android.os.SystemClock.elapsedRealtime()
+                val messages = request.messages.mapIndexed { i, msg ->
                         val content = if (i == imageIndex) "$MEDIA_MARKER\n${msg.content}" else msg.content
                         TemplateChatMessage(msg.role, content)
-                    },
-                    request.template,
-                    currentModelPath
-                )
+                    }
+                val template = if (request.template == "model-direct") {
+                    if (nativeHasQwenThinkingTemplate()) "qwen3-direct" else null
+                } else {
+                    request.template
+                }
+                fun format(history: List<TemplateChatMessage>) =
+                    ChatTemplateManager.formatMessages(history, template, currentModelPath)
+                val history = messages.toMutableList()
+                var formattedPrompt = format(history)
+                if (imagePath == null) {
+                    val context = nativeGetContextSize()
+                    val reserve = request.maxTokens.coerceIn(1, (context / 3).coerceAtLeast(1).toLong())
+                    val budget = context - reserve
+                    while (nativeCountPromptTokens(formattedPrompt) > budget) {
+                        val first = history.indexOfFirst { it.role != "system" }
+                        if (first < 0 || first >= history.lastIndex) {
+                            throw IllegalArgumentException(
+                                "The message and instructions exceed the active context. Shorten them or increase the context size."
+                            )
+                        }
+                        history.removeAt(first)
+                        while (first < history.lastIndex && history[first].role != "user") {
+                            history.removeAt(first)
+                        }
+                        formattedPrompt = format(history)
+                    }
+                }
+                android.util.Log.i(TAG, "prompt_assembly_ms=${android.os.SystemClock.elapsedRealtime() - assemblyStart} " +
+                    "history_messages_omitted=${messages.size - history.size}")
 
                 if (imagePath != null) {
                     android.util.Log.i(TAG, "Image turn: message $imageIndex of ${request.messages.size}, " +
@@ -555,6 +581,8 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
     private external fun nativeStop()
     private external fun nativeFreeModel()
     private external fun nativeGetTokensUsed(): Int
+    private external fun nativeCountPromptTokens(prompt: String): Int
+    private external fun nativeHasQwenThinkingTemplate(): Boolean
     private external fun nativeGetContextSize(): Int
     private external fun nativeClearContext()
     private external fun nativeSetSystemPromptLength(length: Int)
