@@ -14,6 +14,7 @@ import 'package:neuromesh_ai/core/constants.dart';
 import 'package:neuromesh_ai/models/chat_message.dart';
 import 'package:neuromesh_ai/models/chat_session.dart';
 import 'package:neuromesh_ai/services/chat_tool_service.dart';
+import 'package:neuromesh_ai/services/chat_tool_intent.dart';
 import 'package:neuromesh_ai/services/app_log_service.dart';
 import 'package:neuromesh_ai/services/cloud_service.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
@@ -108,7 +109,7 @@ void main() {
     chat.textController.text = request;
     await chat.sendMessage();
 
-    expect(local.sources, List.filled(2, InferenceService.visualPlanSource));
+    expect(local.sources, List.filled(2, InferenceService.toolPlanSource));
     expect(agent.imageCall?.name, 'generate_image');
     expect(agent.imageCall?.arguments['prompt'], request);
     expect(chat.messages.last.content, contains('nmfile:generated.jpg'));
@@ -124,7 +125,7 @@ void main() {
     chat.textController.text = 'Explain how a flying car would work.';
     await chat.sendMessage();
 
-    expect(local.sources, [InferenceService.visualPlanSource, 'chat-tools']);
+    expect(local.sources, [InferenceService.toolPlanSource, 'chat-tools']);
     expect(agent.imageCall, isNull);
     expect(chat.messages.last.content, local.answer);
   });
@@ -140,8 +141,43 @@ void main() {
     chat.textController.text = 'A vintage spaceport at sunrise on a postcard.';
     await chat.sendMessage();
 
-    expect(local.sources, ['chat-tools']);
+    expect(local.sources, [InferenceService.toolPlanSource, 'chat-tools']);
     expect(agent.imageCall, isNull);
+  });
+
+  test('a model-directed calculation uses the literal formula and tool result',
+      () async {
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    await hive.setSetting('auto_title', false);
+    local.isModelLoaded.value = true;
+    local.visualDecision = 'calc';
+    local.calculatorOptions = '8';
+    chat.textController.text =
+        r'Calculate \frac{(84729\times93617)+\sqrt{987654321}}{137.29^2+17.83} to 8 decimal places.';
+
+    await chat.sendMessage();
+
+    expect(local.sources, List.filled(2, InferenceService.toolPlanSource));
+    expect(local.lastPrompt, 'Calculate to 8 decimal places.');
+    expect(chat.messages.last.content, contains('420436.17803423'));
+    expect(chat.messages.last.content, contains('"n":"calculator"'));
+  });
+
+  test('a written prompt request can reject an initial image suggestion',
+      () async {
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    await hive.setSetting('auto_title', false);
+    local.isModelLoaded.value = true;
+    local.visualDecision = 'artwork';
+    local.decisions[visualFollowUpInstructions] = 'text';
+    local.decisions[visualConfirmationInstructions] = 'text';
+    local.answer = 'A written prompt.';
+    chat.textController.text = 'Write a prompt I can give a painter.';
+
+    await chat.sendMessage();
+
+    expect(agent.imageCall, isNull);
+    expect(chat.messages.last.content, local.answer);
   });
 
   test('a second send during attachment import cannot duplicate the request',
@@ -391,6 +427,8 @@ class _WorkspaceAgent extends ChatToolService {
 class _TestNarrationInference extends InferenceService {
   String answer = '';
   String visualDecision = 'text';
+  String calculatorOptions = 'none';
+  final decisions = <String, String>{};
   final sources = <String>[];
   Completer<void>? pendingReset;
   int resets = 0;
@@ -420,7 +458,12 @@ class _TestNarrationInference extends InferenceService {
     sources.add(source);
     lastPrompt = prompt;
     lastSystem = systemPrompt;
-    if (source == InferenceService.visualPlanSource) return visualDecision;
+    if (source == InferenceService.toolPlanSource) {
+      return decisions[systemPrompt] ??
+          (systemPrompt == calculatorOptionsInstructions
+              ? calculatorOptions
+              : visualDecision);
+    }
     onToken?.call(answer);
     return answer;
   }

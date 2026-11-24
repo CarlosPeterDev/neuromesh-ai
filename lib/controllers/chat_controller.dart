@@ -29,7 +29,7 @@ import '../services/rag_service.dart';
 import '../services/chat_tool_service.dart';
 import '../services/chat_calculator.dart';
 import '../services/chat_tool_loop.dart';
-import '../services/chat_visual_intent.dart';
+import '../services/chat_tool_intent.dart';
 import '../services/download_service.dart';
 import '../widgets/tool_confirm.dart';
 import '../services/web_search_service.dart';
@@ -1286,9 +1286,10 @@ class ChatController extends GetxController {
                 'Try a larger output limit or turn off local model thinking.';
           }
         } else {
-          final canPlanImage = inferenceMode == 'local' &&
+          final canPlanTool = inferenceMode == 'local' &&
               inference.isModelLoaded.value &&
-              allowed.contains('generate_image') &&
+              (allowed.contains('generate_image') ||
+                  allowed.contains('calculator')) &&
               imgBase64 == null &&
               fileName == null &&
               explicitFiles.isEmpty &&
@@ -1300,12 +1301,12 @@ class ChatController extends GetxController {
               modelPath ==
                   _hive.getSetting<String>(AppConstants.keyLocalModelPath);
 
-          Future<String> visualDecision(String system) {
+          Future<String> toolDecision(String system, String input) {
             passes++;
             return inference.generate(
-              prompt: visibleText,
+              prompt: input,
               systemPrompt: system,
-              source: InferenceService.visualPlanSource,
+              source: InferenceService.toolPlanSource,
               maxTokens: 4,
             );
           }
@@ -1315,25 +1316,44 @@ class ChatController extends GetxController {
               ).run(
                 reply: generateReply,
                 allowed: allowed,
-                plan: canPlanImage
+                plan: canPlanTool
                     ? () async {
                         if (!currentPlan()) return null;
                         responseStage.value = 'Choosing how to respond';
-                        final choice =
-                            await visualDecision(visualIntentInstructions);
+                        final choice = await toolDecision(
+                            toolIntentInstructions, visibleText);
                         if (!currentPlan()) return null;
+                        if (splitThoughtTags(choice).answer.trim() == 'calc' &&
+                            allowed.contains('calculator')) {
+                          final arithmetic = literalArithmetic(visibleText);
+                          if (arithmetic == null) return null;
+                          final options = arithmetic.remaining.isEmpty
+                              ? 'none'
+                              : await toolDecision(
+                                  calculatorOptionsInstructions,
+                                  arithmetic.remaining);
+                          if (!currentPlan()) return null;
+                          return ChatToolLoop.calculatorPlan(
+                              arithmetic.expression,
+                              arithmetic.remaining,
+                              options);
+                        }
+                        if (!allowed.contains('generate_image')) return null;
                         final selected =
                             ChatToolLoop.visualPlan(choice, visibleText);
                         if (selected == null || selected.needsFollowUp)
                           return selected;
-                        final remainder =
-                            await visualDecision(visualFollowUpInstructions);
+                        final remainder = await toolDecision(
+                            visualFollowUpInstructions, visibleText);
                         if (!currentPlan()) return null;
                         final combined =
                             ChatToolLoop.visualPlan(remainder, visibleText);
-                        return combined?.needsFollowUp == true
-                            ? combined
-                            : selected;
+                        if (combined != null) return combined;
+                        final confirmation = await toolDecision(
+                            visualConfirmationInstructions, visibleText);
+                        if (!currentPlan()) return null;
+                        return ChatToolLoop.visualPlan(
+                            confirmation, visibleText);
                       }
                     : null,
                 execute: (call, abort) async {
@@ -1398,8 +1418,7 @@ class ChatController extends GetxController {
                 },
                 cancellation: cancellation.future,
                 evidenceBudget: (contextSize ~/ 2).clamp(300, 1800),
-                compactPrompt: inferenceMode == 'local' &&
-                    (contextSize <= 2048 || inference.preferCompactToolPrompt),
+                compactPrompt: inferenceMode == 'local',
                 nativeMarkup:
                     inferenceMode == 'local' && inference.usesNativeMarkupTools,
                 generationHasOwnDeadline:

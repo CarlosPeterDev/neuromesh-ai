@@ -92,9 +92,8 @@ class InferenceService extends GetxService {
   Timer? _capabilityTimer;
   bool usesNativeMarkupTools = false;
   final capabilityNotice = ''.obs;
-  bool get preferCompactToolPrompt => capabilityNotice.value.isNotEmpty;
   static const _probeSource = 'capability-check';
-  static const visualPlanSource = 'chat-visual-plan';
+  static const toolPlanSource = 'chat-tool-plan';
   int _foregroundRequests = 0;
   static bool _backgroundSource(String source) =>
       source == _probeSource || source == 'title';
@@ -488,7 +487,7 @@ class InferenceService extends GetxService {
             result['streamed'] != true
         ? 'The model check did not verify usable streaming. Try another model if it returns an empty reply.'
         : result['validatedToolCall'] != true
-            ? 'The model check did not verify tool calls. Chat will use shorter tool instructions.'
+            ? 'The model check did not verify full tool calls. Chat will validate each tool request.'
             : '';
   }
 
@@ -674,7 +673,7 @@ class InferenceService extends GetxService {
         await recordVision('Preparing image and waiting for first token');
       }
       if (!isCurrent()) return '';
-      final temperature = source == visualPlanSource
+      final temperature = source == toolPlanSource
           ? 0.0
           : _hive.getSetting<double>(
                 AppConstants.keyTemperature,

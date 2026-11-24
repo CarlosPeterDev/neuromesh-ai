@@ -1,5 +1,11 @@
 # NeuroMesh AI development handoff
 
+## Calculator routing and hidden context
+
+Artemis answered the reported fraction as prose and gave the wrong value. The verified eight-place result is `420436.17803423`. A short model decision now selects Calc for a numerical answer. For a single supported literal expression the app keeps the original operands and grouping, including common Unicode and LaTeX forms. It asks about decimal precision using only the text left after removing the expression. The calculator's result and tool trace go directly into the reply. Requests without a separable literal expression continue through the regular tool loop.
+
+The final shared decision uses 54 actual Artemis input tokens for a greeting, down from 105 for the previous image-only decision. The arithmetic path excludes chat history, memory and the full tool catalog during its focused calls. Local Chat uses compact tool instructions and limits automatic memory to an estimated 160 tokens. Image decisions with ambiguous follow-up output are confirmed by the model before calling Pollinations.
+
 ## Chat speech voice selection
 
 The reported Artemis call used `model_id: tts-1`, `speaker: male` and `language: en-US`. The local executor rejected the unknown model ID before synthesis. Chat now advertises a typed voice preference and resolves it against the installed speaker catalog, including the older speaker field for male and female preferences. The resolver matches the primary language from a locale tag. An unavailable model ID can be bypassed only if there is a voice preference and a matching installed voice. The saved reply and tool result name the voice actually used. No matching voice produces an actionable error. Age is not a catalog capability.

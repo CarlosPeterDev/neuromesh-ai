@@ -44,12 +44,12 @@ void main() {
       expect(await engine.started.future, source);
       final foreground = inference.generate(
         prompt: 'A vintage spaceport on a postcard, please.',
-        source: InferenceService.visualPlanSource,
+        source: InferenceService.toolPlanSource,
       );
       expect(await foreground, 'artwork');
       expect(await background, isEmpty);
       expect(engine.stops, 1);
-      expect(engine.sources, [source, InferenceService.visualPlanSource]);
+      expect(engine.sources, [source, InferenceService.toolPlanSource]);
     });
   }
 

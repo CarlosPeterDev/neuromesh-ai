@@ -57,16 +57,16 @@ class _ExprParser {
   }
 
   double _term() {
-    var v = _power();
+    var v = _unary();
     while (true) {
       if (_eat('*')) {
-        v *= _power();
+        v *= _unary();
       } else if (_eat('/')) {
-        final d = _power();
+        final d = _unary();
         if (d == 0) throw const FormatException('Division by zero');
         v /= d;
       } else if (_eat('%')) {
-        final d = _power();
+        final d = _unary();
         if (d == 0) throw const FormatException('Division by zero');
         v %= d;
       } else {
@@ -76,15 +76,15 @@ class _ExprParser {
   }
 
   double _power() {
-    final base = _unary();
-    if (_eat('^')) return math.pow(base, _power()).toDouble();
+    final base = _atom();
+    if (_eat('^')) return math.pow(base, _unary()).toDouble();
     return base;
   }
 
   double _unary() {
     if (_eat('-')) return -_unary();
     if (_eat('+')) return _unary();
-    return _atom();
+    return _power();
   }
 
   double _atom() {
@@ -135,6 +135,68 @@ class _ExprParser {
 String formatNumber(double v) {
   if (v == v.roundToDouble() && v.abs() < 1e15) return v.toInt().toString();
   return v.toString();
+}
+
+String evaluateCalculator(Map<String, dynamic> args) {
+  final expression = args['expression'];
+  if (expression is! String || expression.isEmpty || expression.length > 180) {
+    throw const FormatException(
+        'Provide an arithmetic expression of at most 180 characters.');
+  }
+  final value = evaluateExpression(expression);
+  final digits = args['decimal_places'];
+  if (digits == null) return formatNumber(value);
+  if (digits is! int || digits < 0 || digits > 12) {
+    throw const FormatException('Choose between 0 and 12 decimal places.');
+  }
+  return value.toStringAsFixed(digits);
+}
+
+/// Reads literal arithmetic after the model has selected the calculator.
+/// A single source expression avoids asking a model to retype its operands.
+({String expression, String remaining})? literalArithmetic(String input) {
+  var text = input
+      .replaceAll(r'\left', '')
+      .replaceAll(r'\right', '')
+      .replaceAll(r'\times', '*')
+      .replaceAll(r'\cdot', '*')
+      .replaceAll(r'\div', '/')
+      .replaceAll('×', '*')
+      .replaceAll('÷', '/')
+      .replaceAll('−', '-')
+      .replaceAll('²', '^2')
+      .replaceAll('³', '^3');
+  text = text.replaceAllMapped(
+      RegExp(r'\\sqrt\{([^{}]+)\}|√([0-9]+(?:\.[0-9]+)?)'),
+      (match) => 'sqrt(${match[1] ?? match[2]})');
+  text = text.replaceAllMapped(RegExp(r'\\frac\{([^{}]+)\}\{([^{}]+)\}'),
+      (match) => '(${match[1]})/(${match[2]})');
+  text = text.replaceAllMapped(
+      RegExp(r'\^\{([+-]?[0-9]+)\}'), (match) => '^(${match[1]})');
+  if (RegExp(r'\\(?:frac|sqrt)|√|[0-9],[0-9]').hasMatch(text)) return null;
+
+  final formulas = <({String expression, String remaining})>[];
+  final math =
+      RegExp(r'(?:\b(?:sqrt|abs|round|floor|ceil)\b|[0-9 .()+*/%^-])+');
+  for (final match in math.allMatches(text)) {
+    final value = match[0]!.trim().replaceFirst(RegExp(r'\.$'), '');
+    if (value.length > 180 || !RegExp(r'\d').hasMatch(value)) continue;
+    if (!RegExp(r'[0-9)]\s*[+*/%^-]|[a-z]+\(').hasMatch(value)) continue;
+    if (match.start > 0 &&
+        RegExp(r'[A-Za-z0-9_]').hasMatch(text[match.start - 1]) &&
+        !match[0]!.startsWith(' ')) continue;
+    if (match.end < text.length &&
+        RegExp(r'[A-Za-z0-9_]').hasMatch(text[match.end]) &&
+        !match[0]!.endsWith(' ')) continue;
+    formulas.add((
+      expression: value,
+      remaining:
+          '${text.substring(0, match.start)} ${text.substring(match.end)}'
+              .trim()
+              .replaceAll(RegExp(r'\s+'), ' '),
+    ));
+  }
+  return formulas.length == 1 ? formulas.single : null;
 }
 
 /// Exact decimal integer operations with fixed input and work limits.

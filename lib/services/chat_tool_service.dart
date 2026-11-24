@@ -378,9 +378,8 @@ class ChatToolService extends GetxService {
     ChatTool(
       'calculator',
       'Evaluate an arithmetic expression exactly.',
-      '{"expression":"string, e.g. (12+3)*4/5"}',
-      (args) => formatNumber(
-          evaluateExpression((args['expression'] ?? '').toString())),
+      '{"expression":"string, e.g. (12+3)*4/5","decimal_places":"optional integer from 0 to 12"}',
+      evaluateCalculator,
     ),
     ChatTool(
       'integer_math',
@@ -622,7 +621,8 @@ class ChatToolService extends GetxService {
 
   String composeSystem(String base,
       {String request = '', int contextSize = 8192}) {
-    final memory = memoryBlock(request: request, maxTokens: contextSize ~/ 10);
+    final memory = memoryBlock(
+        request: request, maxTokens: (contextSize ~/ 10).clamp(0, 160));
     return [base, if (memory.isNotEmpty) memory].join('\n\n');
   }
 

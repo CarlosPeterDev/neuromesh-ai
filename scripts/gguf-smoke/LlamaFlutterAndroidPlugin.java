@@ -63,12 +63,14 @@ public final class LlamaFlutterAndroidPlugin {
         if (!condition) throw new AssertionError(message);
     }
 
-    private void checkVisualPlan(String system, String request, String expected) {
+    private void checkToolPlan(String system, String request, String expected) {
         final String prompt = "<|im_start|>system\n" + system + "<|im_end|>\n"
                 + "<|im_start|>user\n" + request + "<|im_end|>\n"
                 + "<|im_start|>assistant\n<think>\n\n</think>\n\n";
-        require(generate("visual-plan", prompt, null, true, 4).trim().equals(expected),
-                "visual plan differs for " + request);
+        final String actual = generate("tool-plan", prompt, null, true, 4).trim();
+        require(expected.equals("text")
+                ? !actual.equals("artwork") && !actual.equals("calc") && !actual.equals("mixed")
+                : actual.equals(expected), "tool plan differs for " + request);
     }
 
     public static void main(String[] args) throws IOException {
@@ -103,17 +105,30 @@ public final class LlamaFlutterAndroidPlugin {
             }
             if (args.length >= 5) {
                 final String system = new String(Files.readAllBytes(Paths.get(args[4])), StandardCharsets.UTF_8);
-                smoke.checkVisualPlan(system, "Create image of a flying car", "artwork");
-                smoke.checkVisualPlan(system, "A flying car above Cairo", "artwork");
-                smoke.checkVisualPlan(system, "Could you show me what a flying car over a rainy Cairo might look like?", "artwork");
-                smoke.checkVisualPlan(system, "ارسم سيارة تطير فوق القاهرة ليلاً", "artwork");
-                smoke.checkVisualPlan(system, "Explain how a flying car would work.", "text");
-                smoke.checkVisualPlan(system, "Write a prompt I could give a painter to depict a flying car.", "text");
-                smoke.checkVisualPlan(system, "Hi", "text");
+                smoke.checkToolPlan(system, "Create image of a flying car", "artwork");
+                smoke.checkToolPlan(system, "A flying car above Cairo", "artwork");
+                smoke.checkToolPlan(system, "Could you show me what a flying car over a rainy Cairo might look like?", "artwork");
+                smoke.checkToolPlan(system, "ارسم سيارة تطير فوق القاهرة ليلاً", "artwork");
+                smoke.checkToolPlan(system, "Explain how a flying car would work.", "text");
+                smoke.checkToolPlan(system, "Hi", "text");
+                smoke.checkToolPlan(system, "What is ((84729 × 93617) + √987654321)/(137.29² + 17.83), rounded to 8 decimal places?", "calc");
+                smoke.checkToolPlan(system, "Calculate \\frac{(84729\\times93617)+\\sqrt{987654321}}{137.29^2+17.83} to 8 decimal places.", "calc");
+                smoke.checkToolPlan(system, "كم يساوي (84729*93617+sqrt(987654321))/(137.29^2+17.83)؟", "calc");
+                smoke.checkToolPlan(system, "Write a poem about 4 + 5.", "text");
+            }
+            if (args.length >= 7) {
+                final String system = new String(Files.readAllBytes(Paths.get(args[6])), StandardCharsets.UTF_8);
+                smoke.checkToolPlan(system, "Calculate to 8 decimal places.", "8");
             }
             if (args.length >= 6) {
                 final String system = new String(Files.readAllBytes(Paths.get(args[5])), StandardCharsets.UTF_8);
-                smoke.checkVisualPlan(system, "I need an illustration of a flying car and a list of current aerospace funding rounds.", "mixed");
+                smoke.checkToolPlan(system, "I need an illustration of a flying car and a list of current aerospace funding rounds.", "mixed");
+                smoke.checkToolPlan(system, "Write a prompt I could give a painter to depict a flying car.", "text");
+            }
+            if (args.length >= 8) {
+                final String system = new String(Files.readAllBytes(Paths.get(args[7])), StandardCharsets.UTF_8);
+                smoke.checkToolPlan(system, "Write a prompt I could give a painter to depict a flying car.", "text");
+                smoke.checkToolPlan(system, "Could you show me what a flying car over a rainy Cairo might look like?", "artwork");
             }
         } finally {
             smoke.nativeFreeModel();

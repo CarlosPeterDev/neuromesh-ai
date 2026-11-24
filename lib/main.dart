@@ -106,7 +106,7 @@ void main() {
           if (Get.isRegistered<ChatController>() &&
               (source == 'chat' ||
                   source == 'chat-tools' ||
-                  source == InferenceService.visualPlanSource ||
+                  source == InferenceService.toolPlanSource ||
                   source == 'summary' ||
                   source == 'title')) {
             Get.find<ChatController>().stopGenerating(stopLocalEngine: false);
