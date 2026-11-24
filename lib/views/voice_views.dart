@@ -1107,7 +1107,8 @@ class _VoiceCallViewState extends State<VoiceCallView> {
             agent.policyFor('built-in', name, needsConfirm: false) != 'block').toSet(),
           cancellation: cancellation.future,
           compactPrompt: contextSize < 900,
-          generationHasOwnDeadline: true,
+          nativeMarkup: inference.usesNativeMarkupTools,
+          generationHasOwnDeadline: Platform.isAndroid,
           onStage: (stage) => _set(_CallState.thinking, '$stage…'),
           onTrace: (trace) {
             if (!mounted || _ended) return;
@@ -1406,7 +1407,7 @@ class _VoiceCallViewState extends State<VoiceCallView> {
               },
             ),
             IconButton(
-              tooltip: 'Agent workspace',
+              tooltip: 'Chat workspace',
               icon: const Icon(Icons.folder_open_outlined),
               onPressed: () => Get.to(() => const ChatWorkspaceView()),
             ),

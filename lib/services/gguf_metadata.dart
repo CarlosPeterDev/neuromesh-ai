@@ -20,6 +20,7 @@ class GgufInfo {
   final int? keyLength;
   final int? valueLength;
   final int fileBytes;
+  final bool hasMarkupToolTemplate;
 
   const GgufInfo({
     required this.architecture,
@@ -37,6 +38,7 @@ class GgufInfo {
     required this.keyLength,
     required this.valueLength,
     required this.fileBytes,
+    this.hasMarkupToolTemplate = false,
   });
 
   int get _headDimK =>
@@ -315,6 +317,7 @@ class _GgufReader {
               key == 'clip.has_text_encoder'
           : key == 'general.architecture' ||
               key == 'general.name' ||
+              key == 'tokenizer.chat_template' ||
               key == 'general.size_label' ||
               key == 'general.file_type' ||
               key == 'general.parameter_count' ||
@@ -347,7 +350,17 @@ class _GgufReader {
     if (layers == null || embedding == null || heads == null || heads == 0) {
       return null;
     }
+    final template = values['tokenizer.chat_template'];
     return GgufInfo(
+      hasMarkupToolTemplate: template is String &&
+          [
+            '<|im_start|>',
+            '<tools>',
+            '<tool_call>',
+            '<function=',
+            '<parameter=',
+            'tool_calls'
+          ].every(template.contains),
       architecture: arch,
       name: values['general.name'] as String?,
       sizeLabel: values['general.size_label'] as String?,

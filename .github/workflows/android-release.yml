@@ -15,6 +15,10 @@ on:
         description: Test Android packages with development signing and upload them to Actions
         type: boolean
         default: false
+      publish_release:
+        description: Publish a verified release for the selected branch
+        type: boolean
+        default: false
 
 # Serialize main release builds so publication and Latest selection agree.
 concurrency:
@@ -28,7 +32,7 @@ env:
   NEUROMESH_REPORT_ENDPOINT: ${{ !inputs.preview_only && !inputs.play_bundle_only && vars.NEUROMESH_REPORT_ENDPOINT || '' }}
   NEUROMESH_REPORT_BOT_TOKEN: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.NEUROMESH_REPORT_BOT_TOKEN || '' }}
   NEUROMESH_REPORT_CHAT_ID: ${{ !inputs.preview_only && !inputs.play_bundle_only && secrets.NEUROMESH_REPORT_CHAT_ID || '' }}
-  REQUIRE_DEVELOPER_REPORT_DELIVERY: ${{ !inputs.preview_only && !inputs.play_bundle_only && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
+  REQUIRE_DEVELOPER_REPORT_DELIVERY: ${{ !inputs.preview_only && !inputs.play_bundle_only && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || inputs.publish_release) && 'true' || 'false' }}
   BASE_VERSION: "1.0"   # MAJOR.MINOR; patch comes from the CI run number
   ANDROID_VERSION_CODE_BASE: 5000   # Exceed legacy split-ABI APK version codes (including 4072)
 
@@ -115,7 +119,7 @@ jobs:
         run: flutter pub get
 
       - name: Analyze
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        run: flutter analyze --no-fatal-infos
 
       - name: Test
         run: |
@@ -332,6 +336,8 @@ jobs:
             adb install "$RUNNER_TEMP/universal.apk"
             adb shell pm path com.neuromesh.ai | grep -F 'package:'
             adb install -r "$RUNNER_TEMP/universal.apk"
+            adb shell am start -W -n com.neuromesh.ai/com.neuromesh.ai.MainActivity | tr -d '\r' | grep -F 'Status: ok'
+            adb shell pidof com.neuromesh.ai | grep -E '[0-9]+'
 
       - name: Android test APK upgrade and Play split coexistence
         if: github.event_name != 'pull_request' && !inputs.play_bundle_only && steps.standalone_sign.outputs.channel == 'public-test'
@@ -412,7 +418,10 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
+    if: (github.ref == 'refs/heads/main' || inputs.publish_release) && github.event_name != 'pull_request' && !inputs.play_bundle_only && !inputs.preview_only
+    concurrency:
+      group: neuromesh-android-publication
+      cancel-in-progress: false
     needs: [build]
     runs-on: ubuntu-latest
     timeout-minutes: 30

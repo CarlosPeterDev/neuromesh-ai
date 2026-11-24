@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'chat_tool_loop.dart';
+import 'gguf_metadata.dart';
 import '../utils/thought_parser.dart';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart' show PlatformException;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:get/get.dart';
 
 import 'hive_service.dart';
@@ -77,6 +79,7 @@ class InferenceService extends GetxService {
   platform.InferenceEngine? _engine;
   String _sessionNativeRuntime = '';
   Timer? _capabilityTimer;
+  bool usesNativeMarkupTools = false;
   final capabilityNotice = ''.obs;
   bool get preferCompactToolPrompt => capabilityNotice.value.isNotEmpty;
   static const _probeSource = 'capability-check';
@@ -283,6 +286,10 @@ class InferenceService extends GetxService {
         );
       }
 
+      usesNativeMarkupTools = !isLiteRt &&
+          !kIsWeb &&
+          Platform.isAndroid &&
+          (await readGgufInfo(modelPath))?.hasMarkupToolTemplate == true;
       modelLoadMs = loadClock.elapsedMilliseconds;
       isModelLoaded.value = true;
       _capabilityTimer?.cancel();
@@ -349,6 +356,7 @@ class InferenceService extends GetxService {
     }
     _engine = null;
     modelLoadMs = null;
+    usesNativeMarkupTools = false;
     _capabilityTimer?.cancel();
     capabilityNotice.value = '';
     isModelLoaded.value = false;
@@ -391,7 +399,7 @@ class InferenceService extends GetxService {
         _loadedProjector,
       ]);
       final key =
-          'chat_capabilities_v1:${sha256.convert(utf8.encode(profile))}';
+          'chat_capabilities_v2:${sha256.convert(utf8.encode(profile))}';
       if (revision != modelRevision ||
           !isModelLoaded.value ||
           isGenerating.value) return;
@@ -412,8 +420,10 @@ class InferenceService extends GetxService {
       if (stops != stopCount || revision != modelRevision || isGenerating.value)
         return;
       final call = await generate(
-        prompt: 'Use the calculator tool to evaluate 2+2.',
-        systemPrompt: ChatToolLoop.instructions({'calculator'}, compact: true),
+        prompt:
+            'Call the calculator with expression 2+2. Return only the tool request.',
+        systemPrompt: ChatToolLoop.instructions({'calculator'},
+            compact: true, nativeMarkup: usesNativeMarkupTools),
         source: _probeSource,
         maxTokens: 48,
       );
@@ -424,7 +434,8 @@ class InferenceService extends GetxService {
         'ordinaryText':
             !text.startsWith('ERROR:') && splitThoughtTags(text).hasAnswer,
         'streamed': chunks > 0,
-        'validatedToolCall': ChatToolLoop.validProbeCall(call),
+        'validatedToolCall': ChatToolLoop.validProbeCall(call,
+            nativeMarkup: usesNativeMarkupTools),
       };
       _showCapabilities(result);
       await _hive.setSetting(key, result);

@@ -139,7 +139,7 @@ class _SendTabState extends State<_SendTab>
             }),
           ),
         const Text(
-            'Personal backups are encrypted. The receiving device merges workspace files and can reinstall Alpine through Setup.'),
+            'Personal backups are encrypted. The receiving device merges saved Chat workspace files.'),
       ],
       if (!on) ...[
         if (_addresses.length > 1)

@@ -19,6 +19,7 @@ NeuroMesh AI $tag
 - GitHub APK signing channel: $STANDALONE_CHANNEL
 - Android APK signer SHA-256: $APK_SIGNER
 - Play AAB: $AAB_MB MB file, $SPLIT_MB MB ARM64 split download
+- Android packaging, signature checks and emulator installation passed. Physical-device inference checks are recorded in the project handoff.
 - Download each installer separately and verify it using SHA256SUMS.txt.
 NOTES
 if [[ "$STANDALONE_CHANNEL" == "public-test" ]]; then

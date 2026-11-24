@@ -1349,7 +1349,10 @@ class ChatController extends GetxController {
                 evidenceBudget: (contextSize ~/ 2).clamp(300, 1800),
                 compactPrompt: inferenceMode == 'local' &&
                     (contextSize <= 2048 || inference.preferCompactToolPrompt),
-                generationHasOwnDeadline: inferenceMode == 'local',
+                nativeMarkup:
+                    inferenceMode == 'local' && inference.usesNativeMarkupTools,
+                generationHasOwnDeadline:
+                    inferenceMode == 'local' && !kIsWeb && Platform.isAndroid,
                 onStage: (stage) {
                   if (generationId == _generationSerial)
                     responseStage.value = stage;

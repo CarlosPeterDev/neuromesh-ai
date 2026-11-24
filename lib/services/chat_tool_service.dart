@@ -662,6 +662,10 @@ class ChatToolService extends GetxService {
       return output.length > 6000
           ? '${output.substring(0, 6000)}\n…(truncated)'
           : output;
+    } on FormatException catch (error) {
+      return 'Error: ${error.message}';
+    } on ArgumentError {
+      return 'Error: the tool rejected an argument. Check its settings and try again.';
     } on Exception {
       return 'Error: the tool failed. Check its configuration and try again.';
     }

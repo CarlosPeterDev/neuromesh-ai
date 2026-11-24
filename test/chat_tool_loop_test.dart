@@ -131,6 +131,18 @@ void main() {
     expect(result.trace, hasLength(1));
   });
 
+  test('validates the GGUF markup tool protocol and rejects duplicate fields',
+      () {
+    const request = '<tool_call>\n<function=calculator>\n'
+        '<parameter=expression>\n2+2\n</parameter>\n'
+        '</function>\n</tool_call>';
+    expect(ChatToolLoop.validProbeCall(request, nativeMarkup: true), isTrue);
+    expect(ChatToolLoop.validProbeCall(request), isFalse);
+    final duplicate = request.replaceFirst(
+        '</function>', '<parameter=expression>\n5\n</parameter>\n</function>');
+    expect(ChatToolLoop.validProbeCall(duplicate, nativeMarkup: true), isFalse);
+  });
+
   test('slow first text can wait within the runtime deadline', () async {
     final reply = Completer<String>();
     final pending =

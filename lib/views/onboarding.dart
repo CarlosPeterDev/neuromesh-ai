@@ -35,7 +35,7 @@ const _news = <String>[
   'Voice calls with on-device listening and speaking',
   'Pin chats, regenerate and edit-and-resend messages',
   'Chat with your documents (offline keyword search)',
-  'Agent memory, private files and web fetch with approval',
+  'Chat memory, attachments and model-directed tools',
   'Compare two models, benchmark, auto context size, download queue',
 ];
 
