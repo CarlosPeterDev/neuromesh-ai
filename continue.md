@@ -1,6 +1,10 @@
 # NeuroMesh AI development handoff
 
-## Current milestone — adaptive Android Chat
+## Current milestone — Android GGUF correctness
+
+The `android-gguf-correctness` branch continues from the v1.0.204 handoff. A host fault-injection experiment reproduced the ASCII corruption pattern in the old sampler path. The updated native runtime validates GGUF tensors and scores, encodes Unicode prompts correctly, and runs actual model generation as part of the Android release gate. The original phone's backend and model fingerprint remain unknown. [Investigation and results](docs/ANDROID_GGUF_CORRECTNESS.md) · [Android build and publication](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/45451632477)
+
+## Prior milestone — adaptive Android Chat
 
 The `android-adaptive-inference` branch starts at `a0cfa75`. Chat streams ordinary replies and validates model-selected tool requests. Android GGUF Chat counts tokens for the formatted prompt, and the capability check runs in the background when the model is idle. Chat retains attachment workspaces, saved media, memory, search, image generation, speech and cluster integration. The standalone Agent, MCP, Alpine and OpenCode integrations have been removed. [Dependency map and verification](docs/ANDROID_ADAPTIVE_INFERENCE.md)
 
