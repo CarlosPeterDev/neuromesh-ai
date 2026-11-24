@@ -4,7 +4,9 @@
 
 The `android-adaptive-inference` branch starts at `a0cfa75`. Chat streams ordinary replies and validates model-selected tool requests. Android GGUF Chat counts tokens for the formatted prompt, and the capability check runs in the background when the model is idle. Chat retains attachment workspaces, saved media, memory, search, image generation, speech and cluster integration. The standalone Agent, MCP, Alpine and OpenCode integrations have been removed. [Dependency map and verification](docs/ANDROID_ADAPTIVE_INFERENCE.md)
 
-The package workflow for `ef8bbf1` is [Android run 45401242438](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/45401242438). The [physical Android matrix](docs/ANDROID_DEVICE_TESTS.md) includes the reported 0.8B scenario. All 204 Flutter tests passed with genuine projector and voice fixtures. Local analysis reported zero warnings or errors. The actual host Chat adapter streamed and saved replies with and without the projector. The phone reproduction remains in the device matrix.
+**v1.0.204** was built from `ef8bbf1` and published as GitHub Latest. Android 12 installed and upgraded the public Test APK and launched the Play-derived splits alongside it. The development-signed AAB is 185.34 MB, with a 104.99 MB ARM64 split download. All three published package digests and archive contents were checked after downloading. [Release](https://github.com/CarlosPeterDev/neuromesh-ai/releases/tag/v1.0.204) · [Build and publication](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/45401242438)
+
+All 204 Flutter tests passed with genuine projector and voice fixtures. Analysis reported zero warnings or errors. The host Chat adapter streamed and saved replies with and without the projector and recovered after cancelling before first output. The reported phone scenario remains in the [physical Android matrix](docs/ANDROID_DEVICE_TESTS.md).
 
 ## Prior milestone — Android stability
 
