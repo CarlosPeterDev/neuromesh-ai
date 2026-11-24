@@ -44,6 +44,13 @@ else()
     set(GGML_LLAMAFILE OFF CACHE BOOL "No FP16 NEON on ARMv7" FORCE)
 endif()
 
+if(ANDROID_ABI STREQUAL "x86_64")
+    # Match the Android x86-64 ABI baseline, including emulators without AVX.
+    foreach(feature AVX AVX2 AVX_VNNI BMI2 FMA F16C)
+        set(GGML_${feature} OFF CACHE BOOL "Use the Android x86-64 baseline" FORCE)
+    endforeach()
+endif()
+
 if(GGML_VULKAN)
     # The NDK ships vulkan.h but not vulkan.hpp/SPIR-V headers, and the
     # C++ headers must match vulkan.h exactly, so fetch one pinned set.

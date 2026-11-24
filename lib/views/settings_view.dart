@@ -735,13 +735,13 @@ class _SettingsViewState extends State<SettingsView> {
         value: 'auto_fast',
         title: 'Auto fast',
         subtitle:
-            "Uses the GPU when supported, CPU if the GPU can't load the model",
+            "Uses a supported GPU for LiteRT. GGUF uses the CPU.",
         icon: Icons.auto_awesome_outlined
       ),
       (
         value: 'gpu_fast',
         title: 'GPU fast',
-        subtitle: 'Always tries the GPU. Fastest, may crash on some devices',
+        subtitle: 'Tries a compatible GPU. GGUF falls back to CPU if backend validation fails.',
         icon: Icons.bolt_rounded
       ),
       (

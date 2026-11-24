@@ -5,6 +5,33 @@
 #include <string>
 #include <vector>
 
+// Java strings contain UTF-16 units, including surrogate pairs. Encode the
+// prompt as standard UTF-8 and preserve embedded U+0000 for the tokenizer.
+inline std::string utf16ToUtf8(const uint16_t* units, size_t length) {
+    std::string result;
+    result.reserve(length);
+    for (size_t i = 0; i < length; ++i) {
+        uint32_t scalar = units[i];
+        if (scalar >= 0xd800 && scalar <= 0xdbff && i + 1 < length &&
+            units[i + 1] >= 0xdc00 && units[i + 1] <= 0xdfff) {
+            scalar = 0x10000 + ((scalar - 0xd800) << 10) + (units[++i] - 0xdc00);
+        } else if (scalar >= 0xd800 && scalar <= 0xdfff) {
+            scalar = 0xfffd;
+        }
+        if (scalar < 0x80) {
+            result.push_back(static_cast<char>(scalar));
+        } else {
+            const size_t width = scalar < 0x800 ? 2 : scalar < 0x10000 ? 3 : 4;
+            const unsigned prefix[] = {0, 0, 0xc0, 0xe0, 0xf0};
+            result.push_back(static_cast<char>(prefix[width] | (scalar >> (6 * (width - 1)))));
+            for (size_t remain = width - 1; remain > 0; --remain) {
+                result.push_back(static_cast<char>(0x80 | ((scalar >> (6 * (remain - 1))) & 0x3f)));
+            }
+        }
+    }
+    return result;
+}
+
 // llama.cpp token pieces can end in the middle of a UTF-8 character. JNI
 // NewStringUTF expects modified UTF-8, so emit completed UTF-16 units instead.
 class Utf8TokenStream {
@@ -55,6 +82,12 @@ public:
         }
         pending_.erase(0, offset);
         return text;
+    }
+
+    std::vector<uint16_t> finish() {
+        if (pending_.empty()) return {};
+        pending_.clear();
+        return {0xfffd};
     }
 
 private:

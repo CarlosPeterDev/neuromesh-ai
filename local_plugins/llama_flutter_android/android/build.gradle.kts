@@ -57,8 +57,8 @@ android {
         
         ndk {
             // arm64: full build (CPU variants + Vulkan). armeabi-v7a: plain CPU
-            // build for phones running 32-bit Android (e.g. Android Go).
-            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+            // build for 32-bit phones. x86_64 supports Android emulators.
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86_64"))
         }
         
         externalNativeBuild {

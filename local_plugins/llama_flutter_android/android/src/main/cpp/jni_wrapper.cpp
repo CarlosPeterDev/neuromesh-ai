@@ -28,6 +28,7 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "utf8_token_stream.h"
+#include "gguf_logits.h"
 #define LOG_TAG "LlamaJNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -587,133 +588,40 @@ static void throwLoadError(JNIEnv* env, const std::string& message) {
     env->ThrowNew(exception, message.c_str());
 }
 
-// Helper function to validate UTF-8 strings
-static bool isValidUTF8(const char* str, size_t len) {
-    if (!str) return false;
-    
-    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(str);
-    size_t i = 0;
-    
-    while (i < len) {
-        unsigned char c = bytes[i];
-        
-        // ASCII character (0xxxxxxx)
-        if ((c & 0x80) == 0) {
-            i++;
-            continue;
-        }
-        
-        // Multi-byte sequence start (110xxxxx, 1110xxxx, or 11110xxx)
-        int num_bytes = 0;
-        if ((c & 0xE0) == 0xC0) {
-            num_bytes = 2; // 110xxxxx
-        } else if ((c & 0xF0) == 0xE0) {
-            num_bytes = 3; // 1110xxxx
-        } else if ((c & 0xF8) == 0xF0) {
-            num_bytes = 4; // 11110xxx
-        } else {
-            // Invalid first byte
-            return false;
-        }
-        
-        // Check if we have enough bytes left
-        if (i + num_bytes > len) {
-            return false;
-        }
-        
-        // Check continuation bytes (10xxxxxx)
-        for (int j = 1; j < num_bytes; j++) {
-            if ((bytes[i + j] & 0xC0) != 0x80) {
-                return false;
-            }
-        }
-        
-        // Check for overlong encodings and invalid code points
-        if (num_bytes == 2) {
-            // Overlong encoding of ASCII character
-            if ((c & 0x1E) == 0) return false;
-        } else if (num_bytes == 3) {
-            // Invalid surrogate halves (U+D800-U+DFFF)
-            if (c == 0xED && (bytes[i + 1] & 0x20) == 0x20) return false;
-            // Overlong encoding
-            if (c == 0xE0 && (bytes[i + 1] & 0x20) == 0) return false;
-        } else if (num_bytes == 4) {
-            // Out of Unicode range (> U+10FFFF)
-            if (c > 0xF4) return false;
-            // Overlong encoding
-            if (c == 0xF0 && (bytes[i + 1] & 0x30) == 0) return false;
-            // Invalid code points (> U+10FFFF)
-            if (c == 0xF4 && bytes[i + 1] > 0x8F) return false;
-        }
-        
-        i += num_bytes;
-    }
-    
-    return true;
+// GetStringUTFChars produces modified UTF-8. llama.cpp tokenizers expect
+// standard UTF-8, including four-byte supplementary characters.
+static std::string fromJavaString(JNIEnv* env, jstring value) {
+    if (!value) return {};
+    const jsize length = env->GetStringLength(value);
+    const jchar* units = env->GetStringChars(value, nullptr);
+    if (!units) return {};
+    const std::string result = utf16ToUtf8(units, length);
+    env->ReleaseStringChars(value, units);
+    return result;
 }
 
-// Helper function to sanitize UTF-8 strings
-static std::string sanitizeUTF8(const char* str, size_t len) {
-    if (!str || len == 0) return "";
-    
-    // First try to validate as-is
-    if (isValidUTF8(str, len)) {
-        return std::string(str, len);
-    }
-    
-    // If invalid, create a sanitized version
-    std::string result;
-    result.reserve(len);
-    
-    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(str);
-    size_t i = 0;
-    
-    while (i < len) {
-        unsigned char c = bytes[i];
-        
-        // ASCII character (0xxxxxxx)
-        if ((c & 0x80) == 0) {
-            result += c;
-            i++;
-            continue;
-        }
-        
-        // Multi-byte sequence start
-        int num_bytes = 0;
-        if ((c & 0xE0) == 0xC0) {
-            num_bytes = 2;
-        } else if ((c & 0xF0) == 0xE0) {
-            num_bytes = 3;
-        } else if ((c & 0xF8) == 0xF0) {
-            num_bytes = 4;
-        } else {
-            // Invalid first byte, replace with replacement character
-            result += "\xEF\xBF\xBD"; // 
-            i++;
-            continue;
-        }
-        
-        // Check if we have enough bytes left
-        if (i + num_bytes > len) {
-            result += "\xEF\xBF\xBD"; // 
+static std::string checkModelOutput(llama_context* ctx, const llama_vocab* vocab) {
+    constexpr char input[] = "Hello, world.";
+    llama_token ids[32];
+    const int count = llama_tokenize(vocab, input, sizeof(input) - 1, ids, 32, true, false);
+    if (count <= 0) return "the tokenizer could not encode the readiness probe";
+
+    auto* memory = llama_get_memory(ctx);
+    const int vocabulary = llama_vocab_n_tokens(vocab);
+    std::string error;
+    for (int i = 0; i < count; ++i) {
+        if (llama_decode(ctx, llama_batch_get_one(ids + i, 1)) != 0) {
+            error = "the backend could not evaluate the readiness probe";
             break;
         }
-        
-        // Extract the sequence
-        std::string seq(reinterpret_cast<const char*>(bytes + i), num_bytes);
-        
-        // Validate the sequence
-        if (isValidUTF8(seq.c_str(), num_bytes)) {
-            result += seq;
-        } else {
-            // Invalid sequence, replace with replacement character
-            result += "\xEF\xBF\xBD"; // 
+        const auto status = ggufLogitsStatus(llama_get_logits_ith(ctx, -1), vocabulary);
+        if (status != GgufLogitsStatus::usable) {
+            error = std::string(ggufLogitsStatusName(status)) + " logits during the readiness probe";
+            break;
         }
-        
-        i += num_bytes;
     }
-    
-    return result;
+    if (memory) llama_memory_clear(memory, true);
+    return error;
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -755,28 +663,29 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     jobject progress_callback) {
     const std::lock_guard<std::mutex> inference_lock(g_inference_mutex);
     g_context_size = 0;
-    
+    g_stop_flag = false;
+
     if (!path) {
         throwLoadError(env, "GGUF model path is missing");
         return;
     }
 
-    const char* model_path = env->GetStringUTFChars(path, nullptr);
-    if (!model_path) {
+    const auto path_text = fromJavaString(env, path);
+    if (env->ExceptionCheck()) return;
+    if (path_text.empty()) {
         throwLoadError(env, "Could not read the GGUF model path");
         return;
     }
-    LOGI("Loading model: %s", model_path);
+    const char* model_path = path_text.c_str();
+    LOGI("Loading GGUF model");
 
     std::ifstream model_file(model_path, std::ios::binary | std::ios::ate);
     if (!model_file) {
-        env->ReleaseStringUTFChars(path, model_path);
         throwLoadError(env, "GGUF model file is missing or unreadable");
         return;
     }
     const std::streamsize model_size = model_file.tellg();
     if (model_size < 4) {
-        env->ReleaseStringUTFChars(path, model_path);
         throwLoadError(env, "GGUF model file is empty or incomplete");
         return;
     }
@@ -784,7 +693,6 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     char magic[4] = {};
     model_file.read(magic, sizeof(magic));
     if (!model_file || std::memcmp(magic, "GGUF", sizeof(magic)) != 0) {
-        env->ReleaseStringUTFChars(path, model_path);
         throwLoadError(env, "Invalid GGUF model header");
         return;
     }
@@ -795,6 +703,11 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     // Model parameters
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = n_gpu_layers;
+    // Validate stored quantization blocks and use the standard weight layout.
+    // This avoids device-specific repacking paths while retaining the CPU ISA
+    // selected by ggml and explicit GPU/RPC placement.
+    model_params.check_tensors = true;
+    model_params.use_extra_bufts = false;
     // With no GPU layers requested, give llama.cpp an empty device list so
     // it can't touch a GPU at all (even if the Vulkan backend is loaded).
     static ggml_backend_dev_t no_gpu_devices[] = {nullptr};
@@ -877,7 +790,6 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
 
     // Load model
     g_model = llama_model_load_from_file(model_path, model_params);
-    env->ReleaseStringUTFChars(path, model_path);
     
     if (!g_model) {
         const std::string detail = consumeLoadError();
@@ -952,10 +864,40 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
         return;
     }
     
+    char architecture[64] = {};
+    char file_type[24] = {};
+    llama_model_meta_val_str(g_model, "general.architecture", architecture, sizeof(architecture));
+    llama_model_meta_val_str(g_model, "general.file_type", file_type, sizeof(file_type));
+    const auto probe_start = std::chrono::steady_clock::now();
+    const std::string probe_error = checkModelOutput(g_ctx, g_vocab);
+    const auto probe_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - probe_start).count();
+    LOGI("GGUF arch=%s file_type=%s ggml_version=%s build=%s backend=%s layers=%lld ctx=%u threads=%lld "
+         "vocab=%d bos=%d eos=%d add_bos=%d add_eos=%d template=%d probe_ms=%lld probe_ok=%d",
+         architecture, file_type, ggml_version(), ggml_commit(),
+         has_cluster ? "rpc" : n_gpu_layers > 0 ? "vulkan" : "cpu",
+         static_cast<long long>(has_cluster ? cluster.n_gpu_layers : n_gpu_layers),
+         llama_n_ctx_seq(g_ctx), static_cast<long long>(n_threads),
+         llama_vocab_n_tokens(g_vocab), llama_vocab_bos(g_vocab), llama_vocab_eos(g_vocab),
+         llama_vocab_get_add_bos(g_vocab), llama_vocab_get_add_eos(g_vocab),
+         llama_model_chat_template(g_model, nullptr) != nullptr,
+         static_cast<long long>(probe_ms), probe_error.empty());
+    if (!probe_error.empty()) {
+        llama_free(g_ctx);
+        llama_model_free(g_model);
+        g_ctx = nullptr;
+        g_model = nullptr;
+        g_vocab = nullptr;
+        throwLoadError(env, "GGUF backend validation failed: " + probe_error +
+            ". Reload with CPU safe or verify the GGUF against its publisher's checksum.");
+        return;
+    }
+
     // Reset KV cache position counter for new model
-    g_context_size = llama_n_ctx(g_ctx);
+    g_context_size = llama_n_ctx_seq(g_ctx);
     g_n_past = 0;
     g_cached_tokens.clear();
+    g_cache_reusable = true;
 
     if (progress_callback) progress.emit(1.0f);
 
@@ -978,8 +920,9 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     freeMtmd();
     if (!g_model) return env->NewStringUTF("Load the text model first");
     if (!path) return env->NewStringUTF("Vision file path is missing");
-    const char* mmproj_path = env->GetStringUTFChars(path, nullptr);
-    if (!mmproj_path) return env->NewStringUTF("Could not read the vision file path");
+    const auto mmproj_path = fromJavaString(env, path);
+    if (env->ExceptionCheck()) return nullptr;
+    if (mmproj_path.empty()) return env->NewStringUTF("Could not read the vision file path");
 
     mtmd_context_params params = mtmd_context_params_default();
     // Image encoding stays on the CPU: mobile Vulkan drivers have been
@@ -997,11 +940,10 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadM
     }
     mtmd_helper_log_set(androidLlamaLog, nullptr);
     try {
-        g_mtmd = mtmd_init_from_file(mmproj_path, g_model, params);
+        g_mtmd = mtmd_init_from_file(mmproj_path.c_str(), g_model, params);
     } catch (const std::exception& e) {
         LOGE("Vision projector initialization failed: %s", e.what());
     }
-    env->ReleaseStringUTFChars(path, mmproj_path);
     const std::string detail = consumeLoadError();
 
     if (!g_mtmd) {
@@ -1050,7 +992,7 @@ static bool prepareImagePrompt(JNIEnv* env, const std::string& image_file,
         const auto positions = mtmd_helper_get_n_pos(chunks.get());
         const auto tokens = mtmd_helper_get_n_tokens(chunks.get());
         const auto occupied = std::max<int64_t>(positions, tokens);
-        generation_budget = (int)std::max<int64_t>(0, llama_n_ctx(g_ctx) - occupied);
+        generation_budget = (int)std::max<int64_t>(0, llama_n_ctx_seq(g_ctx) - occupied);
         if (generation_budget < 64) {
             return fail("The image and chat exceed the context. Start a new chat or increase the context size.");
         }
@@ -1096,24 +1038,27 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         return;
     }
 
-    const char* prompt_str = env->GetStringUTFChars(prompt, nullptr);
-    if (!prompt_str) return;
-    if (g_stop_flag) {
-        env->ReleaseStringUTFChars(prompt, prompt_str);
+    if (!std::isfinite(temperature) || temperature < 0 || temperature > 10 ||
+        !std::isfinite(top_p) || top_p <= 0 || top_p > 1 ||
+        !std::isfinite(min_p) || min_p < 0 || min_p > 1 ||
+        !std::isfinite(typical_p) || typical_p <= 0 || typical_p > 1 ||
+        !std::isfinite(repeat_penalty) || repeat_penalty <= 0 ||
+        !std::isfinite(frequency_penalty) || !std::isfinite(presence_penalty) ||
+        !std::isfinite(mirostat_tau) || !std::isfinite(mirostat_eta)) {
+        throwLoadError(env, "Invalid GGUF sampling settings");
         return;
     }
 
-    std::string image_file;
-    if (image_path) {
-        const char* p = env->GetStringUTFChars(image_path, nullptr);
-        if (p) {
-            image_file = p;
-            env->ReleaseStringUTFChars(image_path, p);
-        }
+    const auto prompt_text = fromJavaString(env, prompt);
+    const auto image_file = fromJavaString(env, image_path);
+    if (env->ExceptionCheck() || g_stop_flag) return;
+    if (prompt_text.empty()) {
+        throwLoadError(env, "The GGUF prompt is empty");
+        return;
     }
+
     const bool with_image = !image_file.empty();
     if (with_image && !g_mtmd) {
-        env->ReleaseStringUTFChars(prompt, prompt_str);
         jclass exception = env->FindClass("java/lang/IllegalStateException");
         env->ThrowNew(exception, "This model has no vision file loaded, so it can't read images");
         return;
@@ -1125,28 +1070,17 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
             std::chrono::steady_clock::now() - start).count();
     };
     int image_generation_budget = 0;
-    if (with_image) {
-        const std::string sanitized = sanitizeUTF8(prompt_str, strlen(prompt_str));
-        env->ReleaseStringUTFChars(prompt, prompt_str);
-        if (!prepareImagePrompt(env, image_file, sanitized, image_generation_budget)) return;
-    }
+    if (with_image && !prepareImagePrompt(env, image_file, prompt_text, image_generation_budget)) return;
 
     llama_batch batch = llama_batch_init(512, 0, 1);
     if (!with_image) {
-    // Never log prompt text: it is the user's conversation.
-    const int prompt_len = strlen(prompt_str);
-
-    // Sanitize the UTF-8 string before tokenizing
-    std::string sanitized_prompt = sanitizeUTF8(prompt_str, prompt_len);
-    const char* sanitized_cstr = sanitized_prompt.c_str();
-    const int sanitized_len = sanitized_prompt.length();
-    
-    // Tokenize prompt - when tokens is NULL, llama_tokenize returns NEGATIVE count
-    const int n_prompt_tokens = -llama_tokenize(g_vocab, sanitized_cstr, sanitized_len, nullptr, 0, true, true);
+    // Count the exact prompt using the model's tokenizer and special-token metadata.
+    const char* prompt_bytes = prompt_text.data();
+    const int prompt_length = static_cast<int>(prompt_text.size());
+    const int n_prompt_tokens = -llama_tokenize(g_vocab, prompt_bytes, prompt_length, nullptr, 0, true, true);
     LOGI("Token count: %d", n_prompt_tokens);
     
     if (n_prompt_tokens <= 0) {
-        env->ReleaseStringUTFChars(prompt, prompt_str);
         jclass exception = env->FindClass("java/lang/RuntimeException");
         char error_msg[256];
         snprintf(error_msg, sizeof(error_msg), "Failed to tokenize prompt (got %d tokens)", n_prompt_tokens);
@@ -1155,18 +1089,16 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         return;
     }
     std::vector<llama_token> tokens(n_prompt_tokens);
-    const int actual_tokens = llama_tokenize(g_vocab, sanitized_cstr, sanitized_len, tokens.data(), tokens.size(), true, true);
+    const int actual_tokens = llama_tokenize(g_vocab, prompt_bytes, prompt_length, tokens.data(), tokens.size(), true, true);
     if (actual_tokens < 0) {
-        env->ReleaseStringUTFChars(prompt, prompt_str);
         jclass exception = env->FindClass("java/lang/RuntimeException");
         env->ThrowNew(exception, "Failed to tokenize prompt");
         llama_batch_free(batch);
         return;
     }
     tokens.resize(actual_tokens);
-    env->ReleaseStringUTFChars(prompt, prompt_str);
 
-    const int n_ctx = llama_n_ctx(g_ctx);
+    const int n_ctx = llama_n_ctx_seq(g_ctx);
 
     // Leave room for the reply. If the conversation is longer than that, keep
     // its start (system prompt) and its most recent part, dropping the middle.
@@ -1272,45 +1204,24 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         ));
     }
     
-    // Temperature sampling
-    llama_sampler_chain_add(g_sampler, llama_sampler_init_temp(temperature));
-    
-    // Add advanced samplers if enabled
-    if (mirostat == 1) {
-        llama_sampler_chain_add(g_sampler, llama_sampler_init_mirostat(
-            llama_vocab_n_tokens(g_vocab),  // Use the vocab to get n_vocab
-            sampler_seed,
-            mirostat_tau,
-            mirostat_eta,
-            100  // m parameter
-        ));
-    } else if (mirostat == 2) {
-        llama_sampler_chain_add(g_sampler, llama_sampler_init_mirostat_v2(
-            sampler_seed,
-            mirostat_tau,
-            mirostat_eta
-        ));
+    // Match the reference sampler order. Mirostat and greedy each make the
+    // final selection themselves and must not be followed by distribution.
+    if (temperature <= 0) {
+        llama_sampler_chain_add(g_sampler, llama_sampler_init_greedy());
+    } else if (mirostat == 1 || mirostat == 2) {
+        llama_sampler_chain_add(g_sampler, llama_sampler_init_temp(temperature));
+        llama_sampler_chain_add(g_sampler, mirostat == 1
+            ? llama_sampler_init_mirostat(llama_vocab_n_tokens(g_vocab),
+                sampler_seed, mirostat_tau, mirostat_eta, 100)
+            : llama_sampler_init_mirostat_v2(sampler_seed, mirostat_tau, mirostat_eta));
     } else {
-        // Standard sampling chain (only if mirostat is disabled)
-        if (min_p > 0.0f && min_p < 1.0f) {
-            llama_sampler_chain_add(g_sampler, llama_sampler_init_min_p(min_p, 1));
-        }
-        
-        if (typical_p < 1.0f) {
-            llama_sampler_chain_add(g_sampler, llama_sampler_init_typical(typical_p, 1));
-        }
-        
-        if (top_k > 0) {
-            llama_sampler_chain_add(g_sampler, llama_sampler_init_top_k(top_k));
-        }
-        
-        if (top_p < 1.0f) {
-            llama_sampler_chain_add(g_sampler, llama_sampler_init_top_p(top_p, 1));
-        }
+        if (top_k > 0) llama_sampler_chain_add(g_sampler, llama_sampler_init_top_k(top_k));
+        if (typical_p < 1.0) llama_sampler_chain_add(g_sampler, llama_sampler_init_typical(typical_p, 1));
+        if (top_p < 1.0) llama_sampler_chain_add(g_sampler, llama_sampler_init_top_p(top_p, 1));
+        if (min_p > 0.0 && min_p < 1.0) llama_sampler_chain_add(g_sampler, llama_sampler_init_min_p(min_p, 1));
+        llama_sampler_chain_add(g_sampler, llama_sampler_init_temp(temperature));
+        llama_sampler_chain_add(g_sampler, llama_sampler_init_dist(sampler_seed));
     }
-    
-    // Final distribution sampler
-    llama_sampler_chain_add(g_sampler, llama_sampler_init_dist(sampler_seed));
 
     // Get callback method
     jclass callbackClass = env->GetObjectClass(token_callback);
@@ -1320,14 +1231,38 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
     Utf8TokenStream token_text;
     LOGI("Starting generation loop: max_tokens=%lld", max_tokens);
     const auto budget = std::min<jlong>(max_tokens, with_image
-        ? image_generation_budget : (int)llama_n_ctx(g_ctx) - g_n_past.load());
+        ? image_generation_budget : (int)llama_n_ctx_seq(g_ctx) - g_n_past.load());
     int sampled_tokens = 0;
+    const int n_vocab = llama_vocab_n_tokens(g_vocab);
+    std::string generation_error;
+    const char* finish_reason = "limit";
+    std::vector<char> large_piece;
+    auto emit = [&](const std::vector<uint16_t>& piece) {
+        if (piece.empty()) return;
+        const jstring token = env->NewString(piece.data(), static_cast<jsize>(piece.size()));
+        if (!token) return;
+        const jobject response = env->CallObjectMethod(token_callback, invokeMethod, token);
+        if (response) env->DeleteLocalRef(response);
+        env->DeleteLocalRef(token);
+    };
+
     for (int i = 0; i < budget && !g_stop_flag; i++) {
-        llama_token new_token_id = llama_sampler_sample(g_sampler, g_ctx, -1);
+        const auto status = ggufLogitsStatus(llama_get_logits_ith(g_ctx, -1), n_vocab);
+        if (status != GgufLogitsStatus::usable) {
+            finish_reason = "invalid_logits";
+            generation_error = std::string(ggufLogitsStatusName(status)) + " GGUF logits";
+            break;
+        }
+        const llama_token new_token_id = llama_sampler_sample(g_sampler, g_ctx, -1);
+        if (new_token_id < 0 || new_token_id >= n_vocab) {
+            finish_reason = "invalid_token";
+            generation_error = "GGUF sampler returned a token outside the model vocabulary";
+            break;
+        }
 
         // Check for end of generation (EOS/EOD tokens)
         if (llama_vocab_is_eog(g_vocab, new_token_id)) {
-            LOGI("EOS token detected, ending generation.");
+            finish_reason = "eog";
             break;
         }
 
@@ -1336,17 +1271,20 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         }
         // A model can split one Unicode character across multiple tokens.
         char buffer[256];
-        const int32_t length =
-            llama_token_to_piece(g_vocab, new_token_id, buffer, sizeof(buffer), 0, true);
-        if (length > 0 && length <= static_cast<int32_t>(sizeof(buffer))) {
-            const auto piece = token_text.append(buffer, length);
-            if (!piece.empty()) {
-                jstring token_str = env->NewString(piece.data(), static_cast<jsize>(piece.size()));
-                if (!token_str) break;
-                env->CallObjectMethod(token_callback, invokeMethod, token_str);
-                env->DeleteLocalRef(token_str);
-            }
+        const char* bytes = buffer;
+        int32_t length = llama_token_to_piece(g_vocab, new_token_id, buffer, sizeof(buffer), 0, true);
+        if (length < 0) {
+            large_piece.resize(-static_cast<int64_t>(length));
+            bytes = large_piece.data();
+            length = llama_token_to_piece(g_vocab, new_token_id, large_piece.data(),
+                static_cast<int32_t>(large_piece.size()), 0, true);
         }
+        if (length < 0) {
+            finish_reason = "token_decode";
+            generation_error = "GGUF token could not be decoded";
+            break;
+        }
+        if (length > 0) emit(token_text.append(bytes, length));
         if (env->ExceptionCheck() || i + 1 == budget) break;
 
         // Prepare next batch
@@ -1359,8 +1297,11 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         batch.n_tokens++;
 
         if (llama_decode(g_ctx, batch) != 0) {
+            if (!g_stop_flag) {
+                finish_reason = "decode_error";
+                generation_error = "GGUF backend failed during token evaluation";
+            }
             g_cache_reusable = false;
-            LOGE("Failed to decode after sampling token %d", i + 1);
             break;
         }
         
@@ -1368,11 +1309,22 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
         g_n_past++;
         if (g_cache_reusable) g_cached_tokens.push_back(new_token_id);
     }
-    LOGI("generated_tokens=%d decode_ms=%lld cancelled=%d",
-         sampled_tokens, elapsed_ms(decode_start), g_stop_flag.load());
+    if (!g_stop_flag && !env->ExceptionCheck() && generation_error.empty()) {
+        emit(token_text.finish());
+    }
+    LOGI("generated_tokens=%d decode_ms=%lld finish=%s",
+         sampled_tokens, elapsed_ms(decode_start), g_stop_flag ? "cancelled" : finish_reason);
 
     llama_batch_free(batch);
     env->DeleteLocalRef(callbackClass);
+    if (!generation_error.empty()) {
+        g_cache_reusable = false;
+        if (auto* memory = llama_get_memory(g_ctx)) llama_memory_clear(memory, true);
+        g_cached_tokens.clear();
+        g_n_past = 0;
+        throwLoadError(env, generation_error +
+            ". Reload with CPU safe or verify the GGUF against its publisher's checksum.");
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1418,17 +1370,17 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeFreeM
 extern "C" JNIEXPORT jint JNICALL
 Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeCountPromptTokens(
     JNIEnv* env, jobject, jstring prompt) {
+    const std::lock_guard<std::mutex> inference_lock(g_inference_mutex);
     if (!g_vocab || !prompt) return 0;
-    const char* chars = env->GetStringUTFChars(prompt, nullptr);
-    if (!chars) return 0;
-    const auto text = sanitizeUTF8(chars, strlen(chars));
-    env->ReleaseStringUTFChars(prompt, chars);
+    const auto text = fromJavaString(env, prompt);
+    if (env->ExceptionCheck() || text.empty()) return 0;
     return -llama_tokenize(g_vocab, text.c_str(), text.size(), nullptr, 0, true, true);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeHasQwenThinkingTemplate(
     JNIEnv*, jobject) {
+    const std::lock_guard<std::mutex> inference_lock(g_inference_mutex);
     if (!g_model) return JNI_FALSE;
     const char* raw = llama_model_chat_template(g_model, nullptr);
     if (!raw) return JNI_FALSE;

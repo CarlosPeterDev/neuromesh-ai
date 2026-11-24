@@ -146,7 +146,9 @@ class InferenceService extends GetxService {
       final cpuOnly = safeRetry || liteRtMode == 'cpu_safe';
       final forceLiteRtCpu = isLiteRt && cpuOnly;
       final shouldTryLiteRtGpu = isLiteRt && !cpuOnly;
-      final allowGgufGpu = !isLiteRt && !cpuOnly;
+      // LiteRT's automatic GPU preference does not select Vulkan for GGUF.
+      // GGUF acceleration requires the explicit GPU Fast setting.
+      final allowGgufGpu = !isLiteRt && !cpuOnly && liteRtMode == 'gpu_fast';
       await diagnostics?.checkpoint('release previous text engine');
       await _releaseEngine();
 
@@ -179,7 +181,6 @@ class InferenceService extends GetxService {
         isLiteRt ? 'prepare LiteRT-LM' : 'prepare llama.cpp / phone cluster',
       );
       final deviceTier = _getDeviceTier();
-      final isTensorSoC = _getIsTensorSoC();
 
       // Phone cluster: GGUF layers spread across worker phones. This phone
       // then runs its share on the CPU.
@@ -226,7 +227,6 @@ class InferenceService extends GetxService {
         diagnostics: diagnostics,
         contextSize: finalContextSize,
         deviceTier: deviceTier,
-        isTensorSoC: isTensorSoC,
         liteRtPerformanceMode: liteRtMode,
         forceLiteRtCpu: forceLiteRtCpu,
         clearLiteRtCache: contextChanged,
@@ -692,22 +692,6 @@ class InferenceService extends GetxService {
         generationSource.value = '';
       }
 
-      // Detect Tensor SoC + Gemma Q4_K_M corruption: model outputs only
-      // special tokens and terminates immediately with empty result.
-      if (result.trim().isEmpty &&
-          tokenCount.value < 5 &&
-          loadedModelName.value.toLowerCase().contains('gemma')) {
-        final isTensor = _getIsTensorSoC();
-        if (isTensor) {
-          return '⚠️ This Gemma model is incompatible with your Pixel\'s Google Tensor chip. '
-              'The Q4_K_M quantization format has a known bug on Tensor SoC that produces empty responses.\n\n'
-              'Try one of these fixes:\n'
-              '1. Download a Q4_0 or Q5_K_M version of the same model\n'
-              '2. Use a different model (Qwen, Phi, or Llama-3)\n'
-              '3. Switch to Cloud mode in Settings';
-        }
-      }
-
       return probeExpired ? 'ERROR: Capability check timed out.' : finalText;
     } catch (e) {
       tokenFlushTimer?.cancel();
@@ -790,21 +774,11 @@ class InferenceService extends GetxService {
     }
   }
 
-  bool _getIsTensorSoC() {
-    try {
-      final device = Get.find<DeviceInfoService>();
-      return device.isTensorSoC.value;
-    } catch (_) {
-      return false;
-    }
-  }
-
   Future<platform.LoadResult> _loadModelOnEngine({
     required String modelPath,
     required String? modelRuntime,
     required int contextSize,
     required String deviceTier,
-    bool isTensorSoC = false,
     required String liteRtPerformanceMode,
     required bool forceLiteRtCpu,
     required bool clearLiteRtCache,
@@ -834,8 +808,7 @@ class InferenceService extends GetxService {
           modelRuntime: modelRuntime,
           contextSize: contextSize,
           deviceTier: deviceTier,
-          isTensorSoC: isTensorSoC,
-          liteRtPerformanceMode: liteRtPerformanceMode,
+            liteRtPerformanceMode: liteRtPerformanceMode,
           forceLiteRtCpu: cpuRetry || forceLiteRtCpu,
           clearLiteRtCache: cpuRetry || clearLiteRtCache,
           enableLiteRtVision: enableLiteRtVision,

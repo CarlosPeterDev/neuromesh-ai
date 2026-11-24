@@ -68,7 +68,6 @@ class InferenceEngine {
     String? modelRuntime,
     required int contextSize,
     required String deviceTier,
-    bool isTensorSoC = false,
     String liteRtPerformanceMode = 'auto_fast',
     bool forceLiteRtCpu = false,
     bool clearLiteRtCache = false,
@@ -170,16 +169,6 @@ class InferenceEngine {
               : deviceTier == 'mid'
                   ? 4
                   : 3;
-    }
-
-    // Google Tensor SoC (Pixel 6/7/8) has known Q4_K_M dequant bugs
-    // that corrupt logits at >1 thread on Gemma models. Force single-threaded
-    // to eliminate KV cache races in the quantization dot-product path.
-    final modelName = modelPath.toLowerCase();
-    if (isTensorSoC && modelName.contains('gemma')) {
-      threads = 1;
-      print(
-          '[Inference] Tensor SoC + Gemma detected — forcing single-threaded inference');
     }
 
     // ── Load Progress ──
@@ -508,11 +497,10 @@ class InferenceEngine {
           print('[Inference] Idle timeout — $tokenCount tokens');
           finish(buffer.toString());
         });
-        final clean = _sanitizeGemmaGarbage(token);
-        if (clean.isEmpty) return;
-        buffer.write(clean);
+        if (token.isEmpty) return;
+        buffer.write(token);
         tokenCount++;
-        onToken?.call(clean);
+        onToken?.call(token);
       },
       onDone: () {
         print('[Inference] Stream onDone — $tokenCount tokens total');

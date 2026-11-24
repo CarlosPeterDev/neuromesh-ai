@@ -1505,6 +1505,28 @@ bool llama_model_loader::load_all_data(
     GGML_ASSERT(size_data != 0 && "call init_mappings() first");
 
     std::vector<std::future<std::pair<ggml_tensor *, bool>>> validation_result;
+    bool validation_failed = false;
+    const auto collect_validation = [&] {
+        for (auto & future : validation_result) {
+            auto result = future.get();
+            if (!result.second) {
+                LLAMA_LOG_ERROR("tensor '%s' has invalid data\n", ggml_get_name(result.first));
+                validation_failed = true;
+            }
+        }
+        validation_result.clear();
+    };
+    // Tensor validation is enabled on Android. Bound its parallelism even
+    // when a large or expert model has thousands of tensors.
+    const auto schedule_validation = [&](ggml_tensor * tensor, const void * data, size_t bytes) {
+        if (validation_result.size() == 4) {
+            collect_validation();
+        }
+        validation_result.emplace_back(std::async(std::launch::async, [tensor, data, bytes] {
+            return std::make_pair(tensor, ggml_validate_row_data(tensor->type, data, bytes));
+        }));
+    };
+
 
     // 4 staging buffers for async uploads, each sized 1MB seems to be a good default for single NVMe drives.
     // NVMe raid configurations might require more / larger buffers.
@@ -1648,9 +1670,7 @@ bool llama_model_loader::load_all_data(
             uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
 
             if (check_tensors) {
-                validation_result.emplace_back(std::async(std::launch::async, [cur, data, n_size] {
-                    return std::make_pair(cur, ggml_validate_row_data(cur->type, data, n_size));
-                }));
+                schedule_validation(cur, data, n_size);
             }
 
             GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
@@ -1676,9 +1696,7 @@ bool llama_model_loader::load_all_data(
                 file->seek(weight->offs, SEEK_SET);
                 file->read_raw(cur->data, n_size);
                 if (check_tensors) {
-                    validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
-                        return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
-                    }));
+                    schedule_validation(cur, cur->data, n_size);
                 }
             } else {
                 // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
@@ -1760,15 +1778,7 @@ bool llama_model_loader::load_all_data(
     }
     ggml_backend_free(upload_backend);
 
-    // check validation results
-    bool validation_failed = false;
-    for (auto & future : validation_result) {
-        auto result = future.get();
-        if (!result.second) {
-            LLAMA_LOG_ERROR("%s: tensor '%s' has invalid data\n", __func__, ggml_get_name(result.first));
-            validation_failed = true;
-        }
-    }
+    collect_validation();
     if (validation_failed) {
         throw std::runtime_error("found tensors with invalid data");
     }

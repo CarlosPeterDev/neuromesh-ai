@@ -124,6 +124,10 @@ jobs:
       - name: Test
         run: |
           python -m unittest discover -s scripts -p 'test_report_build_config.py'
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -Ilocal_plugins/llama_flutter_android/android/src/main/cpp \
+            scripts/gguf-smoke/native_checks.cpp -o "$RUNNER_TEMP/gguf-native-checks"
+          "$RUNNER_TEMP/gguf-native-checks"
           flutter test
 
       - name: Resolve Flutter Gradle plugin dependencies from Maven Central
@@ -316,6 +320,19 @@ jobs:
           for f in dist/*.apk; do unzip -tq "$f"; done
           unzip -tq dist/*.aab
 
+      - name: Download and verify the GGUF inference fixture
+        if: github.event_name != 'pull_request' && !inputs.play_bundle_only
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          source_url=https://huggingface.co/turintech/Qwen3.5-0.8B-Artemis-GGUF/resolve/main
+          curl -fLsS --retry 3 --max-time 240 "$source_url/Qwen3.5-0.8B-Artemis-Q4_K_M.gguf" -o artemis.gguf
+          curl -fLsS --retry 3 --max-time 240 "$source_url/mmproj-BF16.gguf" -o artemis-mmproj.gguf
+          sha256sum --check <<'CHECKSUMS'
+          01e0651f0fc5d0f9a3d1a68166fbdf12ab4d3bb135b3d725d694f42becfaa5a4  artemis.gguf
+          8fa5933772e64b56d96509b902b70119ce01fd21462f42d8fbb2c8acf0c354a5  artemis-mmproj.gguf
+          CHECKSUMS
+
       - name: Enable emulator acceleration
         if: github.event_name != 'pull_request' && !inputs.play_bundle_only
         run: |
@@ -338,6 +355,7 @@ jobs:
             adb install -r "$RUNNER_TEMP/universal.apk"
             adb shell am start -W -n com.neuromesh.ai/com.neuromesh.ai.MainActivity | tr -d '\r' | grep -F 'Status: ok'
             adb shell pidof com.neuromesh.ai | grep -E '[0-9]+'
+            bash scripts/smoke_android_gguf.sh "$RUNNER_TEMP/universal.apk" "$RUNNER_TEMP/artemis.gguf" "$RUNNER_TEMP/artemis-mmproj.gguf"
 
       - name: Android test APK upgrade and Play split coexistence
         if: github.event_name != 'pull_request' && !inputs.play_bundle_only && steps.standalone_sign.outputs.channel == 'public-test'
@@ -350,7 +368,9 @@ jobs:
           target: google_apis
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
-          script: bash scripts/smoke_android_packages.sh
+          script: |
+            bash scripts/smoke_android_packages.sh
+            bash scripts/smoke_android_gguf.sh "$RUNNER_TEMP/universal.apk" "$RUNNER_TEMP/artemis.gguf" "$RUNNER_TEMP/artemis-mmproj.gguf"
 
       - name: Preview Android checksums
         if: inputs.preview_only && !inputs.play_bundle_only
