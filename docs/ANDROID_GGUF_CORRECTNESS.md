@@ -10,7 +10,20 @@ The reference was upstream llama.cpp b12675, commit c212d25ad, on x86-64 CPU. Th
 - GGUF architecture is `qwen35`, file type 15 (Q4_K_M family), with 248,320 BPE tokens. The reference encoded the raw prompt `Hello, my name is` as `[9419, 11, 821, 803, 369]`. The vendored tokenizer emitted the identical raw and ChatML input IDs. Both wrappers counted five raw input tokens and generated a coherent continuation beginning `John.`. The updated wrapper diverged later in the long continuation. The raw comparison verifies tokenization length and language output across runtimes.
 - ChatML with thinking disabled counted 13 input tokens and produced `Hello! How can I help you today?` in all three paths. The opening output token was 9419 in the reference, followed by punctuation token 0. End-of-generation token 248046 terminated the reply. The fixture declares no implicit BOS or EOS insertion. GGUF end-of-generation metadata controls native termination.
 - Greedy, sampled, repeated-context, cleared-context, and helper-loaded text cases passed on the host. The matching helper identified a synthetic red image, and the next text turn matched the clean greeting. An equivalent Gemma 3 270M Q4_K_M test returned a natural greeting and stopped at EOG. Its vocabulary has 262,144 tokens and enables BOS insertion.
+- A host JNI cancellation test interrupted each fixture after the first emitted chunk. Both logged `finish=cancelled` and generated the clean greeting on retry. Gemma reused nine of ten prompt tokens in an uninterrupted repeat. Artemis rebuilt its recurrent state on repeat. Neither reused prompt tokens after cancellation.
 - A separate native host sequence progressively added the real system prompt, current tool catalog, synthetic memory, and selected skill and file excerpts. The prompts grew from 45 to 237, 258 and 333 input tokens respectively. Each produced the same coherent greeting. A deliberately selected calculator request produced the declared structured tool envelope. The native generation path in this test had no grammar constraints.
+
+An additional reference run explicitly selected the software Vulkan device llvmpipe with all 25 layers offloaded. On the same fixture it encoded the same five raw and 13 ChatML input tokens, generated a coherent raw continuation and emitted the identical ChatML output token IDs as CPU. This verifies one Vulkan implementation. Device GPU drivers need separate coverage.
+
+The host JNI logs reported these timings for one run of each wrapper. They exclude loading and are subject to host contention. The new readiness probe took 328 ms in this run. The decode window includes the sampling and output loop.
+
+| Input | Input tokens | Output tokens | v1.0.204 prompt / decode | Updated prompt / decode |
+| --- | ---: | ---: | ---: | ---: |
+| Raw completion | 5 | 40 | 443 / 2,962 ms | 247 / 2,953 ms |
+| ChatML greeting | 13 | 9 | 267 / 553 ms | 282 / 1,058 ms |
+| Red-image question | 29 before image embeddings | 1 | 1,001 / 84 ms | 1,230 / 80 ms |
+
+A separate interleaved host run alternated the wrappers in two process pairs, with six measured, cache-cleared greetings per process after a warm-up. Over 12 replies per build, v1.0.204 had a median of 435 ms prompt evaluation and 613 ms decoding. The updated wrapper had a median of 318 ms and 490 ms. The observed ranges overlapped for both phases. A repeat with callback timing measured a median of 430 ms to the first text chunk on v1.0.204 and 253 ms on the updated wrapper. These measurements characterize this host and do not establish a speed change on the reported phone.
 
 ## Reproduced failure mechanism
 
@@ -26,7 +39,15 @@ Real CPU runs on the exact v1.0.204 host port remained coherent. The phone's tri
 - Native sampling follows the reference filter order and uses one terminal sampler. Greedy and Mirostat no longer feed a second distribution sampler. The model's own vocabulary and EOG tokens drive token decoding and completion. The CPU policy, tensor checks, numerical checks and Unicode transport work independently of the model's filename.
 - Native logs identify architecture, GGUF file type, ggml version and build, selected backend, offloaded layers, context size, thread count, vocabulary and special-token metadata, readiness results and why decoding ended. New numerical records contain no user prompt or generated content.
 - The Android workflow compiles the native guard and Unicode regression tests and builds x86-64 llama.cpp into the universal package. The package gate extracts the exact JNI libraries from that APK and runs raw completion, ChatML, seeded sampling, cache reset and reuse, a loaded helper and real image processing inside Android. Emulator install and launch checks still run. [Build and publication](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/45451632477)
-- Flutter 3.38.9 analysis reported zero warnings and errors. All 204 fixture-backed Flutter tests passed. The repo still retains the prior removal of Agent, Alpine/PRoot, MCP and OpenCode while sharing the existing Chat, media, model and cluster infrastructure.
+- Flutter 3.38.9 analysis reported zero warnings and errors. All 204 fixture-backed Flutter tests passed. The prior cleanup removed Agent, Alpine/PRoot, MCP and OpenCode. Chat, media, models and clusters use the retained infrastructure. [Dependency ownership and retained features](ANDROID_ADAPTIVE_INFERENCE.md)
+
+## Android release evidence
+
+GitHub Actions built and published **v1.0.205** from `65951eeb6f34ed1288ee7fe18e804465e782da9a` and verified it as Latest. The separately downloadable ARM64 and universal APKs use the persistent public test certificate and install as NeuroMesh AI Test. The development-signed AAB is 187,782,380 bytes, with an estimated 105.00 MB ARM64 split download. [GitHub Release](https://github.com/CarlosPeterDev/neuromesh-ai/releases/tag/v1.0.205) · [Android CI logs](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/45451632477)
+
+Android 12 x86-64 installed and upgraded the Test APK and launched the Play split alongside it. The native harness used the exact libraries extracted from the universal APK. It completed raw text, produced `Hello! How can I help you today?` in greedy and sampled ChatML cases, repeated the greeting with the helper loaded, identified the red fixture, and returned to a clean text turn. Production signing and physical ARM64 inference are outside this emulator evidence.
+
+All three packages passed their published SHA-256 and archive integrity checks after downloading. The packages contain the expected ARM64 libraries, and the universal APK and AAB also contain the x86-64 llama JNI library. None contains the four removed Alpine/PRoot libraries. [Published checksums](https://github.com/CarlosPeterDev/neuromesh-ai/releases/download/v1.0.205/SHA256SUMS.txt)
 
 ## Original phone verification
 
