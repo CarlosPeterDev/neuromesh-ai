@@ -10,6 +10,10 @@ Android’s foreground notification offers Stop for an active Pollinations reque
 
 The separate **Local model loaded** notification offers **Stop model** even when inference is idle. Stop cancels native generation, disposes the loaded backend, and clears the active model status. Each load has its own action ID. A stale action cannot unload a replacement model. This notification uses no foreground data-sync service or wake lock of its own.
 
+**v1.0.210** was published as GitHub Latest from `d668b96`. Android 12 x86-64 installed and upgraded the Test APK and launched the Play split. Instrumentation verified Stop for an idle model and for a model while image work and Remote Access were both active. The Flutter cancellation test verified that Stop interrupts inference and disposes the loaded engine. The packaged JNI smoke test verified semantic decisions, text generation, and a real image input. Both separately published APKs and the development-signed AAB passed the published SHA-256 and archive checks after download. [Release](https://github.com/CarlosPeterDev/neuromesh-ai/releases/tag/v1.0.210) · [Android verification](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/45483140790)
+
+All 218 fixture-backed Flutter tests passed. Static analysis finished with zero warnings or errors. The release gate exercised the notification actions with the app backgrounded. The reported phone still needs a physical-device check of the notification and Pollinations image display.
+
 ## Android GGUF token throughput
 
 Live Chat, saved replies, and performance screens use the GGUF decoder’s sampled token count and elapsed time between samples. A text chunk can span multiple tokens, especially when the decoder joins UTF-8 fragments. Historical chunk rates are no longer shown. Runtimes without native token metrics omit the Chat speed. The inference fixture asserts nine sampled tokens for Artemis’s greeting. The loader also preserves the underlying error from llama.cpp in diagnostics.
