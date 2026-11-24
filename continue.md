@@ -6,11 +6,15 @@ Artemis answered the reported fraction as prose and gave the wrong value. The ve
 
 The final shared decision uses 54 actual Artemis input tokens for a greeting, down from 105 for the previous image-only decision. The arithmetic path excludes chat history, memory and the full tool catalog during its focused calls. Local Chat uses compact tool instructions and limits automatic memory to an estimated 160 tokens. Image decisions with ambiguous follow-up output are confirmed by the model before calling Pollinations.
 
+With the reconstructed arithmetic request, the older first pass counted 155 tokens. The new first pass counted 104 for the Unicode formula and 105 for LaTeX. The separate precision pass counted 75 and 72 tokens respectively, and the real calculator returned `420436.17803423` in both runs. All 222 fixture-backed Flutter tests passed. Static analysis reported zero warnings or errors. [Android build and packaged inference](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/45513251337)
+
 ## Chat speech voice selection
 
-The reported Artemis call used `model_id: tts-1`, `speaker: male` and `language: en-US`. The local executor rejected the unknown model ID before synthesis. Chat now advertises a typed voice preference and resolves it against the installed speaker catalog, including the older speaker field for male and female preferences. The resolver matches the primary language from a locale tag. An unavailable model ID can be bypassed only if there is a voice preference and a matching installed voice. The saved reply and tool result name the voice actually used. No matching voice produces an actionable error. Age is not a catalog capability.
+The reported Artemis call used `model_id: tts-1`, `speaker: male` and `language: en-US`. The local executor rejected the unknown model ID before synthesis. Chat now advertises a typed voice preference and resolves it against the installed speaker catalog, including the older speaker field for male and female preferences. The resolver matches the primary language from a locale tag. An unavailable model ID can be bypassed only if there is a voice preference and a matching installed voice. The saved reply and tool result name the voice actually used. An unavailable matching voice produces an actionable error. Voice age remains unverified.
 
 The host regression passed the exact reported arguments through Chat's speech tool with the real Kitten Nano model. It selected `Voice 2 (M) · kitten-nano`, produced a non-silent WAV and kept the saved speaker preference. Kokoro synthesized its default-voice fixture, and a French request against the English-only fixture produced a targeted error. [Kitten speaker order](https://github.com/k2-fsa/sherpa-onnx/blob/master/scripts/kitten-tts/v0_8/generate_voices_bin.py)
+
+The speech regression verifies execution for a model-selected tool call. A separate temperature-zero reference run answered the speech request in text, so general model selection of the speech tool remains variable.
 
 ## Model-directed Pollinations in Android Chat
 
