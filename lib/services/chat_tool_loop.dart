@@ -14,6 +14,7 @@ typedef ChatToolExecutor = Future<String> Function(
     ParsedToolCall call, Future<void> abort);
 typedef ChatSearch = Future<SearchReport> Function(
     String query, Future<void> abort);
+typedef ChatVisualPlan = ({ParsedToolCall call, bool needsFollowUp});
 
 /// The set of tools the model can use during a single chat turn.
 class ChatToolLoop {
@@ -122,14 +123,18 @@ class ChatToolLoop {
   static const callPrefix = '<tool_call>';
   static const callSuffix = '</tool_call>';
 
-  static ParsedToolCall? visualPlan(String decision, String request) {
-    if (splitThoughtTags(decision).answer.trim() != 'artwork') return null;
-    return _validatedCall({
-      'name': 'generate_image',
-      'arguments': {'prompt': request},
-    }, const {
-      'generate_image'
-    }, compact: false);
+  static ChatVisualPlan? visualPlan(String decision, String request) {
+    final action = splitThoughtTags(decision).answer.trim();
+    if (action != 'artwork' && action != 'mixed') return null;
+    final call = _validatedCall(
+      {
+        'name': 'generate_image',
+        'arguments': {'prompt': request}
+      },
+      const {'generate_image'},
+      compact: false,
+    );
+    return call == null ? null : (call: call, needsFollowUp: action == 'mixed');
   }
 
   static String instructions(Set<String> allowed,
@@ -308,7 +313,7 @@ class ChatToolLoop {
     bool compactPrompt = false,
     bool nativeMarkup = false,
     bool generationHasOwnDeadline = false,
-    Future<ParsedToolCall?> Function()? plan,
+    Future<ChatVisualPlan?> Function()? plan,
     void Function(String stage)? onStage,
     void Function(bool valid)? onProtocol,
     void Function(int passes, int invalid, int tools, int toolMs)? onMetrics,
@@ -457,7 +462,7 @@ class ChatToolLoop {
         }
         onStage?.call('Validating tool request');
         final decision = selected != null
-            ? {'name': selected.name, 'arguments': selected.arguments}
+            ? {'name': selected.call.name, 'arguments': selected.call.arguments}
             : text.startsWith(callPrefix)
                 ? _parse(text, nativeMarkup: nativeMarkup)
                 : null;
@@ -608,6 +613,9 @@ class ChatToolLoop {
             ms: timer.elapsedMilliseconds, failed: !success);
         onTrace(List.of(trace));
         if (selected != null && name == 'generate_image') {
+          if (!selected.needsFollowUp) {
+            return finish(success ? output.split('\n').first : output);
+          }
           plannedImageAttempted = true;
           if (success) plannedImageSummary = output.split('\n').first;
         }

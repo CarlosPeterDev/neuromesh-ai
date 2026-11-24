@@ -108,6 +108,7 @@ public final class LlamaFlutterAndroidPlugin {
                 smoke.checkVisualPlan(system, "ارسم سيارة تطير فوق القاهرة ليلاً", "artwork");
                 smoke.checkVisualPlan(system, "Explain how a flying car would work.", "text");
                 smoke.checkVisualPlan(system, "Write a prompt I could give a painter to depict a flying car.", "text");
+                smoke.checkVisualPlan(system, "I need an illustration of a flying car and a list of current aerospace funding rounds.", "mixed");
                 smoke.checkVisualPlan(system, "Hi", "text");
             }
         } finally {

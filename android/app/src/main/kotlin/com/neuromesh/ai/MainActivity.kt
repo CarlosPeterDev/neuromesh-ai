@@ -35,6 +35,10 @@ class MainActivity : FlutterActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var importChannel: MethodChannel? = null
+    private var backgroundWorkChannel: MethodChannel? = null
+    private val stopBackgroundWork: (String) -> Unit = { id ->
+        backgroundWorkChannel?.invokeMethod("stop", id)
+    }
     private var pendingImportResult: MethodChannel.Result? = null
     private val monitoredInAppDownloads = ConcurrentHashMap.newKeySet<Long>()
 
@@ -47,6 +51,29 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        val workChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger,
+            "com.neuromesh.ai/background_work")
+        backgroundWorkChannel = workChannel
+        BackgroundWorkService.onStopRequested = stopBackgroundWork
+        workChannel.setMethodCallHandler { call, result ->
+            try {
+                when (call.method) {
+                    "start" -> {
+                        BackgroundWorkService.begin(applicationContext,
+                            requireNotNull(call.argument<String>("id")),
+                            requireNotNull(call.argument<String>("kind")))
+                        result.success(null)
+                    }
+                    "finish" -> {
+                        BackgroundWorkService.finish(call.arguments as String)
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            } catch (error: RuntimeException) {
+                result.error("BACKGROUND_WORK", error.javaClass.simpleName, null)
+            }
+        }
         deviceBridge.register(flutterEngine)
         deviceBridge.handleIntent(intent)
         importChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, importChannelName)
@@ -242,6 +269,15 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        if (BackgroundWorkService.onStopRequested === stopBackgroundWork) {
+            BackgroundWorkService.onStopRequested = null
+        }
+        backgroundWorkChannel?.setMethodCallHandler(null)
+        backgroundWorkChannel = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     private fun updatesDir(): File =

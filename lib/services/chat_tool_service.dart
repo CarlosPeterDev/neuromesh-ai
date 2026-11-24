@@ -15,6 +15,7 @@ import 'voice_service.dart';
 import 'hive_service.dart';
 import 'pollinations_image_service.dart';
 import 'pollinations_credentials.dart';
+import 'background_work_notifications.dart';
 
 /// Asks the user whether a tool may run. Returns true to allow.
 typedef ToolConfirm = Future<bool> Function(
@@ -94,15 +95,22 @@ class ChatToolService extends GetxService {
   static const _modeKey = 'agent_chat_mode';
   static final _chatToolAbort = Object();
   static final _chatToolCancelled = Object();
+  static final _chatToolStop = Object();
 
   static bool get chatToolCancelled =>
       (Zone.current[_chatToolCancelled] as bool Function()?)?.call() ?? false;
 
   Future<String> executeChatTool(ParsedToolCall call, ToolConfirm confirm,
-          {required Future<void> abort, required bool Function() cancelled}) =>
+          {required Future<void> abort,
+          required bool Function() cancelled,
+          void Function()? onStop}) =>
       runZoned(
         () => executeTool(call, confirm),
-        zoneValues: {_chatToolAbort: abort, _chatToolCancelled: cancelled},
+        zoneValues: {
+          _chatToolAbort: abort,
+          _chatToolCancelled: cancelled,
+          _chatToolStop: onStop,
+        },
       );
 
   static const maxMemory = 60;
@@ -657,6 +665,13 @@ class ChatToolService extends GetxService {
       return 'The user denied this tool call.';
     }
     if (chatToolCancelled) return 'Error: tool cancelled.';
+    final stop = Zone.current[_chatToolStop] as void Function()?;
+    final notifications = stop != null &&
+            (call.name == 'generate_image' || call.name == 'edit_image') &&
+            Get.isRegistered<BackgroundWorkNotifications>()
+        ? Get.find<BackgroundWorkNotifications>()
+        : null;
+    final notification = notifications?.begin(BackgroundWork.image, stop!);
     try {
       final output = await tool.run(call.arguments);
       return output.length > 6000
@@ -668,6 +683,8 @@ class ChatToolService extends GetxService {
       return 'Error: the tool rejected an argument. Check its settings and try again.';
     } on Exception {
       return 'Error: the tool failed. Check its configuration and try again.';
+    } finally {
+      notifications?.finish(notification);
     }
   }
 }

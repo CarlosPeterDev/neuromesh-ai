@@ -22,7 +22,6 @@ import '../services/voice_service.dart';
 import '../services/inference_service.dart';
 import '../services/cloud_service.dart';
 import '../services/app_log_service.dart';
-import '../services/image_generation_notification_service.dart';
 import '../services/document_extractor_service.dart';
 import '../services/skills_service.dart';
 import '../utils/skill_context.dart';
@@ -1359,6 +1358,10 @@ class ChatController extends GetxController {
                     },
                     abort: abort,
                     cancelled: () => cancellation.isCompleted,
+                    onStop: () {
+                      if (generationId == _generationSerial &&
+                          !cancellation.isCompleted) stopGenerating();
+                    },
                   );
                 },
                 search: (query, abort) async {
@@ -1479,11 +1482,7 @@ class ChatController extends GetxController {
       imageGenStep.value = 0;
       imageGenTotal.value = 0;
       imageGenDecoding.value = false;
-      final hadImageJob = imageGenStartTime.value != null;
       imageGenStartTime.value = null;
-      if (hadImageJob) {
-        await Get.find<ImageGenerationNotificationService>().failed();
-      }
       if (generationId != _generationSerial) return;
       final frames = stack.toString().trimRight().split('\n').take(8);
       Get.find<AppLogService>().error(
@@ -1557,7 +1556,6 @@ class ChatController extends GetxController {
     isStreaming.value = false;
     streamingAttachmentType.value = null;
     streamingResponse.value = '';
-    Get.find<ImageGenerationNotificationService>().cancel();
     imageGenStep.value = 0;
     imageGenTotal.value = 0;
     imageGenEstimatedSecs.value = 0;

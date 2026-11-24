@@ -42,8 +42,9 @@ void main() {
   test('visual planning accepts only the allowed decision and a valid argument',
       () {
     const request = 'A vintage spaceport on a postcard, please.';
-    expect(ChatToolLoop.visualPlan('artwork', request)?.arguments,
+    expect(ChatToolLoop.visualPlan('artwork', request)?.call.arguments,
         {'prompt': request});
+    expect(ChatToolLoop.visualPlan('mixed', request)?.needsFollowUp, isTrue);
     expect(ChatToolLoop.visualPlan('text', request), isNull);
     expect(ChatToolLoop.visualPlan('artwork for you', request), isNull);
     expect(ChatToolLoop.visualPlan('artwork', ' '), isNull);
@@ -53,11 +54,7 @@ void main() {
   test('a planned image failure displays the provider error once', () async {
     var attempts = 0;
     final result = await ChatToolLoop().run(
-      reply: (instructions, evidence) async {
-        expect(instructions, isNot(contains('generate_image')));
-        expect(evidence, contains('rate-limiting'));
-        return 'Try again later.';
-      },
+      reply: (_, __) async => throw StateError('unexpected follow-up'),
       plan: () async => ChatToolLoop.visualPlan('artwork', 'A sea of lanterns'),
       execute: (_, __) async {
         attempts++;
@@ -78,7 +75,7 @@ void main() {
       () async {
     final replies = [searchA, 'The benchmark results are available [1].'];
     final result = await ChatToolLoop().run(
-      plan: () async => ChatToolLoop.visualPlan('artwork', 'A sea of lanterns'),
+      plan: () async => ChatToolLoop.visualPlan('mixed', 'A sea of lanterns'),
       reply: (_, __) async => replies.removeAt(0),
       execute: (_, __) async =>
           'Generated online with Pollinations.\n\n![Image](nmfile:art.jpg)',

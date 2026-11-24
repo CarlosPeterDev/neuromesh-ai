@@ -2,9 +2,11 @@
 
 ## Model-directed Pollinations in Android Chat
 
-Interactive inference preempts automatic titles and capability checks, including while a background call is waiting for the native context. A repeatable Artemis test showed that the full tool catalog could produce prose where an image was requested. Eligible local text turns now use a short deterministic model decision for visual intent. The selector looks at the current request alone. Only the exact `artwork` decision can propose `generate_image`, and the user’s description passes through the normal argument validator and tool policy. The tool loop records the returned attachment and can follow up on remaining work with the other tools.
+Interactive inference preempts automatic titles and capability checks, including while a background call is waiting for the native context. A repeatable Artemis test showed that the full tool catalog could produce prose where an image was requested. Eligible local text turns now use a short deterministic model decision for visual intent. The selector looks at the current request alone. An exact `artwork` or `mixed` decision can propose `generate_image`, and the user’s description passes through the normal argument validator and tool policy. A standalone image turn finishes with the provider result and its attachment. A mixed turn can follow up on independent work with the other tools.
 
 Native Artemis tests distinguished English and Arabic image requests from greetings, requests for explanations, and requests to write a prompt. A host end-to-end check used the real model decision for `A flying car above Cairo`, invoked the existing Pollinations executor, and saved a 59,453-byte JPEG. This used the public anonymous endpoint and simulated approval of the test prompt. Android release verification tests the model’s decisions from the packaged JNI libraries. The phone’s approval and image display still need physical coverage.
+
+Android’s foreground notification offers Stop for an active Pollinations request or Remote Access. Each action carries the operation’s ID. Image cancellation flows through the existing Chat stop path and closes the HTTP request. Remote Access stop closes its socket and any forwarded requests, and clears its saved enabled setting. The foreground service exits when the final operation ends. The native service replaces dependencies used only by the old notification bridge. The Android release gate drives the packaged notification actions after backgrounding the app.
 
 ## Android GGUF token throughput
 

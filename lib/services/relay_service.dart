@@ -5,11 +5,11 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 
 import '../controllers/server_controller.dart';
+import 'background_work_notifications.dart';
 import 'hive_service.dart';
 import 'relay_worker_script.dart';
 
@@ -43,6 +43,8 @@ class RelayService extends GetxService {
   bool _wantOn = false;
   int _generation = 0;
   final _reqs = <String, _Req>{};
+  final _forwards = <HttpClient>{};
+  String? _workNotification;
 
   @override
   void onInit() {
@@ -222,7 +224,10 @@ class RelayService extends GetxService {
       }
       if (generation != _generation) return;
       if (!sc.isRunning.value) throw StateError('The local API could not start.');
-      unawaited(_keepProcessAlive(true));
+      if (Get.isRegistered<BackgroundWorkNotifications>()) {
+        _workNotification = Get.find<BackgroundWorkNotifications>()
+            .begin(BackgroundWork.relay, stop);
+      }
       unawaited(_loop(generation));
     } catch (_) {
       if (generation != _generation) return;
@@ -233,38 +238,31 @@ class RelayService extends GetxService {
   }
 
   Future<void> stop() async {
-    final generation = ++_generation;
+    _generation++;
     _wantOn = false;
     enabled.value = false;
     connected.value = false;
     status.value = 'Off';
     _ping?.cancel();
     _reqs.clear();
+    _closeForwards();
+    if (Get.isRegistered<BackgroundWorkNotifications>()) {
+      Get.find<BackgroundWorkNotifications>().finish(_workNotification);
+    }
+    _workNotification = null;
     final oldSocket = _ws;
     _ws = null;
     await _hive.setSetting('relay_on', false);
     try {
       await oldSocket?.close().timeout(const Duration(seconds: 3));
     } catch (_) {}
-    if (generation == _generation) await _keepProcessAlive(false);
   }
 
-  Future<void> _keepProcessAlive(bool on) async {
-    if (kIsWeb || !Platform.isAndroid) return;
-    try {
-      final svc = FlutterBackgroundService();
-      if (on) {
-        if (!await svc.isRunning()) await svc.startService();
-        svc.invoke('keepAlive', {'on': true});
-        svc.invoke('progress', {
-          'title': 'Remote access is on',
-          'content': 'Your phone is reachable at ${url.value}',
-        });
-      } else {
-        svc.invoke('keepAlive', {'on': false});
-        svc.invoke('forceStop');
-      }
-    } catch (_) {}
+  void _closeForwards() {
+    for (final client in _forwards) {
+      client.close(force: true);
+    }
+    _forwards.clear();
   }
 
   Future<void> _loop(int generation) async {
@@ -307,6 +305,7 @@ class RelayService extends GetxService {
       connected.value = false;
       _ping?.cancel();
       _reqs.clear();
+      _closeForwards();
       if (!_wantOn) break;
       retry = min(retry + 1, 6);
       await Future.delayed(Duration(seconds: 2 * retry));
@@ -342,6 +341,7 @@ class RelayService extends GetxService {
   /// Replays one request against this phone's own local server.
   Future<void> _forward(WebSocket ws, String id, _Req r) async {
     final client = HttpClient();
+    _forwards.add(client);
     try {
       final sc = Get.find<ServerController>();
       final port = ServerController.port;
@@ -380,6 +380,7 @@ class RelayService extends GetxService {
     } catch (e) {
       _send(ws, {'t': 'err', 'id': id, 'msg': 'Phone error: $e'});
     } finally {
+      _forwards.remove(client);
       client.close(force: true);
     }
   }

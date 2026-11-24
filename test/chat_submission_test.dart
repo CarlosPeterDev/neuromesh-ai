@@ -17,7 +17,6 @@ import 'package:neuromesh_ai/services/chat_tool_service.dart';
 import 'package:neuromesh_ai/services/app_log_service.dart';
 import 'package:neuromesh_ai/services/cloud_service.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
-import 'package:neuromesh_ai/services/image_generation_notification_service.dart';
 import 'package:neuromesh_ai/services/inference_service.dart';
 import 'package:neuromesh_ai/services/local_image_service.dart';
 import 'package:neuromesh_ai/services/web_search_service.dart';
@@ -41,7 +40,6 @@ void main() {
     local = _TestNarrationInference();
     Get.put<InferenceService>(local);
     Get.put(AppLogService());
-    Get.put(ImageGenerationNotificationService());
     Get.put(LocalImageService());
     cloud = Get.put<CloudService>(_TestCloud()) as _TestCloud;
     agent = Get.put<ChatToolService>(_WorkspaceAgent()) as _WorkspaceAgent;
@@ -105,13 +103,12 @@ void main() {
     await hive.setSetting('auto_title', false);
     local.isModelLoaded.value = true;
     local.visualDecision = 'artwork';
-    local.answer = 'Here it is.';
     const request = 'A vintage spaceport at sunrise on a postcard, please.';
 
     chat.textController.text = request;
     await chat.sendMessage();
 
-    expect(local.sources, [InferenceService.visualPlanSource, 'chat-tools']);
+    expect(local.sources, [InferenceService.visualPlanSource]);
     expect(agent.imageCall?.name, 'generate_image');
     expect(agent.imageCall?.arguments['prompt'], request);
     expect(chat.messages.last.content, contains('nmfile:generated.jpg'));

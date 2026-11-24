@@ -41,7 +41,7 @@ import 'services/device_info_service.dart';
 import 'services/local_image_service.dart';
 import 'services/app_log_service.dart';
 import 'services/crash_reporting_service.dart';
-import 'services/image_generation_notification_service.dart';
+import 'services/background_work_notifications.dart';
 import 'core/constants.dart';
 
 void main() {
@@ -144,14 +144,7 @@ void main() {
               reason: 'platform_dispatcher');
           return true;
         };
-        final imageNotifications =
-            Get.put(ImageGenerationNotificationService());
-        try {
-          await imageNotifications.init();
-          await imageNotifications.configureBackgroundService();
-        } catch (e) {
-          appLog.error('[Notifications] Init failed', details: e);
-        }
+        Get.put(BackgroundWorkNotifications()).init();
         appLog.info('Notifications initialized');
         Get.put(ServerController(), permanent: true);
         Get.put(RelayService(), permanent: true);

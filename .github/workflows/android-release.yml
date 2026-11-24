@@ -355,6 +355,7 @@ jobs:
             adb install -r "$RUNNER_TEMP/universal.apk"
             adb shell am start -W -n com.neuromesh.ai/com.neuromesh.ai.MainActivity | tr -d '\r' | grep -F 'Status: ok'
             adb shell pidof com.neuromesh.ai | grep -E '[0-9]+'
+            bash scripts/smoke_android_background_work.sh com.neuromesh.ai
             bash scripts/smoke_android_gguf.sh "$RUNNER_TEMP/universal.apk" "$RUNNER_TEMP/artemis.gguf" "$RUNNER_TEMP/artemis-mmproj.gguf"
 
       - name: Android test APK upgrade and Play split coexistence
@@ -370,6 +371,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           script: |
             bash scripts/smoke_android_packages.sh
+            bash scripts/smoke_android_background_work.sh com.neuromesh.ai.test
             bash scripts/smoke_android_gguf.sh "$RUNNER_TEMP/universal.apk" "$RUNNER_TEMP/artemis.gguf" "$RUNNER_TEMP/artemis-mmproj.gguf"
 
       - name: Preview Android checksums
