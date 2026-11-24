@@ -1548,7 +1548,7 @@ class ChatController extends GetxController {
     return null;
   }
 
-  void stopGenerating() {
+  void stopGenerating({bool stopLocalEngine = true}) {
     final inference = Get.find<InferenceService>();
     final titling = inference.isGenerating.value &&
         inference.generationSource.value == 'title';
@@ -1575,7 +1575,7 @@ class ChatController extends GetxController {
     imageGenStartTime.value = null;
     imageGenDecoding.value = false;
     _batchCancelled = true;
-    _queueContextTransition(inference.stopGeneration);
+    if (stopLocalEngine) _queueContextTransition(inference.stopGeneration);
     Get.find<CloudService>().cancel();
   }
 

@@ -55,6 +55,7 @@ class MainActivity : FlutterActivity() {
             "com.neuromesh.ai/background_work")
         backgroundWorkChannel = workChannel
         BackgroundWorkService.onStopRequested = stopBackgroundWork
+        BackgroundWorkService.refresh(applicationContext)
         workChannel.setMethodCallHandler { call, result ->
             try {
                 when (call.method) {
@@ -66,6 +67,10 @@ class MainActivity : FlutterActivity() {
                     }
                     "finish" -> {
                         BackgroundWorkService.finish(call.arguments as String)
+                        result.success(null)
+                    }
+                    "refresh" -> {
+                        BackgroundWorkService.refresh(applicationContext)
                         result.success(null)
                     }
                     else -> result.notImplemented()

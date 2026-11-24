@@ -59,6 +59,8 @@ public final class BackgroundWorkSmoke extends Instrumentation {
             try {
                 bridge.getClass().getMethod("setOnStopRequested", function).invoke(bridge, listener);
                 bridge.getClass().getMethod("begin", Context.class, String.class, String.class)
+                        .invoke(bridge, app, "model-test", "model");
+                bridge.getClass().getMethod("begin", Context.class, String.class, String.class)
                         .invoke(bridge, app, "image-test", "image");
                 bridge.getClass().getMethod("begin", Context.class, String.class, String.class)
                         .invoke(bridge, app, "relay-test", "relay");
@@ -68,27 +70,54 @@ public final class BackgroundWorkSmoke extends Instrumentation {
         });
 
         NotificationManager manager = app.getSystemService(NotificationManager.class);
-        Notification both = awaitNotification(manager, "NeuroMesh background work");
+        Notification model = awaitNotification(manager, 4203, "Local model loaded");
+        Notification both = awaitNotification(manager, 4202, "NeuroMesh background work");
         Notification.Action image = action(both, "Stop image generation");
         action(both, "Stop remote access");
         getUiAutomation().executeShellCommand("input keyevent KEYCODE_HOME").close();
         SystemClock.sleep(400);
+        action(model, "Stop model").actionIntent.send();
+        long modelDeadline = SystemClock.elapsedRealtime() + 5000;
+        while ((current(manager, 4203) != null || stopped.isEmpty())
+                && SystemClock.elapsedRealtime() < modelDeadline) {
+            SystemClock.sleep(50);
+        }
+        require(current(manager, 4203) == null, "loaded model notification remained");
+        require(stopped.equals(Collections.singletonList("model-test")), "model stop reached the wrong job");
+        require(current(manager, 4202) != null, "model stop removed the other jobs");
         image.actionIntent.send();
-        Notification relay = awaitNotification(manager, "Remote access is on");
-        require(stopped.equals(Collections.singletonList("image-test")), "wrong job stopped");
+        Notification relay = awaitNotification(manager, 4202, "Remote access is on");
+        require(stopped.size() == 2 && stopped.get(1).equals("image-test"), "wrong job stopped");
         image.actionIntent.send();
         action(relay, "Stop").actionIntent.send();
         long deadline = SystemClock.elapsedRealtime() + 5000;
-        while ((current(manager) != null || stopped.size() < 2)
+        while ((current(manager, 4202) != null || stopped.size() < 3)
                 && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(50);
-        require(current(manager) == null, "notification remained after the last stop");
-        require(stopped.size() == 2 && stopped.get(1).equals("relay-test"), "stale action stopped a job");
+        require(current(manager, 4202) == null, "notification remained after the last stop");
+        require(stopped.size() == 3 && stopped.get(2).equals("relay-test"), "stale action stopped a job");
+
+        runOnMainSync(() -> {
+            try {
+                bridge.getClass().getMethod("begin", Context.class, String.class, String.class)
+                        .invoke(bridge, app, "idle-model-test", "model");
+            } catch (ReflectiveOperationException error) {
+                throw new AssertionError(error);
+            }
+        });
+        Notification idleModel = awaitNotification(manager, 4203, "Local model loaded");
+        require(current(manager, 4202) == null, "idle model started a foreground service");
+        action(idleModel, "Stop model").actionIntent.send();
+        deadline = SystemClock.elapsedRealtime() + 5000;
+        while ((current(manager, 4203) != null || stopped.size() < 4)
+                && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(50);
+        require(current(manager, 4203) == null && stopped.size() == 4 &&
+                stopped.get(3).equals("idle-model-test"), "idle model stop did not reach its owner");
     }
 
-    private static Notification awaitNotification(NotificationManager manager, String title) {
+    private static Notification awaitNotification(NotificationManager manager, int id, String title) {
         long deadline = SystemClock.elapsedRealtime() + 5000;
         while (SystemClock.elapsedRealtime() < deadline) {
-            Notification notification = current(manager);
+            Notification notification = current(manager, id);
             if (notification != null && title.contentEquals(notification.extras.getCharSequence(Notification.EXTRA_TITLE))) {
                 return notification;
             }
@@ -97,9 +126,9 @@ public final class BackgroundWorkSmoke extends Instrumentation {
         throw new AssertionError("missing notification " + title);
     }
 
-    private static Notification current(NotificationManager manager) {
+    private static Notification current(NotificationManager manager, int id) {
         for (StatusBarNotification entry : manager.getActiveNotifications()) {
-            if (entry.getId() == 4202) return entry.getNotification();
+            if (entry.getId() == id) return entry.getNotification();
         }
         return null;
     }

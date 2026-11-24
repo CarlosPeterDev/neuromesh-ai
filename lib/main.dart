@@ -8,6 +8,7 @@ import 'package:get/get.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 // import 'firebase_options.dart';
 import 'controllers/settings_controller.dart';
+import 'controllers/chat_controller.dart';
 import 'controllers/cloud_model_controller.dart';
 import 'controllers/server_controller.dart';
 import 'controllers/model_controller.dart';
@@ -99,7 +100,18 @@ void main() {
 
         if (ClusterService.isSupported)
           Get.put(ClusterService(), permanent: true);
-        Get.put(InferenceService());
+        Get.put(BackgroundWorkNotifications()).init();
+        Get.put(InferenceService(onNotificationStop: () {
+          final source = Get.find<InferenceService>().generationSource.value;
+          if (Get.isRegistered<ChatController>() &&
+              (source == 'chat' ||
+                  source == 'chat-tools' ||
+                  source == InferenceService.visualPlanSource ||
+                  source == 'summary' ||
+                  source == 'title')) {
+            Get.find<ChatController>().stopGenerating(stopLocalEngine: false);
+          }
+        }));
         Get.put(ChatToolService());
         registerVoiceModelStatus(Get.find<ChatToolService>());
         final skills = await Get.putAsync(() => SkillsService().init());
@@ -144,7 +156,6 @@ void main() {
               reason: 'platform_dispatcher');
           return true;
         };
-        Get.put(BackgroundWorkNotifications()).init();
         appLog.info('Notifications initialized');
         Get.put(ServerController(), permanent: true);
         Get.put(RelayService(), permanent: true);

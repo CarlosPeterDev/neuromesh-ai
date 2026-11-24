@@ -8,6 +8,8 @@ Native Artemis tests distinguished English and Arabic image requests from greeti
 
 Android’s foreground notification offers Stop for an active Pollinations request or Remote Access. Each action carries the operation’s ID. Image cancellation flows through the existing Chat stop path and closes the HTTP request. Remote Access stop closes its socket and any forwarded requests, and clears its saved enabled setting. The foreground service exits when the final operation ends. The native service replaces dependencies used only by the old notification bridge. The Android release gate drives the packaged notification actions after backgrounding the app.
 
+The separate **Local model loaded** notification offers **Stop model** even when inference is idle. Stop cancels native generation, disposes the loaded backend, and clears the active model status. Each load has its own action ID. A stale action cannot unload a replacement model. This notification uses no foreground data-sync service or wake lock of its own.
+
 ## Android GGUF token throughput
 
 Live Chat, saved replies, and performance screens use the GGUF decoder’s sampled token count and elapsed time between samples. A text chunk can span multiple tokens, especially when the decoder joins UTF-8 fragments. Historical chunk rates are no longer shown. Runtimes without native token metrics omit the Chat speed. The inference fixture asserts nine sampled tokens for Artemis’s greeting. The loader also preserves the underlying error from llama.cpp in diagnostics.

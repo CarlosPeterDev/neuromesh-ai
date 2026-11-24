@@ -1,16 +1,20 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
 import 'package:llama_flutter_android/llama_flutter_android.dart';
 import 'package:neuromesh_ai/services/app_log_service.dart';
+import 'package:neuromesh_ai/services/background_work_notifications.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
 import 'package:neuromesh_ai/services/inference_android.dart';
 import 'package:neuromesh_ai/services/inference_service.dart';
 
 void main() {
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
   late InferenceService inference;
   late _TestEngine engine;
   late Directory directory;
@@ -57,6 +61,43 @@ void main() {
     expect(await foreground, 'artwork');
     expect(engine.sources, ['chat']);
   });
+
+  test('Stop model cancels inference and releases the loaded local model',
+      () async {
+    await inference.unloadModel();
+    engine = _TestEngine();
+    inference = InferenceService.withEngine(() => engine);
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    const channel = MethodChannel('com.neuromesh.ai/background_work');
+    final started = Completer<Map>();
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(channel,
+        (call) async {
+      if (call.method == 'start') started.complete(call.arguments as Map);
+      return null;
+    });
+    Get.put(BackgroundWorkNotifications()).init();
+    addTearDown(() {
+      channel.setMethodCallHandler(null);
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    expect(
+        await inference.loadModel('${directory.path}/fixture.gguf'), 'Loaded');
+    final action = await started.future;
+    expect(action['kind'], 'model');
+    final active =
+        inference.generate(prompt: 'Generate a title', source: 'title');
+    await engine.started.future;
+    await binding.defaultBinaryMessenger.handlePlatformMessage(
+      channel.name,
+      channel.codec.encodeMethodCall(MethodCall('stop', action['id'])),
+      (_) {},
+    );
+    expect(await active, isEmpty);
+    expect(inference.isModelLoaded.value, isFalse);
+    expect(engine.stops, 1);
+    expect(engine.disposals, 1);
+  });
 }
 
 class _TestEngine implements InferenceEngine {
@@ -64,6 +105,7 @@ class _TestEngine implements InferenceEngine {
   final pending = Completer<String>();
   final sources = <String>[];
   int stops = 0;
+  int disposals = 0;
 
   @override
   bool get ggufVisionLoaded => false;
@@ -78,7 +120,9 @@ class _TestEngine implements InferenceEngine {
   }
 
   @override
-  Future<void> dispose() async {}
+  Future<void> dispose() async {
+    disposals++;
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) {

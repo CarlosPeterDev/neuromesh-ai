@@ -22,16 +22,23 @@ class BackgroundWorkService : Service() {
     companion object {
         private const val CHANNEL = "neuromesh_background_work"
         private const val NOTIFICATION = 4202
+        private const val MODEL_NOTIFICATION = 4203
         private const val STOP = "com.neuromesh.ai.STOP_BACKGROUND_WORK"
         private val work = linkedMapOf<String, String>()
         private var running: BackgroundWorkService? = null
         private var appContext: Context? = null
+        private var loadedModel: String? = null
         var onStopRequested: ((String) -> Unit)? = null
 
         fun begin(context: Context, id: String, kind: String) {
-            require(kind == "image" || kind == "relay")
+            require(kind == "image" || kind == "relay" || kind == "model")
             appContext = context.applicationContext
             createChannel(context)
+            if (kind == "model") {
+                loadedModel = id
+                showModelNotification(context, id)
+                return
+            }
             val start = work.isEmpty() || running == null
             work[id] = kind
             try {
@@ -51,6 +58,11 @@ class BackgroundWorkService : Service() {
         }
 
         fun finish(id: String) {
+            if (loadedModel == id) {
+                loadedModel = null
+                appContext?.let { notificationManager(it).cancel(MODEL_NOTIFICATION) }
+                return
+            }
             if (work.remove(id) == null) return
             val service = running
             if (service != null) {
@@ -61,6 +73,17 @@ class BackgroundWorkService : Service() {
                     if (work.isEmpty()) manager.cancel(NOTIFICATION)
                     else manager.notify(NOTIFICATION, notification(context))
                 }
+            }
+        }
+
+        fun refresh(context: Context) {
+            val model = loadedModel
+            if (model == null) notificationManager(context).cancel(MODEL_NOTIFICATION)
+            else showModelNotification(context, model)
+            if (work.isNotEmpty()) {
+                val service = running
+                if (service != null) service.updateNotification()
+                else notificationManager(context).notify(NOTIFICATION, notification(context))
             }
         }
 
@@ -75,16 +98,11 @@ class BackgroundWorkService : Service() {
             }
         }
 
-        private fun notification(context: Context): Notification {
-            val title = when (work.values.singleOrNull()) {
-                "image" -> "Image generation running"
-                "relay" -> "Remote access is on"
-                else -> "NeuroMesh background work"
-            }
+        private fun builder(context: Context, title: String, body: String): NotificationCompat.Builder {
             val builder = NotificationCompat.Builder(context, CHANNEL)
                 .setSmallIcon(R.drawable.ic_tile)
                 .setContentTitle(title)
-                .setContentText("Use Stop to cancel the active work.")
+                .setContentText(body)
                 .setOnlyAlertOnce(true)
                 .setOngoing(true)
                 .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
@@ -92,18 +110,39 @@ class BackgroundWorkService : Service() {
                 builder.setContentIntent(PendingIntent.getActivity(context, 0, launch,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
             }
+            return builder
+        }
+
+        private fun stopIntent(context: Context, id: String): PendingIntent {
+            val cancel = Intent(context, BackgroundWorkService::class.java)
+                .setAction(STOP)
+                .setData(Uri.Builder().scheme("neuromesh").authority("background-work")
+                    .appendPath(id).build())
+            return PendingIntent.getService(context, 0, cancel, PendingIntent.FLAG_IMMUTABLE)
+        }
+
+        private fun showModelNotification(context: Context, id: String) {
+            // An idle model does not need a data-sync service or a wake lock.
+            val notification = builder(context, "Local model loaded", "Stop to cancel inference and unload the model.")
+                .addAction(0, "Stop model", stopIntent(context, id))
+                .build()
+            notificationManager(context).notify(MODEL_NOTIFICATION, notification)
+        }
+
+        private fun notification(context: Context): Notification {
+            val title = when (work.values.singleOrNull()) {
+                "image" -> "Image generation running"
+                "relay" -> "Remote access is on"
+                else -> "NeuroMesh background work"
+            }
+            val builder = builder(context, title, "Use Stop to cancel the active work.")
             for ((id, kind) in work) {
-                val cancel = Intent(context, BackgroundWorkService::class.java)
-                    .setAction(STOP)
-                    .setData(Uri.Builder().scheme("neuromesh").authority("background-work")
-                        .appendPath(id).build())
-                val pending = PendingIntent.getService(context, 0, cancel, PendingIntent.FLAG_IMMUTABLE)
                 val label = when {
                     work.size == 1 -> "Stop"
                     kind == "image" -> "Stop image generation"
                     else -> "Stop remote access"
                 }
-                builder.addAction(0, label, pending)
+                builder.addAction(0, label, stopIntent(context, id))
             }
             return builder.build()
         }
@@ -120,7 +159,13 @@ class BackgroundWorkService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val id = if (intent?.action == STOP) intent.data?.lastPathSegment else null
-        if (id != null && work.remove(id) != null) onStopRequested?.invoke(id)
+        if (id != null && loadedModel == id) {
+            finish(id)
+            onStopRequested?.invoke(id)
+        } else if (id != null && work.remove(id) != null) {
+            onStopRequested?.invoke(id)
+        }
+        if (id != null && loadedModel == null) notificationManager(this).cancel(MODEL_NOTIFICATION)
         if (id == null && !foreground && work.isEmpty()) promote(notification(this))
         updateNotification()
         return START_NOT_STICKY

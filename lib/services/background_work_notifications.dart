@@ -5,9 +5,9 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 
-enum BackgroundWork { image, relay }
+enum BackgroundWork { image, relay, model }
 
-/// Android keeps the process available while the app owns a cancellable job.
+/// Connects Android notification actions to the owners of active work.
 class BackgroundWorkNotifications {
   static const _channel = MethodChannel('com.neuromesh.ai/background_work');
   final _cancellations = <String, FutureOr<void> Function()>{};
@@ -29,9 +29,9 @@ class BackgroundWorkNotifications {
     unawaited(_send('start', {'kind': work.name, 'id': id}));
     if (!_askedForPermission) {
       _askedForPermission = true;
-      unawaited(Permission.notification
-          .request()
-          .then<void>((_) {}, onError: (Object _, StackTrace __) {}));
+      unawaited(Permission.notification.request().then<void>((status) {
+        if (status.isGranted) unawaited(_send('refresh', const {}));
+      }, onError: (Object _, StackTrace __) {}));
     }
     return id;
   }

@@ -16,6 +16,7 @@ import 'device_info_service.dart';
 import 'app_log_service.dart';
 import 'model_load_diagnostics.dart';
 import 'cluster_service.dart';
+import 'background_work_notifications.dart';
 import 'stop_sequence_filter.dart';
 import '../utils/auto_context.dart';
 
@@ -28,12 +29,16 @@ import 'inference_android.dart' if (dart.library.html) 'inference_stub.dart'
 /// - Android: uses flutter_litert_lm for LiteRT-LM models
 /// - Web: cloud-only mode (local inference coming soon)
 class InferenceService extends GetxService {
-  InferenceService() : _createEngine = platform.InferenceEngine.new;
+  InferenceService({void Function()? onNotificationStop})
+      : _onNotificationStop = onNotificationStop,
+        _createEngine = platform.InferenceEngine.new;
 
   @visibleForTesting
-  InferenceService.withEngine(this._createEngine);
+  InferenceService.withEngine(this._createEngine) : _onNotificationStop = null;
 
   final platform.InferenceEngine Function() _createEngine;
+  final void Function()? _onNotificationStop;
+  String? _loadedModelNotification;
   final HiveService _hive = Get.find<HiveService>();
 
   // ── Observable State ──
@@ -340,6 +345,22 @@ class InferenceService extends GetxService {
       isLoadingModel.value = false;
       loadingModelName.value = '';
       if (!isModelLoaded.value) modelLoadProgress.value = 0.0;
+      if (isModelLoaded.value &&
+          _loadedModelNotification == null &&
+          Get.isRegistered<BackgroundWorkNotifications>()) {
+        final revision = modelRevision;
+        _loadedModelNotification = Get.find<BackgroundWorkNotifications>()
+            .begin(BackgroundWork.model, () async {
+          if (modelRevision != revision ||
+              isLoadingModel.value ||
+              !isModelLoaded.value) return;
+          try {
+            _onNotificationStop?.call();
+          } finally {
+            await unloadModel();
+          }
+        });
+      }
     }
   }
 
@@ -355,6 +376,10 @@ class InferenceService extends GetxService {
 
   Future<void> _releaseEngine() async {
     final engine = _engine;
+    if (Get.isRegistered<BackgroundWorkNotifications>()) {
+      Get.find<BackgroundWorkNotifications>().finish(_loadedModelNotification);
+    }
+    _loadedModelNotification = null;
     if (engine != null) {
       try {
         await _stopEngine(engine);
