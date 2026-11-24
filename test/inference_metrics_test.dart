@@ -45,9 +45,10 @@ void main() {
     await send('onToken', ['Hi ', 1, 0]);
     await send('onToken', ['👋', 3, 400000]);
     await send('onToken', ['', 4, 600000]);
+    await send('onToken', ['legacy text']);
     await send('onDone');
 
-    expect(await output, ['Hi ', '👋']);
+    expect(await output, ['Hi ', '👋', 'legacy text']);
     expect(progress, [(1, 0), (3, 400000), (4, 600000)]);
   });
 }

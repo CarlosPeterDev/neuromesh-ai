@@ -10,7 +10,8 @@ trap 'adb shell rm -rf "$device_dir" >/dev/null 2>&1 || true; rm -rf "$scratch"'
 
 d8=$(find "$ANDROID_HOME/build-tools" -name d8 | sort -V | tail -1)
 mkdir -p "$scratch/classes" "$scratch/dex"
-javac --release 8 -d "$scratch/classes" scripts/gguf-smoke/LlamaFlutterAndroidPlugin.java
+javac --release 8 -encoding UTF-8 -d "$scratch/classes" scripts/gguf-smoke/LlamaFlutterAndroidPlugin.java
+dart scripts/gguf-smoke/visual_intent_prompt.dart > "$scratch/visual-intent.txt"
 mapfile -d '' classes < <(find "$scratch/classes" -name '*.class' -print0)
 "$d8" --min-api 28 --output "$scratch/dex" "${classes[@]}"
 
@@ -40,8 +41,9 @@ adb push "$scratch/dex/classes.dex" "$device_dir/classes.dex"
 adb push "$model" "$device_dir/model.gguf"
 adb push "$projector" "$device_dir/mmproj.gguf"
 adb push "$scratch/red.png" "$device_dir/red.png"
+adb push "$scratch/visual-intent.txt" "$device_dir/visual-intent.txt"
 timeout 480 adb shell "CLASSPATH=$device_dir/classes.dex LD_LIBRARY_PATH=$device_dir/lib \
     /system/bin/app_process64 / com.neuromesh.llama_flutter_android.LlamaFlutterAndroidPlugin \
-    $device_dir/lib $device_dir/model.gguf $device_dir/mmproj.gguf $device_dir/red.png" |
+    $device_dir/lib $device_dir/model.gguf $device_dir/mmproj.gguf $device_dir/red.png $device_dir/visual-intent.txt" |
     tee "$scratch/result.txt"
 grep -Fx 'GGUF_INFERENCE_SMOKE_OK' "$scratch/result.txt"

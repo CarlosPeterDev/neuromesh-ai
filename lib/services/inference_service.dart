@@ -7,7 +7,7 @@ import '../utils/thought_parser.dart';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart' show PlatformException;
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:get/get.dart';
 
 import 'hive_service.dart';
@@ -28,6 +28,12 @@ import 'inference_android.dart' if (dart.library.html) 'inference_stub.dart'
 /// - Android: uses flutter_litert_lm for LiteRT-LM models
 /// - Web: cloud-only mode (local inference coming soon)
 class InferenceService extends GetxService {
+  InferenceService() : _createEngine = platform.InferenceEngine.new;
+
+  @visibleForTesting
+  InferenceService.withEngine(this._createEngine);
+
+  final platform.InferenceEngine Function() _createEngine;
   final HiveService _hive = Get.find<HiveService>();
 
   // ── Observable State ──
@@ -83,6 +89,10 @@ class InferenceService extends GetxService {
   final capabilityNotice = ''.obs;
   bool get preferCompactToolPrompt => capabilityNotice.value.isNotEmpty;
   static const _probeSource = 'capability-check';
+  static const visualPlanSource = 'chat-visual-plan';
+  int _foregroundRequests = 0;
+  static bool _backgroundSource(String source) =>
+      source == _probeSource || source == 'title';
   bool _unloadingModel = false;
   String? _loadedProjector;
   static final _clusterRetry = Object();
@@ -152,7 +162,7 @@ class InferenceService extends GetxService {
       await diagnostics?.checkpoint('release previous text engine');
       await _releaseEngine();
 
-      _engine = platform.InferenceEngine();
+      _engine = _createEngine();
 
       final contextSize = _hive.getSetting<int>(
             AppConstants.keyContextSize,
@@ -402,6 +412,7 @@ class InferenceService extends GetxService {
           'chat_capabilities_v2:${sha256.convert(utf8.encode(profile))}';
       if (revision != modelRevision ||
           !isModelLoaded.value ||
+          _foregroundRequests > 0 ||
           isGenerating.value) return;
       final saved = _hive.getSetting<Map>(key);
       if (saved != null) {
@@ -417,8 +428,10 @@ class InferenceService extends GetxService {
         maxTokens: 8,
         onToken: (_) => chunks++,
       );
-      if (stops != stopCount || revision != modelRevision || isGenerating.value)
-        return;
+      if (stops != stopCount ||
+          revision != modelRevision ||
+          _foregroundRequests > 0 ||
+          isGenerating.value) return;
       final call = await generate(
         prompt:
             'Call the calculator with expression 2+2. Return only the tool request.',
@@ -429,6 +442,7 @@ class InferenceService extends GetxService {
       );
       if (stops != stopCount ||
           revision != modelRevision ||
+          _foregroundRequests > 0 ||
           !isModelLoaded.value) return;
       final result = <String, bool>{
         'ordinaryText':
@@ -464,14 +478,49 @@ class InferenceService extends GetxService {
     List<String> stopSequences = const [],
     void Function(String token)? onToken,
   }) async {
-    if (source != _probeSource) {
-      if (generationSource.value == _probeSource) await stopGeneration();
+    final foreground = !_backgroundSource(source);
+    if (!foreground && _foregroundRequests > 0) return '';
+    if (foreground) _foregroundRequests++;
+    try {
+      return await _generate(
+        prompt: prompt,
+        systemPrompt: systemPrompt,
+        conversationHistory: conversationHistory,
+        source: source,
+        imagePath: imagePath,
+        audioPath: audioPath,
+        maxTokens: maxTokens,
+        stopSequences: stopSequences,
+        onToken: onToken,
+      );
+    } finally {
+      if (foreground) _foregroundRequests--;
     }
+  }
+
+  Future<String> _generate({
+    required String prompt,
+    required String? systemPrompt,
+    required List<Map<String, String>>? conversationHistory,
+    required String source,
+    required String? imagePath,
+    required String? audioPath,
+    required int? maxTokens,
+    required List<String> stopSequences,
+    required void Function(String token)? onToken,
+  }) async {
     final engine = _engine;
     if (!supportsLocalInference || engine == null || !isModelLoaded.value) {
       return 'ERROR: No model loaded. Go to Models tab to download and load one.';
     }
 
+    final background = _backgroundSource(source);
+    if (background && isGenerating.value) return '';
+    if (!background && _backgroundSource(generationSource.value)) {
+      final expectedStops = _stopCount + 1;
+      await stopGeneration();
+      if (_stopCount != expectedStops) return '';
+    }
     final stopAtEntry = _stopCount;
     if (isGenerating.value) {
       for (var i = 0; i < 10 && isGenerating.value; i++) {
@@ -488,6 +537,7 @@ class InferenceService extends GetxService {
       await transition;
     } while (!identical(transition, _nativeTransition));
     if (stopAtEntry != _stopCount) return '';
+    if (background && _foregroundRequests > 0) return '';
     if (isGenerating.value || _unloadingModel || isLoadingModel.value) {
       return 'ERROR: Inference is busy. Try again when the current operation finishes.';
     }
@@ -599,11 +649,13 @@ class InferenceService extends GetxService {
         await recordVision('Preparing image and waiting for first token');
       }
       if (!isCurrent()) return '';
-      final temperature = _hive.getSetting<double>(
-            AppConstants.keyTemperature,
-            defaultValue: AppConstants.defaultTemperature,
-          ) ??
-          AppConstants.defaultTemperature;
+      final temperature = source == visualPlanSource
+          ? 0.0
+          : _hive.getSetting<double>(
+                AppConstants.keyTemperature,
+                defaultValue: AppConstants.defaultTemperature,
+              ) ??
+              AppConstants.defaultTemperature;
 
       final settingMaxTokens = _hive.getSetting<int>(
             AppConstants.keyMaxTokens,
@@ -809,7 +861,7 @@ class InferenceService extends GetxService {
           modelRuntime: modelRuntime,
           contextSize: contextSize,
           deviceTier: deviceTier,
-            liteRtPerformanceMode: liteRtPerformanceMode,
+          liteRtPerformanceMode: liteRtPerformanceMode,
           forceLiteRtCpu: cpuRetry || forceLiteRtCpu,
           clearLiteRtCache: cpuRetry || clearLiteRtCache,
           enableLiteRtVision: enableLiteRtVision,

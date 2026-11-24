@@ -1,5 +1,9 @@
 package com.neuromesh.llama_flutter_android;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.Locale;
 
 /** Calls the production JNI entry points from a clean process with synthetic input. */
@@ -39,9 +43,13 @@ public final class LlamaFlutterAndroidPlugin {
             boolean penalizeNewline, Tokens callback);
 
     private String generate(String label, String prompt, String image, boolean greedy) {
+        return generate(label, prompt, image, greedy, 40);
+    }
+
+    private String generate(String label, String prompt, String image, boolean greedy, int limit) {
         nativePrepareGeneration();
         final Tokens callback = new Tokens();
-        nativeGenerate(prompt, image, 40, greedy ? 0.0 : 0.7, greedy ? 1.0 : 0.9,
+        nativeGenerate(prompt, image, limit, greedy ? 0.0 : 0.7, greedy ? 1.0 : 0.9,
                 greedy ? 0 : 40, greedy ? 0.0 : 0.05, 1.0, greedy ? 1.0 : 1.1,
                 0, 0, 64, 0, 5.0, 0.1, 42, true, callback);
         lastDecode = callback;
@@ -55,7 +63,15 @@ public final class LlamaFlutterAndroidPlugin {
         if (!condition) throw new AssertionError(message);
     }
 
-    public static void main(String[] args) {
+    private void checkVisualPlan(String system, String request, String expected) {
+        final String prompt = "<|im_start|>system\n" + system + "<|im_end|>\n"
+                + "<|im_start|>user\n" + request + "<|im_end|>\n"
+                + "<|im_start|>assistant\n<think>\n\n</think>\n\n";
+        require(generate("visual-plan", prompt, null, true, 4).trim().equals(expected),
+                "visual plan differs for " + request);
+    }
+
+    public static void main(String[] args) throws IOException {
         System.loadLibrary("llama_jni");
         final LlamaFlutterAndroidPlugin smoke = new LlamaFlutterAndroidPlugin();
         smoke.nativeInitBackends(args[0], false);
@@ -77,13 +93,22 @@ public final class LlamaFlutterAndroidPlugin {
             final String sampled = smoke.generate("sampled", chat, null, false);
             require(sampled.toLowerCase(Locale.ROOT).contains("hello") ||
                     sampled.toLowerCase(Locale.ROOT).contains("hi"), "sampled greeting did not greet");
-            if (args.length == 4) {
+            if (args.length >= 4) {
                 final String error = smoke.nativeLoadMmproj(args[2], 2);
                 require(error == null, "failed to load matching vision helper: " + error);
                 require(smoke.generate("helper-loaded", chat, null, true).equals(greeting), "helper changed text output");
                 final String vision = "<|im_start|>user\n<__media__>\nWhat color is this image? Answer in one word.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
                 require(smoke.generate("vision", vision, args[3], true).toLowerCase(Locale.ROOT).contains("red"), "image result did not identify red");
                 require(smoke.generate("after-vision", chat, null, true).equals(greeting), "image state leaked into next text turn");
+            }
+            if (args.length >= 5) {
+                final String system = new String(Files.readAllBytes(Paths.get(args[4])), StandardCharsets.UTF_8);
+                smoke.checkVisualPlan(system, "Create image of a flying car", "artwork");
+                smoke.checkVisualPlan(system, "Could you show me what a flying car over a rainy Cairo might look like?", "artwork");
+                smoke.checkVisualPlan(system, "ارسم سيارة تطير فوق القاهرة ليلاً", "artwork");
+                smoke.checkVisualPlan(system, "Explain how a flying car would work.", "text");
+                smoke.checkVisualPlan(system, "Write a prompt I could give a painter to depict a flying car.", "text");
+                smoke.checkVisualPlan(system, "Hi", "text");
             }
         } finally {
             smoke.nativeFreeModel();

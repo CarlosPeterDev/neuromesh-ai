@@ -1,5 +1,11 @@
 # NeuroMesh AI development handoff
 
+## Model-directed Pollinations in Android Chat
+
+Interactive inference preempts automatic titles and capability checks, including while a background call is waiting for the native context. A repeatable Artemis test showed that the full tool catalog could produce prose where an image was requested. Eligible local text turns now use a short deterministic model decision for visual intent. The selector looks at the current request alone. Only the exact `artwork` decision can propose `generate_image`, and the user’s description passes through the normal argument validator and tool policy. The tool loop records the returned attachment and can follow up on remaining work with the other tools.
+
+Native Artemis tests distinguished English and Arabic image requests from greetings, requests for explanations, and requests to write a prompt. A host end-to-end check used the real model decision for `A flying car above Cairo`, invoked the existing Pollinations executor, and saved a 59,453-byte JPEG. This used the public anonymous endpoint and simulated approval of the test prompt. Android release verification tests the model’s decisions from the packaged JNI libraries. The phone’s approval and image display still need physical coverage.
+
 ## Android GGUF token throughput
 
 Live Chat, saved replies, and performance screens use the GGUF decoder’s sampled token count and elapsed time between samples. A text chunk can span multiple tokens, especially when the decoder joins UTF-8 fragments. Historical chunk rates are no longer shown. Runtimes without native token metrics omit the Chat speed. The inference fixture asserts nine sampled tokens for Artemis’s greeting. The loader also preserves the underlying error from llama.cpp in diagnostics.

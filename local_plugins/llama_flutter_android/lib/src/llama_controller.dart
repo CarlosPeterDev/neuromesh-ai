@@ -275,8 +275,10 @@ class LlamaController implements LlamaFlutterApi {
 
   // Implementation of LlamaFlutterApi interface methods
   @override
-  void onToken(String token, int count, int elapsedMicros) {
-    _onDecodeProgress?.call(count, elapsedMicros);
+  void onToken(String token, [int? count, int? elapsedMicros]) {
+    if (count != null && elapsedMicros != null) {
+      _onDecodeProgress?.call(count, elapsedMicros);
+    }
     if (token.isNotEmpty) _tokenController?.add(token);
   }
 

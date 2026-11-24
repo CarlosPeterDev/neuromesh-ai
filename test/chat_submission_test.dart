@@ -99,6 +99,54 @@ void main() {
     expect(chat.messages.last.content, contains('nmfile:research.wav'));
   });
 
+  test('local Chat saves the result of a semantically selected image tool',
+      () async {
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    await hive.setSetting('auto_title', false);
+    local.isModelLoaded.value = true;
+    local.visualDecision = 'artwork';
+    local.answer = 'Here it is.';
+    const request = 'A vintage spaceport at sunrise on a postcard, please.';
+
+    chat.textController.text = request;
+    await chat.sendMessage();
+
+    expect(local.sources, [InferenceService.visualPlanSource, 'chat-tools']);
+    expect(agent.imageCall?.name, 'generate_image');
+    expect(agent.imageCall?.arguments['prompt'], request);
+    expect(chat.messages.last.content, contains('nmfile:generated.jpg'));
+  });
+
+  test('a text decision does not send the sample to Pollinations', () async {
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    await hive.setSetting('auto_title', false);
+    local.isModelLoaded.value = true;
+    local.visualDecision = 'text';
+    local.answer = 'A brief explanation.';
+
+    chat.textController.text = 'Explain how a flying car would work.';
+    await chat.sendMessage();
+
+    expect(local.sources, [InferenceService.visualPlanSource, 'chat-tools']);
+    expect(agent.imageCall, isNull);
+    expect(chat.messages.last.content, local.answer);
+  });
+
+  test('a blocked image tool is excluded from semantic planning', () async {
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    await hive.setSetting('auto_title', false);
+    await agent.setPolicy('built-in', 'generate_image', 'block');
+    local.isModelLoaded.value = true;
+    local.visualDecision = 'artwork';
+    local.answer = 'An ordinary reply.';
+
+    chat.textController.text = 'A vintage spaceport at sunrise on a postcard.';
+    await chat.sendMessage();
+
+    expect(local.sources, ['chat-tools']);
+    expect(agent.imageCall, isNull);
+  });
+
   test('a second send during attachment import cannot duplicate the request',
       () async {
     attachDocument();
@@ -321,7 +369,11 @@ class _WorkspaceAgent extends ChatToolService {
 
   @override
   Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm) async {
-    if (call.name == 'generate_image' || call.name == 'edit_image') {
+    if (call.name == 'generate_image') {
+      imageCall = call;
+      return 'Generated online with Pollinations.\n\n![Generated](nmfile:generated.jpg)';
+    }
+    if (call.name == 'edit_image') {
       imageCall = call;
       return 'Edited online with Pollinations. ![Edited](nmfile:edited.jpg)';
     }
@@ -341,6 +393,8 @@ class _WorkspaceAgent extends ChatToolService {
 
 class _TestNarrationInference extends InferenceService {
   String answer = '';
+  String visualDecision = 'text';
+  final sources = <String>[];
   Completer<void>? pendingReset;
   int resets = 0;
   @override
@@ -366,8 +420,10 @@ class _TestNarrationInference extends InferenceService {
     void Function(String token)? onToken,
   }) async {
     calls++;
+    sources.add(source);
     lastPrompt = prompt;
     lastSystem = systemPrompt;
+    if (source == InferenceService.visualPlanSource) return visualDecision;
     onToken?.call(answer);
     return answer;
   }

@@ -30,6 +30,7 @@ import '../services/rag_service.dart';
 import '../services/chat_tool_service.dart';
 import '../services/chat_calculator.dart';
 import '../services/chat_tool_loop.dart';
+import '../services/chat_visual_intent.dart';
 import '../services/download_service.dart';
 import '../widgets/tool_confirm.dart';
 import '../services/web_search_service.dart';
@@ -300,7 +301,9 @@ class ChatController extends GetxController {
         return;
       }
       final inf = Get.find<InferenceService>();
-      if (!inf.isModelLoaded.value || generationId != _generationSerial) return;
+      if (!inf.isModelLoaded.value ||
+          isLoading.value ||
+          generationId != _generationSerial) return;
       final session = currentSession;
       if (session == null || session.title != _autoTitleFor[session.id]) return;
       final firstUser =
@@ -1284,11 +1287,43 @@ class ChatController extends GetxController {
                 'Try a larger output limit or turn off local model thinking.';
           }
         } else {
+          final canPlanImage = inferenceMode == 'local' &&
+              inference.isModelLoaded.value &&
+              allowed.contains('generate_image') &&
+              imgBase64 == null &&
+              fileName == null &&
+              explicitFiles.isEmpty &&
+              visibleText.isNotEmpty &&
+              visibleText.length <= 1000;
           Future<ToolLoopResult> runLoop() => ChatToolLoop(
                 maxSteps: _hive.getSetting<int>('chat_tool_step_limit') ?? 5,
               ).run(
                 reply: generateReply,
                 allowed: allowed,
+                plan: canPlanImage
+                    ? () async {
+                        if (generationId != _generationSerial ||
+                            cancellation.isCompleted) {
+                          return null;
+                        }
+                        responseStage.value = 'Choosing how to respond';
+                        passes++;
+                        final decision = await inference.generate(
+                          prompt: visibleText,
+                          systemPrompt: visualIntentInstructions,
+                          source: InferenceService.visualPlanSource,
+                          maxTokens: 4,
+                        );
+                        if (generationId != _generationSerial ||
+                            cancellation.isCompleted ||
+                            modelPath !=
+                                _hive.getSetting<String>(
+                                    AppConstants.keyLocalModelPath)) {
+                          return null;
+                        }
+                        return ChatToolLoop.visualPlan(decision, visibleText);
+                      }
+                    : null,
                 execute: (call, abort) async {
                   final args = {...call.arguments};
                   if (call.name == 'transcribe_attachment') {

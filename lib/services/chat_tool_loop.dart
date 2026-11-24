@@ -122,6 +122,16 @@ class ChatToolLoop {
   static const callPrefix = '<tool_call>';
   static const callSuffix = '</tool_call>';
 
+  static ParsedToolCall? visualPlan(String decision, String request) {
+    if (splitThoughtTags(decision).answer.trim() != 'artwork') return null;
+    return _validatedCall({
+      'name': 'generate_image',
+      'arguments': {'prompt': request},
+    }, const {
+      'generate_image'
+    }, compact: false);
+  }
+
   static String instructions(Set<String> allowed,
       {bool compact = false, bool nativeMarkup = false}) {
     if (allowed.isEmpty) {
@@ -298,6 +308,7 @@ class ChatToolLoop {
     bool compactPrompt = false,
     bool nativeMarkup = false,
     bool generationHasOwnDeadline = false,
+    Future<ParsedToolCall?> Function()? plan,
     void Function(String stage)? onStage,
     void Function(bool valid)? onProtocol,
     void Function(int passes, int invalid, int tools, int toolMs)? onMetrics,
@@ -331,6 +342,8 @@ class ChatToolLoop {
     var executions = 0;
     var hitLimit = false;
     var searchAttempted = false;
+    var plannedImageAttempted = false;
+    String? plannedImageSummary;
     var passes = 0;
     var toolMs = 0;
     const verificationNotice =
@@ -372,6 +385,9 @@ class ChatToolLoop {
       ];
       final blocks = [
         if (answer.isNotEmpty) answer,
+        if (plannedImageSummary case final summary?
+            when !answer.contains(summary))
+          summary,
         ...attachments,
         if (sourceLinks.isNotEmpty) 'Sources:\n${sourceLinks.join('\n')}',
       ];
@@ -380,25 +396,38 @@ class ChatToolLoop {
     }
 
     try {
+      var planned =
+          plan == null ? null : await bounded(plan(), inference: true);
       while (true) {
         final callable = executions < maxSteps && stalled < 2;
         if (!callable) hitLimit = true;
         passes++;
         if (passes > 1) onStage?.call('Preparing follow-up');
         final compact = compactPrompt || invalid > 0;
-        final raw = await bounded(
-            reply(
-              instructions(callable ? allowed : const {},
-                      compact: compact, nativeMarkup: nativeMarkup) +
-                  (callable
-                      ? ''
-                      : '\nTool execution ended. Finish in ordinary text and explain what is incomplete.'),
-              evidence(),
-            ),
-            inference: true);
+        final selected = planned;
+        planned = null;
+        final available = plannedImageAttempted
+            ? allowed.difference(const {'generate_image'})
+            : allowed;
+        final raw = selected != null
+            ? ''
+            : await bounded(
+                reply(
+                  instructions(callable ? available : const {},
+                          compact: compact, nativeMarkup: nativeMarkup) +
+                      (plannedImageAttempted
+                          ? '\nUse the image result below, and address any remaining parts of the user’s request.'
+                          : '') +
+                      (callable
+                          ? ''
+                          : '\nTool execution ended. Finish in ordinary text and explain what is incomplete.'),
+                  evidence(),
+                ),
+                inference: true);
         if (raw.startsWith('ERROR:')) return finish(raw);
         final text = splitThoughtTags(raw).answer.trim();
-        if (!text.startsWith(callPrefix) &&
+        if (selected == null &&
+            !text.startsWith(callPrefix) &&
             !(text.isNotEmpty && callPrefix.startsWith(text))) {
           if (results.isNotEmpty && !results.any((result) => result.success)) {
             return finish([
@@ -427,10 +456,12 @@ class ChatToolLoop {
           ].join('\n\n'));
         }
         onStage?.call('Validating tool request');
-        final decision = text.startsWith(callPrefix)
-            ? _parse(text, nativeMarkup: nativeMarkup)
-            : null;
-        final call = _validatedCall(decision, allowed, compact: compact);
+        final decision = selected != null
+            ? {'name': selected.name, 'arguments': selected.arguments}
+            : text.startsWith(callPrefix)
+                ? _parse(text, nativeMarkup: nativeMarkup)
+                : null;
+        final call = _validatedCall(decision, available, compact: compact);
         final note = decision?['missing'];
         if (call == null || !callable) {
           onProtocol?.call(false);
@@ -576,6 +607,10 @@ class ChatToolLoop {
             name, safeArgs, label, redactSecrets(preview ?? output),
             ms: timer.elapsedMilliseconds, failed: !success);
         onTrace(List.of(trace));
+        if (selected != null && name == 'generate_image') {
+          plannedImageAttempted = true;
+          if (success) plannedImageSummary = output.split('\n').first;
+        }
       }
       final completed = results
           .where((result) => result.success && result.name != 'web_search');
