@@ -4,6 +4,10 @@
 
 Live Chat, saved replies, and performance screens use the GGUF decoder’s sampled token count and elapsed time between samples. A text chunk can span multiple tokens, especially when the decoder joins UTF-8 fragments. Historical chunk rates are no longer shown. Runtimes without native token metrics omit the Chat speed. The inference fixture asserts nine sampled tokens for Artemis’s greeting. The loader also preserves the underlying error from llama.cpp in diagnostics.
 
+All 206 fixture-backed Flutter tests passed, and analysis reported zero warnings or errors. In a host JNI check, Artemis returned four emoji and three spaces in seven streamed text chunks from 12 sampled tokens. [Android build and packaged inference check](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/45464738840)
+
+**v1.0.206** was published as GitHub Latest from `d80d528`. The Android 12 x86-64 emulator installed and upgraded the Test APK, launched the Play split, and verified nine sampled tokens and a positive elapsed interval for the fixture greeting using the universal APK’s JNI libraries. Both APKs and the development-signed AAB are separate assets. All three passed the published SHA-256 and archive checks after download. [Release](https://github.com/CarlosPeterDev/neuromesh-ai/releases/tag/v1.0.206)
+
 An Android 14 report from v1.0.205 recorded an Artemis load failure on an SM-A235F. The reported file was 532,795,712 bytes. The catalog download and CI fixture are 532,402,496 bytes. The report contains only the old generic loader error, so the exact failure is unconfirmed. The new diagnostics are verified with an intentionally damaged host fixture. Physical-device retesting remains open.
 
 ## Current milestone — Android GGUF correctness
