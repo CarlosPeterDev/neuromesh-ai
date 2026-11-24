@@ -10,11 +10,19 @@ public final class LlamaFlutterAndroidPlugin {
 
     public static final class Tokens {
         public final StringBuilder text = new StringBuilder();
-        public Object invoke(Object value) {
-            text.append((String) value);
-            return null;
+        long count;
+        long elapsedMicros;
+
+        public void onToken(String value, long count, long elapsedMicros) {
+            require(count >= this.count && elapsedMicros >= this.elapsedMicros,
+                    "decode statistics went backwards");
+            this.count = count;
+            this.elapsedMicros = elapsedMicros;
+            text.append(value);
         }
     }
+
+    private Tokens lastDecode;
 
     private native boolean nativeInitBackends(String directory, boolean allowGpu);
     private native void nativeLoadModel(String path, long threads, long context, long gpuLayers, Progress progress);
@@ -36,8 +44,10 @@ public final class LlamaFlutterAndroidPlugin {
         nativeGenerate(prompt, image, 40, greedy ? 0.0 : 0.7, greedy ? 1.0 : 0.9,
                 greedy ? 0 : 40, greedy ? 0.0 : 0.05, 1.0, greedy ? 1.0 : 1.1,
                 0, 0, 64, 0, 5.0, 0.1, 42, true, callback);
+        lastDecode = callback;
         final String result = callback.text.toString();
         System.out.println(label + " tokens=" + nativeCountPromptTokens(prompt) + " " + result.trim());
+        System.out.println(label + " output_tokens=" + callback.count + " sample_elapsed_us=" + callback.elapsedMicros);
         return result;
     }
 
@@ -59,6 +69,8 @@ public final class LlamaFlutterAndroidPlugin {
             require(completion.startsWith(" John."), "raw completion differs from reference");
             final String greeting = smoke.generate("chat", chat, null, true);
             require(greeting.trim().equals("Hello! How can I help you today?"), "ChatML output differs from reference");
+            require(smoke.lastDecode.count == 9 && smoke.lastDecode.elapsedMicros > 0,
+                    "ChatML decode statistics differ from reference");
             require(smoke.generate("reused", chat, null, true).equals(greeting), "reused context altered greedy output");
             smoke.nativeClearContext();
             require(smoke.generate("reset", chat, null, true).equals(greeting), "reset context altered greedy output");

@@ -39,7 +39,7 @@ class InferenceService extends GetxService {
   final loadedModelName = ''.obs;
   int get modelRevision => _modelRevision;
   int _modelRevision = 0;
-  // The runtimes deliver text chunks. Neither reports tokenizer counts here.
+  // Populated only by runtimes that report actual sampled tokens.
   final tokenCount = 0.obs;
   int? firstOutputMs;
   int? modelLoadMs;
@@ -626,6 +626,13 @@ class InferenceService extends GetxService {
         source: source,
         normalThinking: (source == 'chat' || source == 'chat-tools') &&
             (_hive.getSetting<bool>('local_normal_thinking') ?? false),
+        onDecodeProgress: (count, elapsedMicros) {
+          if (!isCurrent()) return;
+          tokenCount.value = count;
+          if (count > 1 && elapsedMicros > 0) {
+            tokensPerSecond.value = (count - 1) * 1000000 / elapsedMicros;
+          }
+        },
         onToken: (rawToken) {
           if (!isCurrent()) return;
           var token = rawToken;
@@ -645,13 +652,7 @@ class InferenceService extends GetxService {
           firstVisibleOutputUs ??= now;
           firstOutputMs ??= now ~/ 1000;
           emittedChunks++;
-          tokenCount.value = emittedChunks;
           streamingText.value += token;
-          final generationUs = now - firstVisibleOutputUs!;
-          if (generationUs > 0 && tokenCount.value > 1) {
-            tokensPerSecond.value =
-                (tokenCount.value - 1) * 1000000 / generationUs;
-          }
           if (loadedModelRuntime.value == 'litert') {
             tokenFlushBuffer.write(token);
             tokenFlushTimer ??= Timer(const Duration(milliseconds: 60), () {

@@ -795,7 +795,7 @@ abstract class LlamaFlutterApi {
   static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
 
   /// Stream token to Dart
-  void onToken(String token);
+  void onToken(String token, int count, int elapsedMicros);
 
   /// Generation completed
   void onDone();
@@ -823,7 +823,7 @@ abstract class LlamaFlutterApi {
           assert(arg_token != null,
               'Argument for dev.flutter.pigeon.llama_flutter_android.LlamaFlutterApi.onToken was null, expected non-null String.');
           try {
-            api.onToken(arg_token!);
+            api.onToken(arg_token!, args[1] as int, args[2] as int);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);

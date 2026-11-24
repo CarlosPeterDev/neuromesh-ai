@@ -521,7 +521,7 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeInitB
 }
 
 // CONT lines continue the previous message; drop them when it was DEBUG.
-static ggml_log_level g_last_log_level = GGML_LOG_LEVEL_INFO;
+static thread_local ggml_log_level g_last_log_level = GGML_LOG_LEVEL_INFO;
 
 static void androidLlamaLog(ggml_log_level level, const char* text, void*) {
     if (!text) return;
@@ -561,15 +561,10 @@ static void androidLlamaLog(ggml_log_level level, const char* text, void*) {
     } else if (std::strncmp(text, "RPC client disconnected", 23) == 0) {
         g_worker_peer.clear();
     }
-    if (!g_capture_load_error) return;
-    if (level == GGML_LOG_LEVEL_ERROR) {
-        g_load_error.assign(text);
-    } else if (level == GGML_LOG_LEVEL_CONT && !g_load_error.empty()) {
-        g_load_error.append(text);
-    }
-    if (g_load_error.size() > 4096) {
-        g_load_error.erase(0, g_load_error.size() - 4096);
-    }
+    if (!g_capture_load_error || effective != GGML_LOG_LEVEL_ERROR) return;
+    // Keep the underlying error before llama.cpp adds its generic summary.
+    constexpr size_t max_error_size = 4096;
+    g_load_error.append(text, std::min(std::strlen(text), max_error_size - g_load_error.size()));
 }
 
 static std::string consumeLoadError() {
@@ -1225,7 +1220,12 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
 
     // Get callback method
     jclass callbackClass = env->GetObjectClass(token_callback);
-    jmethodID invokeMethod = env->GetMethodID(callbackClass, "invoke", "(Ljava/lang/Object;)Ljava/lang/Object;");
+    jmethodID onToken = env->GetMethodID(callbackClass, "onToken", "(Ljava/lang/String;JJ)V");
+    if (!onToken) {
+        env->DeleteLocalRef(callbackClass);
+        llama_batch_free(batch);
+        return;
+    }
 
     // Generation loop
     Utf8TokenStream token_text;
@@ -1233,17 +1233,25 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
     const auto budget = std::min<jlong>(max_tokens, with_image
         ? image_generation_budget : (int)llama_n_ctx_seq(g_ctx) - g_n_past.load());
     int sampled_tokens = 0;
+    int reported_tokens = 0;
+    auto first_sample = decode_start;
+    auto last_sample = decode_start;
     const int n_vocab = llama_vocab_n_tokens(g_vocab);
     std::string generation_error;
     const char* finish_reason = "limit";
     std::vector<char> large_piece;
     auto emit = [&](const std::vector<uint16_t>& piece) {
-        if (piece.empty()) return;
-        const jstring token = env->NewString(piece.data(), static_cast<jsize>(piece.size()));
+        if (piece.empty() && reported_tokens == sampled_tokens) return;
+        const jchar empty = 0;
+        const jstring token = env->NewString(piece.empty() ? &empty : piece.data(),
+            static_cast<jsize>(piece.size()));
         if (!token) return;
-        const jobject response = env->CallObjectMethod(token_callback, invokeMethod, token);
-        if (response) env->DeleteLocalRef(response);
+        const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
+            last_sample - first_sample).count();
+        env->CallVoidMethod(token_callback, onToken, token,
+            static_cast<jlong>(sampled_tokens), static_cast<jlong>(micros));
         env->DeleteLocalRef(token);
+        reported_tokens = sampled_tokens;
     };
 
     for (int i = 0; i < budget && !g_stop_flag; i++) {
@@ -1266,7 +1274,9 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
             break;
         }
 
+        last_sample = std::chrono::steady_clock::now();
         if (++sampled_tokens == 1) {
+            first_sample = last_sample;
             LOGI("first_sample_ms=%lld", elapsed_ms(prompt_start));
         }
         // A model can split one Unicode character across multiple tokens.
@@ -1284,7 +1294,10 @@ Java_com_neuromesh_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGener
             generation_error = "GGUF token could not be decoded";
             break;
         }
-        if (length > 0) emit(token_text.append(bytes, length));
+        if (length > 0) {
+            auto piece = token_text.append(bytes, length);
+            if (!piece.empty()) emit(piece);
+        }
         if (env->ExceptionCheck() || i + 1 == budget) break;
 
         // Prepare next batch

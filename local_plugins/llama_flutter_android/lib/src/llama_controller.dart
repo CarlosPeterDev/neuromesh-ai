@@ -6,6 +6,7 @@ import 'llama_api.dart';
 class LlamaController implements LlamaFlutterApi {
   final _api = LlamaHostApi();
   StreamController<String>? _tokenController;
+  void Function(int, int)? _onDecodeProgress;
   final _progressController = StreamController<double>.broadcast();
 
   bool _isLoading = false;
@@ -72,6 +73,7 @@ class LlamaController implements LlamaFlutterApi {
     double mirostatEta = 0.1,
     int? seed,
     bool penalizeNewline = true,
+    void Function(int count, int elapsedMicros)? onDecodeProgress,
   }) {
     if (_isGenerating) {
       throw StateError('Already generating');
@@ -79,6 +81,7 @@ class LlamaController implements LlamaFlutterApi {
 
     _isGenerating = true;
     _tokenController = StreamController<String>.broadcast();
+    _onDecodeProgress = onDecodeProgress;
 
     // Start generation
     final stream = _tokenController!;
@@ -105,6 +108,7 @@ class LlamaController implements LlamaFlutterApi {
       if (!identical(_tokenController, stream)) return;
       _isGenerating = false;
       _tokenController = null;
+      _onDecodeProgress = null;
       stream.addError(error, stack);
       unawaited(stream.close());
     }));
@@ -118,6 +122,7 @@ class LlamaController implements LlamaFlutterApi {
     final stream = _tokenController;
     _isGenerating = false;
     _tokenController = null;
+    _onDecodeProgress = null;
     if (stream != null) unawaited(stream.close());
     await _api.stop();
   }
@@ -167,6 +172,7 @@ class LlamaController implements LlamaFlutterApi {
     double mirostatEta = 0.1,
     int? seed,
     bool penalizeNewline = true,
+    void Function(int count, int elapsedMicros)? onDecodeProgress,
   }) {
     if (_isGenerating) {
       throw StateError('Already generating');
@@ -174,6 +180,7 @@ class LlamaController implements LlamaFlutterApi {
 
     _isGenerating = true;
     _tokenController = StreamController<String>.broadcast();
+    _onDecodeProgress = onDecodeProgress;
 
     // Start chat generation
     final stream = _tokenController!;
@@ -201,6 +208,7 @@ class LlamaController implements LlamaFlutterApi {
       if (!identical(_tokenController, stream)) return;
       _isGenerating = false;
       _tokenController = null;
+      _onDecodeProgress = null;
       stream.addError(error, stack);
       unawaited(stream.close());
     }));
@@ -267,8 +275,9 @@ class LlamaController implements LlamaFlutterApi {
 
   // Implementation of LlamaFlutterApi interface methods
   @override
-  void onToken(String token) {
-    _tokenController?.add(token);
+  void onToken(String token, int count, int elapsedMicros) {
+    _onDecodeProgress?.call(count, elapsedMicros);
+    if (token.isNotEmpty) _tokenController?.add(token);
   }
 
   @override
@@ -276,6 +285,7 @@ class LlamaController implements LlamaFlutterApi {
     _isGenerating = false;
     _tokenController?.close();
     _tokenController = null;
+    _onDecodeProgress = null;
   }
 
   @override
@@ -284,6 +294,7 @@ class LlamaController implements LlamaFlutterApi {
     _tokenController?.addError(Exception(error));
     _tokenController?.close();
     _tokenController = null;
+    _onDecodeProgress = null;
   }
 
   @override

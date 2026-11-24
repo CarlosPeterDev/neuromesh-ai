@@ -94,7 +94,8 @@ class ChatMessage {
         'fileSize': fileSize,
         'cmdOutput': cmdOutput,
         'isCommand': isCommand,
-        'tokensPerSec': tokensPerSec,
+        // Older backups used tokensPerSec for output chunks per second.
+        if (tokensPerSec != null) 'measuredTokensPerSec': tokensPerSec,
         'thoughtDurationSeconds': thoughtDurationSeconds,
         'imageGenDurationMs': imageGenDurationMs,
         'timestamp': timestamp.toIso8601String(),
@@ -118,9 +119,7 @@ class ChatMessage {
             map['fileSize'] != null ? (map['fileSize'] as num).toInt() : null,
         cmdOutput: map['cmdOutput'],
         isCommand: map['isCommand'] ?? false,
-        tokensPerSec: map['tokensPerSec'] != null
-            ? (map['tokensPerSec'] as num).toDouble()
-            : null,
+        tokensPerSec: (map['measuredTokensPerSec'] as num?)?.toDouble(),
         thoughtDurationSeconds: map['thoughtDurationSeconds'] != null
             ? (map['thoughtDurationSeconds'] as num).toInt()
             : null,

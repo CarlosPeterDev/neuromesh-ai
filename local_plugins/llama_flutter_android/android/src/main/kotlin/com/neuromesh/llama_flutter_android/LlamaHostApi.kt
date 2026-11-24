@@ -697,12 +697,12 @@ class LlamaFlutterApi(private val binaryMessenger: BinaryMessenger, private val 
     }
   }
   /** Stream token to Dart */
-  fun onToken(tokenArg: String, callback: (Result<Unit>) -> Unit)
+  fun onToken(tokenArg: String, countArg: Long, elapsedMicrosArg: Long, callback: (Result<Unit>) -> Unit)
 {
     val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
     val channelName = "dev.flutter.pigeon.llama_flutter_android.LlamaFlutterApi.onToken$separatedMessageChannelSuffix"
     val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
-    channel.send(listOf(tokenArg)) {
+    channel.send(listOf(tokenArg, countArg, elapsedMicrosArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
           callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))

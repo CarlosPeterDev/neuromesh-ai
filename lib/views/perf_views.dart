@@ -6,7 +6,7 @@ import '../services/download_service.dart';
 import '../services/device_bridge.dart';
 import '../services/inference_service.dart';
 
-/// Measures observed output chunks for the currently loaded model.
+/// Measures output speed for a runtime that reports sampled tokens.
 Future<String> runBenchmark() async {
   final inf = Get.find<InferenceService>();
   if (!inf.isModelLoaded.value) return 'Load a model first.';
@@ -22,14 +22,17 @@ Future<String> runBenchmark() async {
   );
   if (out.startsWith('ERROR')) return out;
   if (inf.stopCount != stopCount) return 'Benchmark interrupted.';
-  if (inf.tokenCount.value == 0) return 'The benchmark produced no output.';
+  if (out.trim().isEmpty) return 'The benchmark produced no output.';
   return [
     inf.loadedModelName.value,
     if (inf.loadedBackend.value.isNotEmpty)
       'Reported backend: ${inf.loadedBackend.value}',
     if (inf.modelLoadMs case final ms?) 'Model load: $ms ms',
     if (inf.firstOutputMs case final ms?) 'First visible output: $ms ms',
-    'Speed: ${inf.tokensPerSecond.value.toStringAsFixed(1)} output chunks/s (${inf.tokenCount.value} chunks)',
+    if (inf.tokensPerSecond.value > 0)
+      'Speed: ${inf.tokensPerSecond.value.toStringAsFixed(1)} tokens/s (${inf.tokenCount.value} tokens)'
+    else
+      'Token speed unavailable for this run.',
   ].join('\n');
 }
 
@@ -114,7 +117,7 @@ class _CompareViewState extends State<CompareView> {
       r.stats = [
         if (load != null) 'Model load: $load ms',
         if (valid && first != null) 'First visible output: $first ms',
-        if (valid && rate > 0) '${rate.toStringAsFixed(1)} chunks/s',
+        if (valid && rate > 0) '${rate.toStringAsFixed(1)} tokens/s',
         if (free is num)
           '${(free / 1073741824).toStringAsFixed(1)} GiB device RAM free',
       ].join(' · ');

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import androidx.annotation.Keep
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -180,14 +181,9 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
                     request.mirostatTau,
                     request.mirostatEta,
                     request.seed ?: -1L,  // Use -1 for random seed
-                    request.penalizeNewline
-                ) { token ->
-                    if (!isStopping.get()) {
-                        scope.launch(Dispatchers.Main) {
-                            if (!isStopping.get()) flutterApi.onToken(token) { }
-                        }
-                    }
-                }
+                    request.penalizeNewline,
+                    decodeCallback
+                )
 
                 withContext(Dispatchers.Main) {
                     if (!isStopping.get()) flutterApi.onDone { }
@@ -346,14 +342,9 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
                     request.mirostatTau.toDouble(),
                     request.mirostatEta.toDouble(),
                     request.seed ?: -1L,  // Use -1 for random seed
-                    request.penalizeNewline
-                ) { token ->
-                    if (!isStopping.get()) {
-                        scope.launch(Dispatchers.Main) {
-                            if (!isStopping.get()) flutterApi.onToken(token) { }
-                        }
-                    }
-                }
+                    request.penalizeNewline,
+                    decodeCallback
+                )
 
                 withContext(Dispatchers.Main) {
                     if (!isStopping.get()) flutterApi.onDone { }
@@ -591,6 +582,21 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
         progressCallback: (Double) -> Unit
     )
 
+    private val decodeCallback = object : DecodeCallback {
+        @Keep
+        override fun onToken(text: String, count: Long, elapsedMicros: Long) {
+            if (isStopping.get()) return
+            scope.launch(Dispatchers.Main) {
+                if (!isStopping.get()) flutterApi.onToken(text, count, elapsedMicros) { }
+            }
+        }
+    }
+
+    @Keep
+    private interface DecodeCallback {
+        fun onToken(text: String, count: Long, elapsedMicros: Long)
+    }
+
     private external fun nativeGenerate(
         prompt: String,
         imagePath: String?,
@@ -609,7 +615,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
         mirostatEta: Double,
         seed: Long,
         penalizeNewline: Boolean,
-        tokenCallback: (String) -> Unit
+        tokenCallback: DecodeCallback
     )
 
     /** Returns null on success, otherwise why the vision file didn't load. */

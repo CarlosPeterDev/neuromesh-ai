@@ -377,6 +377,7 @@ class InferenceEngine {
     String source = 'chat',
     bool normalThinking = false,
     void Function(String token)? onToken,
+    void Function(int count, int elapsedMicros)? onDecodeProgress,
   }) async {
     if (_desk != null) {
       return _desk.generate(
@@ -460,6 +461,7 @@ class InferenceEngine {
         minP: 0.05,
         repeatPenalty: 1.1,
         repeatLastN: 64,
+        onDecodeProgress: onDecodeProgress,
       );
       print('[Inference] generateChat() started (${messages.length} messages)');
     } catch (e) {
@@ -480,30 +482,29 @@ class InferenceEngine {
         minP: 0.05,
         repeatPenalty: 1.1,
         repeatLastN: 64,
+        onDecodeProgress: onDecodeProgress,
       );
     }
 
-    int tokenCount = 0;
+    int chunks = 0;
     _subscription = stream.listen(
       (token) {
-        if (tokenCount == 0) {
-          print('[Inference] ✓ FIRST TOKEN received! Prefill done.');
+        if (chunks == 0) {
+          print('[Inference] ✓ FIRST CHUNK received! Prefill done.');
         }
-        // Any token (even one that cleans to nothing) means the engine is
-        // alive. The limit only catches a stuck engine: big models on CPU
-        // can pause several seconds between tokens.
+        // Big CPU models can pause several seconds between output chunks.
         _idleTimer?.cancel();
         _idleTimer = Timer(_tokenStallTimeout, () {
-          print('[Inference] Idle timeout — $tokenCount tokens');
+          print('[Inference] Idle timeout — $chunks chunks');
           finish(buffer.toString());
         });
         if (token.isEmpty) return;
         buffer.write(token);
-        tokenCount++;
+        chunks++;
         onToken?.call(token);
       },
       onDone: () {
-        print('[Inference] Stream onDone — $tokenCount tokens total');
+        print('[Inference] Stream onDone — $chunks chunks total');
         finish(buffer.toString(), stopNative: false);
       },
       onError: (error) {

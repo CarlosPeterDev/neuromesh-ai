@@ -60,6 +60,7 @@ class InferenceEngine {
     String source = 'chat',
     bool normalThinking = false,
     void Function(String token)? onToken,
+    void Function(int count, int elapsedMicros)? onDecodeProgress,
   }) async {
     return 'ERROR: Local inference is not available on this platform. Use Cloud mode.';
   }

@@ -1,5 +1,11 @@
 # NeuroMesh AI development handoff
 
+## Android GGUF token throughput
+
+Live Chat, saved replies, and performance screens use the GGUF decoder’s sampled token count and elapsed time between samples. A text chunk can span multiple tokens, especially when the decoder joins UTF-8 fragments. Historical chunk rates are no longer shown. Runtimes without native token metrics omit the Chat speed. The inference fixture asserts nine sampled tokens for Artemis’s greeting. The loader also preserves the underlying error from llama.cpp in diagnostics.
+
+An Android 14 report from v1.0.205 recorded an Artemis load failure on an SM-A235F. The reported file was 532,795,712 bytes. The catalog download and CI fixture are 532,402,496 bytes. The report contains only the old generic loader error, so the exact failure is unconfirmed. The new diagnostics are verified with an intentionally damaged host fixture. Physical-device retesting remains open.
+
 ## Current milestone — Android GGUF correctness
 
 The `android-gguf-correctness` branch continues from the v1.0.204 handoff. A host fault-injection experiment reproduced the ASCII corruption pattern in the old sampler path. The updated native runtime validates GGUF tensors and scores, encodes Unicode prompts correctly, and runs actual model generation as part of the Android release gate. The original phone's backend and model fingerprint remain unknown. [Investigation and results](docs/ANDROID_GGUF_CORRECTNESS.md) · [Android build and publication](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/45451632477)
