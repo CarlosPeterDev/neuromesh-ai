@@ -8,6 +8,8 @@ The final shared decision uses 54 actual Artemis input tokens for a greeting, do
 
 With the reconstructed arithmetic request, the older first pass counted 155 tokens. The new first pass counted 104 for the Unicode formula and 105 for LaTeX. The separate precision pass counted 75 and 72 tokens respectively, and the real calculator returned `420436.17803423` in both runs. All 222 fixture-backed Flutter tests passed. Static analysis reported zero warnings or errors. [Android build and packaged inference](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/45513251337)
 
+**v1.0.212** was published as GitHub Latest from `9ecccfe`. Android 12 x86-64 installed and upgraded the APK, launched the Play split, verified Stop model and used the packaged GGUF runtime to confirm Calc selection and eight-place precision. Both Test APKs and the development-signed AAB passed SHA-256 and archive checks after download. Physical-device Calc and speech playback checks remain open. [Release](https://github.com/CarlosPeterDev/neuromesh-ai/releases/tag/v1.0.212)
+
 ## Chat speech voice selection
 
 The reported Artemis call used `model_id: tts-1`, `speaker: male` and `language: en-US`. The local executor rejected the unknown model ID before synthesis. Chat now advertises a typed voice preference and resolves it against the installed speaker catalog, including the older speaker field for male and female preferences. The resolver matches the primary language from a locale tag. An unavailable model ID can be bypassed only if there is a voice preference and a matching installed voice. The saved reply and tool result name the voice actually used. An unavailable matching voice produces an actionable error. Voice age remains unverified.
