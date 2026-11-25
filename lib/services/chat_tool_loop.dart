@@ -583,13 +583,15 @@ class ChatToolLoop {
                   ? _shorten(redactSecrets(entry.value as String), 240)
                   : entry.value,
         };
-        final label = name == 'web_search'
-            ? 'Search the web'
-            : name == 'generate_image'
-                ? 'Create an image'
-                : name == 'text_to_speech'
-                    ? 'Create audio'
-                    : 'Use ${name.replaceAll('_', ' ')}';
+        final label = switch (name) {
+          'web_search' => 'Search the web',
+          'calculator' => 'Calculate',
+          'generate_image' => 'Create an image',
+          'text_to_speech' => 'Create audio',
+          'transcribe_attachment' => 'Transcribe audio',
+          'create_text_file' => 'Create a text file',
+          _ => 'Use ${name.replaceAll('_', ' ')}',
+        };
         onStage?.call(label);
         final timer = Stopwatch()..start();
         trace.add(ChatToolService.stepLine(name, safeArgs, label, null,

@@ -16,6 +16,7 @@ import 'package:neuromesh_ai/models/chat_message.dart';
 import 'package:neuromesh_ai/models/chat_session.dart';
 import 'package:neuromesh_ai/services/chat_tool_service.dart';
 import 'package:neuromesh_ai/services/chat_tool_intent.dart';
+import 'package:neuromesh_ai/services/chat_tool_loop.dart';
 import 'package:neuromesh_ai/services/app_log_service.dart';
 import 'package:neuromesh_ai/services/cloud_service.dart';
 import 'package:neuromesh_ai/services/hive_service.dart';
@@ -133,6 +134,32 @@ void main() {
       skip: whisperRoot == null
           ? 'Set NEUROMESH_TEST_WHISPER_TINY to the extracted model directory'
           : false);
+
+  test('a prose decision keeps the full tool catalog out of a 512-token chat',
+      () async {
+    await useGguf('chat');
+    local.contextTokensTotal.value = 512;
+    local.answer = 'Hello!';
+    chat.textController.text = 'Hi';
+    await chat.sendMessage();
+    expect(chat.messages.last.content, 'Hello!');
+    expect(local.lastSystem, isNot(contains(ChatToolLoop.callPrefix)));
+  });
+
+  test('a text-only model transcribes an attached recording with a note',
+      () async {
+    useTestWorkspace();
+    Get.put<VoiceService>(_TestTranscription());
+    final audio = await File('${dir.path}/note.wav').create();
+    chat.selectedFileName.value = 'note.wav';
+    chat.selectedFileType.value = 'audio';
+    chat.selectedFilePath.value = audio.path;
+    chat.textController.text = 'Put the words in a text file.';
+    await chat.sendMessage();
+    expect(await outputTextFile(), 'A recorded note.');
+    expect(local.calls, 0);
+    expect(cloud.calls, 0);
+  });
 
   test('local routing plans search and saves citeable results', () async {
     final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;

@@ -809,9 +809,15 @@ class ChatController extends GetxController {
         fileName == null) {
       return;
     }
+    final inference = Get.find<InferenceService>();
+    final inferenceMode =
+        _hive.getSetting<String>(AppConstants.keyInferenceMode) ?? 'local';
+    final supportsAudioPrompt = inferenceMode == 'local' &&
+        inference.loadedModelRuntime.value == 'litert';
     final transcribe = !kIsWeb &&
         fileType == 'audio' &&
-        (text.isEmpty ||
+        (!supportsAudioPrompt ||
+            text.isEmpty ||
             (editedText == null && previous?.attachmentOnly == true));
     final visibleText =
         text.isEmpty ? _defaultAttachmentPrompt(fileType) : text;
@@ -1000,7 +1006,6 @@ class ChatController extends GetxController {
                   .map((m) => m.content)))
           : null;
 
-      final inference = Get.find<InferenceService>();
       final settings = Get.find<SettingsController>();
       final contextSize = inference.contextTokensTotal.value > 0
           ? inference.contextTokensTotal.value
@@ -1099,8 +1104,6 @@ class ChatController extends GetxController {
       _scrollToBottom(force: true);
 
       var finalPrompt = genPrompt;
-      final inferenceMode =
-          _hive.getSetting<String>(AppConstants.keyInferenceMode) ?? 'local';
       final turnClock = Stopwatch()..start();
       responseStage.value = 'Preparing context';
       var toolSearches = const <Map<String, dynamic>>[];
@@ -1348,6 +1351,8 @@ class ChatController extends GetxController {
             );
           }
 
+          var proseOnly = false;
+          var compactSearchFollowUp = false;
           Future<ChatToolPlan?> compactPlan() async {
             final route =
                 (await completeToolOptions(toolRoutingPrompt(visibleText), 5))
@@ -1362,6 +1367,9 @@ class ChatController extends GetxController {
                       )
                     : null;
             switch (route) {
+              case 'chat':
+                proseOnly = true;
+                return null;
               case 'math':
                 if (!allowed.contains('calculator')) return null;
                 final arithmetic = literalArithmetic(visibleText);
@@ -1384,7 +1392,9 @@ class ChatController extends GetxController {
                     followUp:
                         splitThoughtTags(followUp).answer.trim() == 'mixed');
               case 'search':
-                if (visibleText.length > 200) return null;
+                if (visibleText.length > 200 || !allowed.contains('web_search'))
+                  return null;
+                compactSearchFollowUp = contextSize <= 768;
                 return selected('web_search', {'query': visibleText},
                     followUp: true);
               case 'audio':
@@ -1419,7 +1429,16 @@ class ChatController extends GetxController {
           Future<ToolLoopResult> runLoop() => ChatToolLoop(
                 maxSteps: _hive.getSetting<int>('chat_tool_step_limit') ?? 5,
               ).run(
-                reply: generateReply,
+                reply: (instructions, evidence) => generateReply(
+                  proseOnly
+                      ? ''
+                      : compactSearchFollowUp
+                          ? ChatToolLoop.instructions(const {'web_search'},
+                              compact: true,
+                              nativeMarkup: inference.usesNativeMarkupTools)
+                          : instructions,
+                  evidence,
+                ),
                 allowed: allowed,
                 plan: canPlanTool
                     ? () async {
