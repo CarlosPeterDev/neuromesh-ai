@@ -39,7 +39,7 @@ String toolRoutingPrompt(String request) => [
         ('Which language model is currently best at reasoning?', 'search'),
         ('Save these notes in a .txt file', 'file'),
         ('Good morning', 'chat'),
-        ('Explain how electricity works', 'chat'),
+        ('What is a code completion model?', 'chat'),
         ('Write a prompt for an artist', 'chat'),
         ('أريد تسجيلا بصوت يقول مرحبا', 'audio'),
         ('Show how to write a loop in Python.', 'chat'),
