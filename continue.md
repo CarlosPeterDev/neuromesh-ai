@@ -6,7 +6,9 @@ A reported Pollinations request reached the provider and got HTTP 503. The compa
 
 The prior routing prompt classified the reported coding-model comparison as ordinary chat. The updated examples distinguish an external comparison from a conceptual coding question. The native smoke cases exercise those intents and retry decisions in English and Arabic. The provider can still return 503.
 
-Deleting a base model previously cascaded to a linked projector if no other catalog entry referenced it. The shared Model Controller now deletes only the selected file. If that file is the active model or its loaded projector, it unloads inference first. Existing helper associations remain available if a file is reinstalled. The regression tests use physical temporary files to check both deletion directions and unloading.
+Deleting a base model previously cascaded to a linked projector if no other catalog entry referenced it. The shared Model Controller now deletes only the selected file. If that file is the active model or its loaded projector, it unloads inference first. Existing helper associations remain available if a file is reinstalled. The regression tests use physical temporary files to check both deletion directions and unloading. The full suite passed 236 tests. Qwen2.5 0.5B and Artemis passed 20 model decisions and argument extractions each on the llama.cpp reference runtime. A live Qwen host test simulated the first HTTP 503, then retried with the real Pollinations provider and fetched sources for the next coding question. [Device matrix](docs/ANDROID_DEVICE_TESTS.md) · [Android workflow](https://github.com/CarlosPeterDev/neuromesh-ai/actions/runs/45600597045)
+
+**v1.0.217** is GitHub Latest from `bff3491`. Android 12 emulator install and upgrade, Play split launch, and all 20 packaged Artemis routing fixtures passed. Both APKs and the development-signed AAB passed download checksum, archive and native ABI verification. Physical Android retry and model-library interaction remain to be verified. [Release](https://github.com/CarlosPeterDev/neuromesh-ai/releases/tag/v1.0.217)
 
 ## Automatic tool selection and text files
 

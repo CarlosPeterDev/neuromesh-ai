@@ -25,3 +25,8 @@ Record Android version, RAM, SoC, ABI, model file and checksum, runtime/backend,
 - Ask a time-sensitive factual question and check sources, cancel, and retry with no network. Request a Pollinations image and a spoken recording without selecting a mode.
 - Unload the Chat model, attach a WAV with **+**, and send with the text field empty. Verify the preview and download the UTF-8 transcript. Repeat with an Android-decoded audio format, a missing listening model, an assigned speech worker, and cancellation. Ask for a plain text file and check its saved contents.
 - Check the disclaimer below the composer, and verify that blocked tools still respect **Tools & permissions**.
+
+## Failed image follow-up and companion storage
+
+- With Qwen 0.5B loaded, let a Pollinations request fail. Send a retry in English and Arabic in separate attempts. Verify the image tool receives the original prompt, and that a new coding-model comparison in the conversation starts web search and shows sources.
+- In Storage, delete a base GGUF with an installed Vision Helper. Confirm the helper file stays installed. Reinstall the base, load it with the helper, and delete just the helper. Confirm inference unloads, the base file stays installed, and the base can still run text chat.
