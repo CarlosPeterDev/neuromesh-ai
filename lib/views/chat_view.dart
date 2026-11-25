@@ -2,6 +2,7 @@ import '../widgets/scroll_to_end.dart';
 import '../widgets/chat_math.dart';
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:get/get.dart';
@@ -12,6 +13,7 @@ import '../controllers/settings_controller.dart';
 import '../controllers/model_controller.dart';
 import '../controllers/home_controller.dart';
 import '../models/chat_message.dart';
+import '../models/chat_tool_choice.dart';
 import '../services/chat_tool_service.dart' show stripToolTrace;
 import '../services/cluster_service.dart';
 import '../services/inference_service.dart';
@@ -579,6 +581,33 @@ class ChatView extends GetView<ChatController> {
       child: SafeArea(
           top: false,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Obx(() {
+              final choice = controller.toolChoice.value;
+              return Align(
+                alignment: Alignment.centerLeft,
+                child: PopupMenuButton<ChatToolChoice>(
+                  enabled: !controller.isLoading.value,
+                  tooltip: 'Choose a chat tool',
+                  initialValue: choice,
+                  onSelected: (choice) => controller.toolChoice.value = choice,
+                  itemBuilder: (_) => [
+                    for (final item in ChatToolChoice.values)
+                      if (!kIsWeb || item != ChatToolChoice.transcribe)
+                        PopupMenuItem(value: item, child: Text(item.label)),
+                  ],
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.tune, size: 16),
+                      const SizedBox(width: 6),
+                      Text(choice.label),
+                      const Icon(Icons.arrow_drop_down, size: 18),
+                    ]),
+                  ),
+                ),
+              );
+            }),
             // Attachment preview
             Obx(() {
               final name = controller.selectedFileName.value;
@@ -650,8 +679,9 @@ class ChatView extends GetView<ChatController> {
                     // projector can take photos.
                     final isLocalVision = s.inferenceMode.value == 'local' &&
                         inf.isVisionLoaded.value;
-                    // Audio files only work with cloud and LiteRT models.
-                    final audioOk = isCloud ||
+                    final audioOk = controller.toolChoice.value ==
+                            ChatToolChoice.transcribe ||
+                        isCloud ||
                         (isLocalVision &&
                             inf.loadedModelRuntime.value == 'litert');
                     return _AttachButton(
@@ -671,7 +701,8 @@ class ChatView extends GetView<ChatController> {
                   // Same 40px base height as the buttons so a single line sits
                   // centred; taller multi-line input keeps buttons at the bottom.
                   Expanded(child: Obx(() {
-                    final noModel = _localModelMissing();
+                    final choice = controller.toolChoice.value;
+                    final noModel = !choice.isDirect && _localModelMissing();
                     return Container(
                       constraints: const BoxConstraints(minHeight: 40),
                       alignment: Alignment.centerLeft,
@@ -686,9 +717,11 @@ class ChatView extends GetView<ChatController> {
                             fontSize: 15,
                             color: isDark ? Colors.white : Colors.black),
                         decoration: InputDecoration(
-                          hintText: !noModel
-                              ? 'Ask anything'
-                              : 'Generate an image online or load a model',
+                          hintText: choice.isDirect
+                              ? choice.hint
+                              : noModel
+                                  ? 'Choose a tool or load a model'
+                                  : 'Ask anything',
                           hintStyle: GoogleFonts.inter(
                               fontSize: 15, color: Theme.of(context).hintColor),
                           border: InputBorder.none,
@@ -715,7 +748,8 @@ class ChatView extends GetView<ChatController> {
                   Obx(() {
                     final loading = controller.isLoading.value;
                     final listening = controller.isListening.value;
-                    final noModel = _localModelMissing();
+                    final direct = controller.toolChoice.value.isDirect;
+                    final noModel = !direct && _localModelMissing();
                     final hasContent = controller.inputText.value.isNotEmpty ||
                         controller.selectedFileName.value != null ||
                         controller.selectedImagePath.value != null;
@@ -752,7 +786,7 @@ class ChatView extends GetView<ChatController> {
                       // Empty → bare mic glyph
                       bgColor = Colors.transparent;
                       iconData = Icons.mic_none_rounded;
-                      onTap = controller.toggleListening;
+                      onTap = direct ? null : controller.toggleListening;
                     }
 
                     return GestureDetector(

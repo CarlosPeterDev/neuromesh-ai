@@ -132,6 +132,9 @@ class ChatToolLoop {
             },
       ];
 
+  static String _escapeMarkdown(String text) => text.replaceAllMapped(
+      RegExp(r'[\\`*_{}\[\]()#<>|~]'), (match) => '\\${match[0]}');
+
   static const callPrefix = '<tool_call>';
   static const callSuffix = '</tool_call>';
 
@@ -371,6 +374,7 @@ class ChatToolLoop {
     bool nativeMarkup = false,
     bool generationHasOwnDeadline = false,
     Future<ChatToolPlan?> Function()? plan,
+    ParsedToolCall? direct,
     void Function(String stage)? onStage,
     void Function(bool valid)? onProtocol,
     void Function(int passes, int invalid, int tools, int toolMs)? onMetrics,
@@ -460,12 +464,15 @@ class ChatToolLoop {
     }
 
     try {
-      var planned =
-          plan == null ? null : await bounded(plan(), inference: true);
+      var planned = direct != null
+          ? (call: direct, needsFollowUp: false)
+          : plan == null
+              ? null
+              : await bounded(plan(), inference: true);
       while (true) {
         final callable = executions < maxSteps && stalled < 2;
         if (!callable) hitLimit = true;
-        passes++;
+        if (planned == null) passes++;
         if (passes > 1) onStage?.call('Preparing follow-up');
         final compact = compactPrompt || invalid > 0;
         final selected = planned;
@@ -530,6 +537,10 @@ class ChatToolLoop {
         if (call == null || !callable) {
           onProtocol?.call(false);
           if (++invalid > 1) break;
+          if (direct != null) {
+            return finish(
+                'Check the input and try again. It is empty, too long, or has an invalid format.');
+          }
           correction =
               'Invalid response. Use the specified tool format with valid arguments or explain the limitation in ordinary text.';
           continue;
@@ -672,16 +683,31 @@ class ChatToolLoop {
             name, safeArgs, label, redactSecrets(preview ?? output),
             ms: timer.elapsedMilliseconds, failed: !success);
         onTrace(List.of(trace));
+        if (selected != null && !selected.needsFollowUp) {
+          if (!success) {
+            return finish(name == 'transcribe_attachment' && output.isEmpty
+                ? 'No speech was detected.'
+                : output);
+          }
+          return finish(switch (name) {
+            'web_search' => [
+                'Search results',
+                for (final (index, source) in sources.values.indexed)
+                  if (source.snippet.trim().isNotEmpty)
+                    '**[${index + 1}]** ${_escapeMarkdown(_shorten(redactSecrets(source.snippet), 280))}',
+              ].join('\n\n'),
+            'calculator' => '`${args['expression']}` = **$output**',
+            'generate_image' => output.split('\n').first,
+            'text_to_speech' => 'Audio ready.',
+            'transcribe_attachment' => _escapeMarkdown(output),
+            _ => output,
+          });
+        }
         if (selected != null && name == 'calculator') {
-          final calculation =
+          plannedCalculation =
               success ? '`${args['expression']}` = **$output**' : output;
-          if (!selected.needsFollowUp) return finish(calculation);
-          plannedCalculation = calculation;
         }
         if (selected != null && name == 'generate_image') {
-          if (!selected.needsFollowUp) {
-            return finish(success ? output.split('\n').first : output);
-          }
           plannedImageAttempted = true;
           if (success) plannedImageSummary = output.split('\n').first;
         }

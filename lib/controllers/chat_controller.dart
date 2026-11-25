@@ -16,6 +16,7 @@ import '../controllers/settings_controller.dart';
 import '../core/constants.dart';
 import '../core/ui.dart';
 import '../models/chat_message.dart';
+import '../models/chat_tool_choice.dart';
 import '../models/chat_session.dart';
 import '../services/hive_service.dart';
 import '../services/voice_service.dart';
@@ -71,6 +72,8 @@ class ChatController extends GetxController {
   final currentSessionId = ''.obs;
   final isLoading = false.obs;
   final inputText = ''.obs;
+  final toolChoice = ChatToolChoice.auto.obs;
+  bool _directToolActive = false;
   final selectedImagePath = Rxn<String>();
   final selectedImageBase64 = Rxn<String>();
   final selectedFileName = Rxn<String>();
@@ -784,6 +787,7 @@ class ChatController extends GetxController {
   }) async {
     if (isLoading.value || isStreaming.value) return;
 
+    final choice = previous?.toolChoice ?? toolChoice.value;
     final draftText = textController.text;
     final text = previous == null
         ? draftText.trim()
@@ -808,8 +812,11 @@ class ChatController extends GetxController {
         fileName == null) {
       return;
     }
-    final visibleText =
-        text.isEmpty ? _defaultAttachmentPrompt(fileType) : text;
+    final visibleText = text.isEmpty
+        ? choice == ChatToolChoice.transcribe
+            ? 'Transcribe audio'
+            : _defaultAttachmentPrompt(fileType)
+        : text;
 
     if (currentSessionId.value.isEmpty) createNewChat();
     final sessionId = currentSessionId.value;
@@ -820,18 +827,23 @@ class ChatController extends GetxController {
             ? Get.find<ChatToolService>().projectForChat(sessionId)
             : '')
         : previous.workspaceProject ?? '';
+    _directToolActive = choice.isDirect;
     isLoading.value = true;
-    responseStage.value = 'Preparing context';
+    responseStage.value =
+        choice.isDirect ? 'Preparing tool' : 'Preparing context';
     var posted = false;
 
     try {
       final cancellation = Completer<void>();
       _toolCancellation = cancellation;
-      if (previous != null) _queueContextTransition(_resetInferenceContext);
+      if (previous != null && !choice.isDirect) {
+        _queueContextTransition(_resetInferenceContext);
+      }
       // Copy non-media attachments into the agent workspace so the AI's file
       // tools can read the whole file (not just what fits in the prompt).
       String? workspaceName;
       if (previous == null &&
+          !choice.isDirect &&
           !kIsWeb &&
           filePath != null &&
           fileName != null &&
@@ -897,6 +909,7 @@ class ChatController extends GetxController {
             id: _uuid.v4(),
             chatId: sessionId,
             role: 'user',
+            toolChoice: choice,
             workspaceProject: project,
             workspaceAttachment: workspaceName,
             content: effectiveText,
@@ -910,6 +923,7 @@ class ChatController extends GetxController {
           );
       if (previous == null) {
         messages.add(userMsg);
+        if (choice.isDirect) toolChoice.value = ChatToolChoice.auto;
         // Keep the physical attachment for inference and future retries.
         if (textController.text == draftText) {
           textController.clear();
@@ -946,7 +960,7 @@ class ChatController extends GetxController {
           final title = visibleText.length > 40
               ? '${visibleText.substring(0, 40)}...'
               : visibleText;
-          _autoTitleFor[sendingSession.id] = title;
+          if (!choice.isDirect) _autoTitleFor[sendingSession.id] = title;
           _updateSession(
             sendingSession.copyWith(title: title, lastMessage: visibleText),
           );
@@ -956,6 +970,24 @@ class ChatController extends GetxController {
       }
 
       final chatTools = Get.find<ChatToolService>();
+      if (choice.isDirect) {
+        final result = await chatTools.inProject(
+          project,
+          () => _runDirectTool(
+            choice,
+            text,
+            fileType: fileType,
+            filePath: filePath,
+            chatTools: chatTools,
+            cancellation: cancellation,
+            generationId: generationId,
+          ),
+        );
+        if (generationId == _generationSerial) {
+          _finishTurn(sessionId, project, result.markdown, result.searches);
+        }
+        return;
+      }
       final explicitFiles = contextMentions(visibleText)
           .where((mention) => mention.$1 == 'file')
           .map((mention) => mention.$2)
@@ -1073,9 +1105,6 @@ class ChatController extends GetxController {
       _scrollToBottom(force: true);
 
       var finalPrompt = genPrompt;
-      final web = Get.isRegistered<WebSearchService>()
-          ? Get.find<WebSearchService>()
-          : null;
       final inferenceMode =
           _hive.getSetting<String>(AppConstants.keyInferenceMode) ?? 'local';
       final turnClock = Stopwatch()..start();
@@ -1357,65 +1386,24 @@ class ChatController extends GetxController {
                       }
                     : null,
                 execute: (call, abort) async {
-                  final args = {...call.arguments};
-                  if (call.name == 'transcribe_attachment') {
-                    if (filePath == null) return 'Error: attach an audio file.';
-                    if (chatTools.policyFor('built-in', call.name,
-                                needsConfirm: false) ==
-                            'ask' &&
-                        !await confirmToolCall(call.name, 'built-in', args,
-                            abort: abort)) {
-                      return 'The user denied this tool call.';
-                    }
-                    return Get.find<VoiceService>().transcribeFile(filePath,
-                        language: args['language'] as String? ?? '',
-                        cancelled: abort);
-                  }
                   if (call.name == 'edit_image') {
                     final source = imgBase64 ??
                         await _recentImageForEdit(
                             chatTools, project, userMsg.id);
-                    if (source == null)
+                    if (source == null) {
                       return 'Error: attach the image you want to edit.';
-                    args['attachedImage'] = source;
+                    }
+                    call = ParsedToolCall(call.name,
+                        {...call.arguments, 'attachedImage': source}, '');
                   }
-                  if (call.name == 'text_to_speech') {
-                    args['name'] = 'speech-${_uuid.v4()}.wav';
-                  }
-                  return chatTools.executeChatTool(
-                    ParsedToolCall(call.name, args, ''),
-                    (name, server, args) async {
-                      final approved = await confirmToolCall(name, server, args,
-                          abort: abort);
-                      return approved && !cancellation.isCompleted;
-                    },
-                    abort: abort,
-                    cancelled: () => cancellation.isCompleted,
-                    onStop: () {
-                      if (generationId == _generationSerial &&
-                          !cancellation.isCompleted) stopGenerating();
-                    },
-                  );
+                  return _executeTurnTool(call, abort,
+                      chatTools: chatTools,
+                      filePath: filePath,
+                      cancellation: cancellation,
+                      generationId: generationId);
                 },
-                search: (query, abort) async {
-                  if (web == null)
-                    return const SearchReport(
-                        [], {'Web search': SearchFailure.provider}, 0);
-                  if (chatTools.policyFor('built-in', 'web_search',
-                              needsConfirm: false) ==
-                          'ask' &&
-                      !await confirmToolCall(
-                          'web_search', 'built-in', {'query': query},
-                          abort: abort)) {
-                    return const SearchReport(
-                        [], {'Permission denied': SearchFailure.provider}, 0);
-                  }
-                  if (cancellation.isCompleted) {
-                    return const SearchReport([], {}, 0);
-                  }
-                  return web.searchReport(query,
-                      max: 6, freshness: web.freshnessFor(query), abort: abort);
-                },
+                search: (query, abort) =>
+                    _searchTurnTool(query, abort, chatTools, cancellation),
                 cancellation: cancellation.future,
                 evidenceBudget: (contextSize ~/ 2).clamp(300, 1800),
                 compactPrompt: inferenceMode == 'local',
@@ -1461,51 +1449,8 @@ class ChatController extends GetxController {
       }
 
       if (generationId != _generationSerial) return;
-      responseStage.value = 'Finalizing response';
-      // Stop streaming UI
-      isStreaming.value = false;
-      streamingAttachmentType.value = null;
-      streamingResponse.value = '';
-      imageGenStep.value = 0;
-      imageGenTotal.value = 0;
-      imageGenDecoding.value = false;
-
-      String? outImageBase64;
-      if (rawResponse.startsWith('[IMAGE_BASE64]')) {
-        outImageBase64 = rawResponse.substring('[IMAGE_BASE64]'.length);
-        rawResponse = 'Here is your generated image:';
-      }
-
-      // Calculate total generation time for image gen
-      final genDurationMs = imageGenStartTime.value != null
-          ? DateTime.now().difference(imageGenStartTime.value!).inMilliseconds
-          : null;
-
-      // Display response directly (no command processing)
-      final aiMsg = ChatMessage(
-        id: _uuid.v4(),
-        chatId: sessionId,
-        role: 'assistant',
-        workspaceProject: project,
-        content: rawResponse,
-        imageBase64: outImageBase64,
-        tokensPerSec: localOutputRate,
-        imageGenDurationMs: genDurationMs,
-        toolSearches: toolSearches,
-      );
-      messages.add(aiMsg);
-      _hive.saveMessage(aiMsg.id, aiMsg.toMap());
-      imageGenStartTime.value = null;
-
-      // Update session
-      final session =
-          sessions.firstWhereOrNull((s) => s.id == currentSessionId.value);
-      if (session != null) {
-        final updated = session.copyWith(lastMessage: aiMsg.content);
-        _hive.saveSession(updated.id, updated.toMap());
-        final idx = sessions.indexWhere((s) => s.id == updated.id);
-        if (idx >= 0) sessions[idx] = updated;
-      }
+      _finishTurn(sessionId, project, rawResponse, toolSearches,
+          localOutputRate: localOutputRate);
     } catch (e, stack) {
       if (generationId != _generationSerial) return;
       isStreaming.value = false;
@@ -1538,14 +1483,203 @@ class ChatController extends GetxController {
       );
       messages.add(errorMsg);
       _hive.saveMessage(errorMsg.id, errorMsg.toMap());
+    } finally {
+      if (generationId == _generationSerial) {
+        _toolCancellation = null;
+        _directToolActive = false;
+        isLoading.value = false;
+        _scrollToBottom();
+        if (!choice.isDirect && posted) unawaited(_autoTitle(generationId));
+      }
+    }
+  }
+
+  void _finishTurn(String sessionId, String project, String rawResponse,
+      List<Map<String, dynamic>> toolSearches,
+      {double? localOutputRate}) {
+    responseStage.value = 'Finalizing response';
+    // Stop streaming UI
+    isStreaming.value = false;
+    streamingAttachmentType.value = null;
+    streamingResponse.value = '';
+    imageGenStep.value = 0;
+    imageGenTotal.value = 0;
+    imageGenDecoding.value = false;
+
+    String? outImageBase64;
+    if (rawResponse.startsWith('[IMAGE_BASE64]')) {
+      outImageBase64 = rawResponse.substring('[IMAGE_BASE64]'.length);
+      rawResponse = 'Here is your generated image:';
     }
 
-    if (generationId == _generationSerial) {
-      _toolCancellation = null;
-      isLoading.value = false;
-      _scrollToBottom();
-      unawaited(_autoTitle(generationId));
+    // Calculate total generation time for image gen
+    final genDurationMs = imageGenStartTime.value != null
+        ? DateTime.now().difference(imageGenStartTime.value!).inMilliseconds
+        : null;
+
+    // Display response directly (no command processing)
+    final aiMsg = ChatMessage(
+      id: _uuid.v4(),
+      chatId: sessionId,
+      role: 'assistant',
+      workspaceProject: project,
+      content: rawResponse,
+      imageBase64: outImageBase64,
+      tokensPerSec: localOutputRate,
+      imageGenDurationMs: genDurationMs,
+      toolSearches: toolSearches,
+    );
+    messages.add(aiMsg);
+    _hive.saveMessage(aiMsg.id, aiMsg.toMap());
+    imageGenStartTime.value = null;
+
+    // Update session
+    final session =
+        sessions.firstWhereOrNull((s) => s.id == currentSessionId.value);
+    if (session != null) {
+      final updated = session.copyWith(lastMessage: aiMsg.content);
+      _hive.saveSession(updated.id, updated.toMap());
+      final idx = sessions.indexWhere((s) => s.id == updated.id);
+      if (idx >= 0) sessions[idx] = updated;
     }
+  }
+
+  Future<ToolLoopResult> _runDirectTool(
+    ChatToolChoice choice,
+    String text, {
+    required String? fileType,
+    required String? filePath,
+    required ChatToolService chatTools,
+    required Completer<void> cancellation,
+    required int generationId,
+  }) async {
+    if (chatTools.mode.value == ChatToolMode.off ||
+        chatTools.policyFor('built-in', choice.tool, needsConfirm: false) ==
+            'block') {
+      return ToolLoopResult(
+          '${choice.label} is disabled. Check Tools & permissions.',
+          const [],
+          false);
+    }
+    if (choice == ChatToolChoice.transcribe) {
+      if (fileType != 'audio' ||
+          filePath == null ||
+          !await File(filePath).exists()) {
+        return const ToolLoopResult(
+            'Attach an audio file with + and send it to transcribe.',
+            [],
+            false);
+      }
+    } else if (text.isEmpty) {
+      return ToolLoopResult('${choice.hint} and try again.', const [], false);
+    }
+    final expression =
+        choice == ChatToolChoice.calculator ? literalArithmetic(text) : null;
+    final args = switch (choice) {
+      ChatToolChoice.search => {'query': text},
+      ChatToolChoice.calculator => {
+          'expression': expression != null && expression.remaining.isEmpty
+              ? expression.expression
+              : text,
+        },
+      ChatToolChoice.image => {'prompt': text},
+      ChatToolChoice.speak => {'text': text},
+      ChatToolChoice.transcribe => <String, dynamic>{},
+      ChatToolChoice.auto => throw StateError('No direct tool selected.'),
+    };
+    return ChatToolLoop().run(
+      direct: ParsedToolCall(choice.tool, args, ''),
+      reply: (_, __) =>
+          throw StateError('Direct tools do not use chat inference.'),
+      execute: (call, abort) => _executeTurnTool(call, abort,
+          chatTools: chatTools,
+          filePath: filePath,
+          cancellation: cancellation,
+          generationId: generationId),
+      search: (query, abort) =>
+          _searchTurnTool(query, abort, chatTools, cancellation),
+      allowed: {choice.tool},
+      cancellation: cancellation.future,
+      onStage: (stage) {
+        if (generationId == _generationSerial) responseStage.value = stage;
+      },
+      onTrace: (trace) {
+        if (generationId != _generationSerial) return;
+        streamingResponse.value = trace.join('\n');
+        _scrollToBottom();
+      },
+      onTimeout: () {
+        if (!cancellation.isCompleted) cancellation.complete();
+      },
+      onMetrics: (passes, invalid, tools, ms) {
+        Get.find<AppLogService>().info('Direct Chat tool completed',
+            details:
+                'tool=${choice.tool} passes=$passes invalidToolCalls=$invalid tools=$tools toolMs=$ms');
+      },
+    );
+  }
+
+  Future<String> _executeTurnTool(
+    ParsedToolCall call,
+    Future<void> abort, {
+    required ChatToolService chatTools,
+    required String? filePath,
+    required Completer<void> cancellation,
+    required int generationId,
+  }) async {
+    final args = {...call.arguments};
+    if (call.name == 'transcribe_attachment') {
+      if (filePath == null) return 'Error: attach an audio file.';
+      if (chatTools.policyFor('built-in', call.name, needsConfirm: false) ==
+              'ask' &&
+          !await confirmToolCall(call.name, 'built-in', args, abort: abort)) {
+        return 'The user denied this tool call.';
+      }
+      try {
+        return await Get.find<VoiceService>().transcribeFile(filePath,
+            language: args['language'] as String? ?? '', cancelled: abort);
+      } on StateError catch (error) {
+        return 'Error: ${error.message}';
+      }
+    }
+    if (call.name == 'text_to_speech') {
+      args['name'] = 'speech-${_uuid.v4()}.wav';
+    }
+    return chatTools.executeChatTool(
+      ParsedToolCall(call.name, args, ''),
+      (name, server, args) async {
+        final approved =
+            await confirmToolCall(name, server, args, abort: abort);
+        return approved && !cancellation.isCompleted;
+      },
+      abort: abort,
+      cancelled: () => cancellation.isCompleted,
+      onStop: () {
+        if (generationId == _generationSerial && !cancellation.isCompleted) {
+          stopGenerating();
+        }
+      },
+    );
+  }
+
+  Future<SearchReport> _searchTurnTool(String query, Future<void> abort,
+      ChatToolService chatTools, Completer<void> cancellation) async {
+    final web = Get.isRegistered<WebSearchService>()
+        ? Get.find<WebSearchService>()
+        : null;
+    if (web == null) {
+      return const SearchReport([], {'Web search': SearchFailure.provider}, 0);
+    }
+    if (chatTools.policyFor('built-in', 'web_search', needsConfirm: false) ==
+            'ask' &&
+        !await confirmToolCall('web_search', 'built-in', {'query': query},
+            abort: abort)) {
+      return const SearchReport(
+          [], {'Permission denied': SearchFailure.provider}, 0);
+    }
+    if (cancellation.isCompleted) return const SearchReport([], {}, 0);
+    return web.searchReport(query,
+        max: 6, freshness: web.freshnessFor(query), abort: abort);
   }
 
   Future<String?> _recentImageForEdit(
@@ -1577,7 +1711,7 @@ class ChatController extends GetxController {
       cancellation.complete();
     final partialResponse = streamingResponse.value.trim();
     if (partialResponse.isNotEmpty) {
-      final tps = inference.tokensPerSecond.value;
+      final tps = _directToolActive ? 0.0 : inference.tokensPerSecond.value;
       _saveAssistantMessage(
         content: markToolTraceCancelled(partialResponse),
         tokensPerSec: tps > 0 ? tps : null,
@@ -1594,8 +1728,11 @@ class ChatController extends GetxController {
     imageGenStartTime.value = null;
     imageGenDecoding.value = false;
     _batchCancelled = true;
-    if (stopLocalEngine) _queueContextTransition(inference.stopGeneration);
-    Get.find<CloudService>().cancel();
+    if (!_directToolActive) {
+      if (stopLocalEngine) _queueContextTransition(inference.stopGeneration);
+      Get.find<CloudService>().cancel();
+    }
+    _directToolActive = false;
   }
 
   void _saveAssistantMessage({

@@ -1,5 +1,11 @@
 # NeuroMesh AI development handoff
 
+## Direct Chat tools for small models
+
+The Chat composer now offers **Auto**, **Search**, **Calc**, **Image**, **Speak**, and **Transcribe**. Auto uses the existing model-directed tool flow. The other choices send one typed request to the selected tool and add no hidden tokens or language-model passes. Search shows source excerpts and links. Calc accepts a formula, Image sends the description to Pollinations, Speak synthesizes the exact words entered using the selected voice, and Transcribe takes an attached audio file and uses an installed or assigned listening model. The next draft returns to Auto. Regenerating a saved turn keeps its original choice.
+
+Direct Chat reuses the argument validator, workspace, approval policies, bounded execution, cancellation, and expandable traces. Six focused tests cover routing, missing audio, permissions, cancellation, persistence, and direct media and calculator results. A seventh extracts words from an actual WAV through the app's Whisper Tiny recognizer. All 26 Chat submission tests passed with the Whisper fixture. The Whisper fixture can be exercised by setting `NEUROMESH_TEST_WHISPER_TINY` to the extracted directory. Physical Android interaction and provider availability need device verification.
+
 ## Calculator routing and hidden context
 
 Artemis answered the reported fraction as prose and gave the wrong value. The verified eight-place result is `420436.17803423`. A short model decision now selects Calc for a numerical answer. For a single supported literal expression the app keeps the original operands and grouping, including common Unicode and LaTeX forms. It asks about decimal precision using only the text left after removing the expression. The calculator's result and tool trace go directly into the reply. Requests without a separable literal expression continue through the regular tool loop.

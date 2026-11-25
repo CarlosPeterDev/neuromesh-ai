@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
@@ -12,6 +13,7 @@ import 'package:neuromesh_ai/controllers/chat_controller.dart';
 import 'package:neuromesh_ai/controllers/settings_controller.dart';
 import 'package:neuromesh_ai/core/constants.dart';
 import 'package:neuromesh_ai/models/chat_message.dart';
+import 'package:neuromesh_ai/models/chat_tool_choice.dart';
 import 'package:neuromesh_ai/models/chat_session.dart';
 import 'package:neuromesh_ai/services/chat_tool_service.dart';
 import 'package:neuromesh_ai/services/chat_tool_intent.dart';
@@ -21,6 +23,8 @@ import 'package:neuromesh_ai/services/hive_service.dart';
 import 'package:neuromesh_ai/services/inference_service.dart';
 import 'package:neuromesh_ai/services/local_image_service.dart';
 import 'package:neuromesh_ai/services/web_search_service.dart';
+import 'package:neuromesh_ai/services/voice_service.dart';
+import 'package:neuromesh_ai/services/voice_models.dart';
 import 'package:neuromesh_ai/utils/web_search_parse.dart';
 
 void main() {
@@ -61,6 +65,130 @@ void main() {
     chat.selectedFileType.value = 'text';
     chat.textController.text = 'Read this';
   }
+
+  test('direct search saves links and a trace without waiting for a model',
+      () async {
+    final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
+    await hive.setSetting(AppConstants.keyInferenceMode, 'local');
+    local.isLoadingModel.value = true;
+    chat.toolChoice.value = ChatToolChoice.search;
+    chat.textController.text = 'تاريخ الطباعة';
+
+    await chat.sendMessage();
+
+    expect(web.queries, ['تاريخ الطباعة']);
+    expect(local.calls, 0);
+    expect(cloud.calls, 0);
+    expect(chat.messages.last.content, contains(ToolLoopResult.traceMark));
+    expect(
+        chat.messages.last.content, contains('https://example.com/benchmark'));
+    expect(chat.messages.last.toolSearches.single['query'], 'تاريخ الطباعة');
+    expect(chat.messages.last.tokensPerSec, isNull);
+    expect(chat.toolChoice.value, ChatToolChoice.auto);
+    final session = chat.currentSessionId.value;
+    chat.openChat(session);
+    expect(chat.messages.first.toolChoice, ChatToolChoice.search);
+    await chat.regenerate();
+    expect(web.queries, ['تاريخ الطباعة', 'تاريخ الطباعة']);
+    expect(local.calls, 0);
+  });
+
+  test('direct transcription accepts an audio attachment without a prompt',
+      () async {
+    final voice =
+        Get.put<VoiceService>(_TestTranscription()) as _TestTranscription;
+    final audio = await File('${dir.path}/note.wav').create();
+    chat.selectedFileName.value = 'note.wav';
+    chat.selectedFileType.value = 'audio';
+    chat.selectedFilePath.value = audio.path;
+    chat.toolChoice.value = ChatToolChoice.transcribe;
+
+    await chat.sendMessage();
+
+    expect(voice.path, audio.path);
+    expect(chat.messages.last.content, contains('A recorded note.'));
+    expect(chat.messages.last.content, contains(ToolLoopResult.traceMark));
+    expect(chat.messages.first.visibleUserText, 'Transcribe audio');
+    expect(cloud.calls, 0);
+    expect(local.calls, 0);
+  });
+
+  final whisperRoot = Platform.environment['NEUROMESH_TEST_WHISPER_TINY'];
+  test(
+      'direct transcription recognizes the Whisper fixture without chat inference',
+      () async {
+    Get.put<VoiceModelStore>(_WhisperFixture(whisperRoot!));
+    Get.put(VoiceService(player: _UnusedPlayer()));
+    chat.selectedFileName.value = '0.wav';
+    chat.selectedFileType.value = 'audio';
+    chat.selectedFilePath.value = '$whisperRoot/test_wavs/0.wav';
+    chat.toolChoice.value = ChatToolChoice.transcribe;
+
+    await chat.sendMessage();
+
+    expect(chat.messages.last.content.toLowerCase(),
+        contains('the yellow lamps would light up'));
+    expect(chat.messages.last.content, contains(ToolLoopResult.traceMark));
+    expect(cloud.calls, 0);
+    expect(local.calls, 0);
+  },
+      skip: whisperRoot == null
+          ? 'Set NEUROMESH_TEST_WHISPER_TINY to the extracted model directory'
+          : false);
+
+  test('direct transcription requires an audio attachment', () async {
+    chat.toolChoice.value = ChatToolChoice.transcribe;
+    chat.textController.text = 'This is just text';
+    await chat.sendMessage();
+    expect(chat.messages.last.content, contains('Attach an audio file'));
+    expect(cloud.calls, 0);
+  });
+
+  test('direct Calc uses the expression and direct media uses the draft',
+      () async {
+    chat.toolChoice.value = ChatToolChoice.calculator;
+    chat.textController.text =
+        '((84729 × 93617) + sqrt(987654321)) / (137.29^2 + 17.83)';
+    await chat.sendMessage();
+    expect(chat.messages.last.content, contains('420436.17803423'));
+    chat.toolChoice.value = ChatToolChoice.image;
+    chat.textController.text = 'A flying car';
+    await chat.sendMessage();
+    expect(agent.imageCall?.arguments['prompt'], 'A flying car');
+    expect(chat.messages.last.content, contains('nmfile:generated.jpg'));
+    chat.toolChoice.value = ChatToolChoice.speak;
+    chat.textController.text = 'Hello, Carlos!';
+    await chat.sendMessage();
+    expect(agent.narration?.arguments['text'], 'Hello, Carlos!');
+    expect(chat.messages.last.content, contains('nmfile:research.wav'));
+    expect(cloud.calls, 0);
+    expect(local.calls, 0);
+  });
+
+  test('direct search respects the block policy', () async {
+    final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
+    await agent.setPolicy('built-in', 'web_search', 'block');
+    chat.toolChoice.value = ChatToolChoice.search;
+    chat.textController.text = 'printing';
+    await chat.sendMessage();
+    expect(chat.messages.last.content, contains('Search is disabled'));
+    expect(web.queries, isEmpty);
+  });
+
+  test('cancelling direct Search aborts the provider without resuming chat',
+      () async {
+    final web = Get.put<WebSearchService>(_PendingSearch()) as _PendingSearch;
+    chat.toolChoice.value = ChatToolChoice.search;
+    chat.textController.text = 'printing';
+    final sent = chat.sendMessage();
+    await web.started.future;
+    chat.stopGenerating();
+    await sent;
+    await web.aborted.future;
+    expect(chat.isLoading.value, isFalse);
+    expect(chat.messages.last.content, contains('Cancelled.'));
+    expect(cloud.calls, 0);
+  });
 
   test('a plain reply is shown without forcing a tool call', () async {
     cloud.answer = 'مرحبًا! كيف يمكنني مساعدتك؟';
@@ -506,6 +634,57 @@ class _TestWeb extends WebSearchService {
         const WebResult(
             'Benchmark', 'https://example.com/benchmark', 'First test'),
     ], {}, 1);
+  }
+}
+
+class _UnusedPlayer implements AudioPlayer {
+  @override
+  Future<void> dispose() async {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _WhisperFixture extends VoiceModelStore {
+  _WhisperFixture(this.directory);
+
+  final String directory;
+
+  @override
+  Future<void> scan() async {
+    installed.add('whisper-tiny');
+  }
+
+  @override
+  Future<String> dirFor(VoiceModelInfo model) async => directory;
+}
+
+class _TestTranscription extends VoiceService {
+  _TestTranscription() : super(player: _UnusedPlayer());
+
+  String? path;
+
+  @override
+  Future<String> transcribeFile(String path,
+      {String language = '',
+      String modelId = '',
+      Future<void>? cancelled}) async {
+    this.path = path;
+    return 'A recorded note.';
+  }
+}
+
+class _PendingSearch extends WebSearchService {
+  final started = Completer<void>();
+  final aborted = Completer<void>();
+
+  @override
+  Future<SearchReport> searchReport(String query,
+      {int max = 4, String? freshness, Future<void>? abort}) async {
+    started.complete();
+    await abort;
+    aborted.complete();
+    return const SearchReport([], {}, 0);
   }
 }
 

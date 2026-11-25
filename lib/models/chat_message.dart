@@ -1,3 +1,4 @@
+import 'chat_tool_choice.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -22,6 +23,7 @@ class ChatMessage {
   final int? imageGenDurationMs; // Time taken to generate image locally
   final DateTime timestamp;
   final List<Map<String, dynamic>> toolSearches;
+  final ChatToolChoice toolChoice;
 
   // Cache decoded bytes to prevent flickering on re-build
   Uint8List? _decodedImageBytes;
@@ -54,6 +56,7 @@ class ChatMessage {
     this.thoughtDurationSeconds,
     this.imageGenDurationMs,
     this.toolSearches = const [],
+    this.toolChoice = ChatToolChoice.auto,
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 
@@ -99,6 +102,7 @@ class ChatMessage {
         'thoughtDurationSeconds': thoughtDurationSeconds,
         'imageGenDurationMs': imageGenDurationMs,
         'timestamp': timestamp.toIso8601String(),
+        if (toolChoice.isDirect) 'toolChoice': toolChoice.name,
         if (toolSearches.isNotEmpty) 'toolSearches': toolSearches,
       };
 
@@ -126,6 +130,7 @@ class ChatMessage {
         imageGenDurationMs: map['imageGenDurationMs'] != null
             ? (map['imageGenDurationMs'] as num).toInt()
             : null,
+        toolChoice: ChatToolChoice.fromName(map['toolChoice']),
         toolSearches: [
           for (final item
               in (map['toolSearches'] as List? ?? const []).whereType<Map>())
