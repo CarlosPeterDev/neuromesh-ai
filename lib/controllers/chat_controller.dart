@@ -32,6 +32,7 @@ import '../services/chat_tool_loop.dart';
 import '../services/chat_tool_intent.dart';
 import '../services/download_service.dart';
 import '../widgets/tool_confirm.dart';
+import '../widgets/tool_steps.dart' show splitSteps;
 import '../services/web_search_service.dart';
 import '../utils/thought_parser.dart';
 import '../utils/page_text.dart';
@@ -822,6 +823,16 @@ class ChatController extends GetxController {
     final visibleText =
         text.isEmpty ? _defaultAttachmentPrompt(fileType) : text;
 
+    final turnIndex = previous == null
+        ? messages.length
+        : messages.indexWhere((message) => message.id == previous.id);
+    final priorReply = turnIndex >= 1 ? messages[turnIndex - 1] : null;
+    final priorUser = turnIndex >= 2 ? messages[turnIndex - 2] : null;
+    final priorImage =
+        priorReply?.role == 'assistant' && priorUser?.role == 'user'
+            ? splitSteps(priorReply!.content).$1.lastOrNull
+            : null;
+
     if (currentSessionId.value.isEmpty) createNewChat();
     final sessionId = currentSessionId.value;
     if (previous != null && previous.chatId != sessionId) return;
@@ -1354,6 +1365,46 @@ class ChatController extends GetxController {
           var proseOnly = false;
           var compactSearchFollowUp = false;
           Future<ChatToolPlan?> compactPlan() async {
+            if (priorImage != null &&
+                priorImage.name == 'generate_image' &&
+                priorImage.failed &&
+                !priorImage.running &&
+                priorImage.result != 'Cancelled.' &&
+                allowed.contains('generate_image') &&
+                fileName == null) {
+              final prompt = priorImage.args['prompt'];
+              if (prompt is String && prompt.isNotEmpty) {
+                final original = priorUser?.visibleUserText;
+                // A trace preview may have been clipped. Recover it only
+                // when the preceding user request matches the saved prefix.
+                final imagePrompt = prompt.endsWith('…')
+                    ? original != null &&
+                            original.startsWith(
+                                prompt.substring(0, prompt.length - 1))
+                        ? original
+                        : null
+                    : prompt;
+                if (imagePrompt != null) {
+                  final retry = await completeToolOptions(
+                      imageRetryPrompt(visibleText), 5);
+                  if (!currentPlan()) return null;
+                  if (retry.trim() == 'retry') {
+                    return (
+                      call: ParsedToolCall(
+                          'generate_image',
+                          {
+                            'prompt': imagePrompt,
+                            if (priorImage.args['style']
+                                case final String style)
+                              'style': style,
+                          },
+                          ''),
+                      needsFollowUp: false,
+                    );
+                  }
+                }
+              }
+            }
             final route =
                 (await completeToolOptions(toolRoutingPrompt(visibleText), 5))
                     .trim();

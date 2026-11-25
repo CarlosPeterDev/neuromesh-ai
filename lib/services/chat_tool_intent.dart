@@ -35,6 +35,8 @@ String toolRoutingPrompt(String request) => [
         ('A watercolor of Paris please', 'image'),
         ('Give me a recording of someone saying welcome', 'audio'),
         ('Who won yesterday’s match?', 'search'),
+        ('Find reviews of affordable microphones', 'search'),
+        ('Which language model is currently best at reasoning?', 'search'),
         ('Save these notes in a .txt file', 'file'),
         ('Good morning', 'chat'),
         ('Explain how electricity works', 'chat'),
@@ -42,6 +44,7 @@ String toolRoutingPrompt(String request) => [
         ('أريد تسجيلا بصوت يقول مرحبا', 'audio'),
         ('Show how to write a loop in Python.', 'chat'),
         ('Transcribe the attached recording', 'transcribe'),
+        ('What is the most capable chatbot for research?', 'search'),
       ])
         '${_quotedSample(input)} -> $route',
       '${_quotedSample(request)} ->',
@@ -98,4 +101,22 @@ Map<String, dynamic>? speechArguments(String raw, String request) {
     'text': text,
     if (const {'male', 'female'}.contains(voice)) 'voice': voice
   };
+}
+
+/// Decide if the current message asks to repeat the last failed image action.
+/// Called only with a failed image on the immediately preceding turn.
+String imageRetryPrompt(String request) {
+  const failedImage = 'The requested image was not created.';
+  return [
+    for (final (status, input, route) in const [
+      (failedImage, 'Please make another attempt.', 'retry'),
+      (failedImage, 'What is the weather tomorrow?', 'new'),
+      (failedImage, 'Give it one more shot', 'retry'),
+      (failedImage, 'Create a different picture of a red balloon', 'new'),
+      ('فشل إنشاء الصورة', 'حاول مرة أخرى', 'retry'),
+      (failedImage, 'Thanks', 'new'),
+    ])
+      '${_quotedSample(status)} + ${_quotedSample(input)} -> $route',
+    '${_quotedSample(failedImage)} + ${_quotedSample(request)} ->',
+  ].join('\n');
 }

@@ -100,6 +100,7 @@ class InferenceService extends GetxService {
       source == _probeSource || source == 'title';
   bool _unloadingModel = false;
   String? _loadedProjector;
+  String? get loadedProjectorPath => _loadedProjector;
   static final _clusterRetry = Object();
 
   String get sessionNativeRuntime => _sessionNativeRuntime;

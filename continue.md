@@ -1,5 +1,13 @@
 # NeuroMesh AI development handoff
 
+## Image retry, coding comparisons, and independent deletion
+
+A reported Pollinations request reached the provider and got HTTP 503. The compact GGUF planner then saw only the new user message, so it could not discern that a short follow-up referred to the failed image. On the next turn, Chat checks the immediately preceding image trace and uses a separate bounded semantic decision to distinguish a retry from a new request. It repeats the saved prompt only after the user requests a retry. Tool policy and cancellation still apply, and Chat keeps both turns. The retry icon remains available on the last failed reply.
+
+The prior routing prompt classified the reported coding-model comparison as ordinary chat. The updated examples distinguish an external comparison from a conceptual coding question. The native smoke cases exercise those intents and retry decisions in English and Arabic. The provider can still return 503.
+
+Deleting a base model previously cascaded to a linked projector if no other catalog entry referenced it. The shared Model Controller now deletes only the selected file. If that file is the active model or its loaded projector, it unloads inference first. Existing helper associations remain available if a file is reinstalled. The regression tests use physical temporary files to check both deletion directions and unloading.
+
 ## Automatic tool selection and text files
 
 The composer has one input with **AI can make mistakes.** below it. The manual tool picker from v1.0.213 was removed. A short, greedy GGUF completion selects a deliverable from examples and the current request alone. Separate short completions extract calculator precision and speech arguments. The allowed tools and arguments still go through the shared validator, and the normal Chat loop can continue with multiple tools. Cloud and LiteRT retain their existing tool paths. No keyword routing was added.

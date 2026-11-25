@@ -161,6 +161,52 @@ void main() {
     expect(cloud.calls, 0);
   });
 
+  test(
+      'a typed retry repeats the most recent failed image with its original prompt',
+      () async {
+    await useGguf('image');
+    const request = 'Create image of a cute dog at the farm';
+    agent.imageFailure = 'Error: Pollinations is unavailable (HTTP 503).';
+    chat.textController.text = request;
+    await chat.sendMessage();
+    expect(chat.messages.last.content, contains('HTTP 503'));
+    expect(agent.imageCalls, 1);
+
+    agent.imageFailure = null;
+    local.toolCompletions.add('retry');
+    chat.textController.text = 'Try again';
+    await chat.sendMessage();
+
+    expect(agent.imageCalls, 2);
+    expect(agent.imageCall?.arguments['prompt'], request);
+    expect(chat.messages.last.content, contains('nmfile:generated.jpg'));
+    expect(chat.messages[2].visibleUserText, 'Try again');
+    expect(local.sources.last, toolCompletionSource);
+
+    local.toolCompletions.add('retry');
+    await chat.regenerate();
+    expect(agent.imageCalls, 3);
+    expect(agent.imageCall?.arguments['prompt'], request);
+  });
+
+  test('a new question after an image failure uses its own tool', () async {
+    await useGguf('image');
+    agent.imageFailure = 'Error: Pollinations is unavailable (HTTP 503).';
+    chat.textController.text = 'A puppy at the farm';
+    await chat.sendMessage();
+
+    final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
+    local.toolCompletions.addAll(['new', 'search']);
+    local.answer = 'According to the benchmark [1].';
+    const request = 'OK search for the best Ai model for coding';
+    chat.textController.text = request;
+    await chat.sendMessage();
+
+    expect(agent.imageCalls, 1);
+    expect(web.queries, [request]);
+    expect(chat.messages.last.toolSearches, isNotEmpty);
+  });
+
   test('local routing plans search and saves citeable results', () async {
     final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
     await useGguf('search');
@@ -581,12 +627,16 @@ class _WorkspaceAgent extends ChatToolService {
   final imported = Completer<String>();
   int imports = 0;
   ParsedToolCall? imageCall;
+  String? imageFailure;
+  int imageCalls = 0;
   ParsedToolCall? narration;
 
   @override
   Future<String> executeTool(ParsedToolCall call, ToolConfirm confirm) async {
     if (call.name == 'generate_image') {
       imageCall = call;
+      imageCalls++;
+      if (imageFailure case final String failure) return failure;
       return 'Generated online with Pollinations.\n\n![Generated](nmfile:generated.jpg)';
     }
     if (call.name == 'edit_image') {

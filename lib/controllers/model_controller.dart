@@ -756,22 +756,25 @@ class ModelController extends GetxController {
       if (_download.activeDownloads.containsKey(filename)) {
         _download.pauseDownload(filename);
       }
-      if (_inference.loadedModelName.value == filename) {
+      final activeProjector = _inference.loadedProjectorPath;
+      final isActiveProjector = activeProjector != null &&
+          activeProjector == await _download.modelPath(filename);
+      if (_inference.loadedModelName.value == filename || isActiveProjector) {
         await _inference.unloadModel();
+        if (_inference.loadedModelName.value == filename ||
+            (isActiveProjector &&
+                _inference.loadedProjectorPath == activeProjector)) {
+          showToast('Model in use',
+              'Wait for the current model operation to finish.',
+              tone: ToastTone.warning);
+          return false;
+        }
       }
       if (_localImage.loadedModelName.value == filename) {
         await _localImage.unloadModel();
         if (_localImage.isModelLoaded.value) return false;
       }
       await _download.deleteModel(filename);
-      final model =
-          availableModels.firstWhereOrNull((m) => m.filename == filename);
-      if (model != null && model.hasVisionProjector &&
-          !availableModels.any((other) =>
-              other.filename != filename &&
-              other.mmprojFilename == model.mmprojFilename)) {
-        await _download.deleteModel(model.mmprojFilename);
-      }
       return true;
     } catch (error) {
       Get.find<AppLogService>().error('Could not delete model',

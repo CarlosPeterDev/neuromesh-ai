@@ -11,6 +11,9 @@ void main() {
     ('Create image of a flying car', 'image'),
     ('ارسم سيارة تطير فوق القاهرة ليلاً', 'image'),
     ('Who won the latest Champions League final?', 'search'),
+    ('OK search for the best Ai model for coding', 'search'),
+    ('What is the strongest AI in coding', 'search'),
+    ('What is a coding model?', 'chat'),
     ('من فاز بكأس العالم الأخيرة؟', 'search'),
     ('Save this as a downloadable .txt: The blue sky.', 'file'),
     (
@@ -28,6 +31,9 @@ void main() {
   ]) {
     _write(route, 5, toolRoutingPrompt(request));
   }
+  _write('retry', 5, imageRetryPrompt('Try again'));
+  _write('retry', 5, imageRetryPrompt('جرب مرة ثانية'));
+  _write('new', 5, imageRetryPrompt('Who won last night’s match?'));
   _write(
       '8',
       4,

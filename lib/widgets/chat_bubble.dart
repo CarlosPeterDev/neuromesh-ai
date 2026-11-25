@@ -256,7 +256,9 @@ class ChatBubble extends StatelessWidget {
                 _CopyButton(text: answerContent, color: muted),
               if (_isLastMessage())
                 IconButton(
-                  tooltip: 'Regenerate',
+                  tooltip: steps.any((step) => step.failed)
+                      ? 'Retry request'
+                      : 'Regenerate',
                   visualDensity: VisualDensity.compact,
                   iconSize: 18,
                   color: muted,
