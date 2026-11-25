@@ -16,9 +16,28 @@ double evaluateExpression(String input) {
   return v;
 }
 
+/// Numeric intermediate results from the same parser used by Calc.
+List<String> calculatorSteps(String expression) {
+  final steps = <String>[];
+  _ExprParser(expression, steps: steps).parse();
+  return steps.length > 1 ? steps.take(12).toList() : const [];
+}
+
 class _ExprParser {
-  _ExprParser(this.s);
+  _ExprParser(this.s, {this.steps});
   final String s;
+  final List<String>? steps;
+  double _step(double result, String operation) {
+    if (result.isFinite)
+      steps?.add('${operation.trim()} = ${formatNumber(result)}');
+    return result;
+  }
+
+  double _binary(double left, String symbol, double right, double result) =>
+      steps == null
+          ? result
+          : _step(
+              result, '${formatNumber(left)} $symbol ${formatNumber(right)}');
   int i = 0;
 
   double parse() {
@@ -47,9 +66,11 @@ class _ExprParser {
     var v = _term();
     while (true) {
       if (_eat('+')) {
-        v += _term();
+        final operand = _term();
+        v = _binary(v, '+', operand, v + operand);
       } else if (_eat('-')) {
-        v -= _term();
+        final operand = _term();
+        v = _binary(v, '−', operand, v - operand);
       } else {
         return v;
       }
@@ -60,15 +81,16 @@ class _ExprParser {
     var v = _unary();
     while (true) {
       if (_eat('*')) {
-        v *= _unary();
+        final operand = _unary();
+        v = _binary(v, '×', operand, v * operand);
       } else if (_eat('/')) {
         final d = _unary();
         if (d == 0) throw const FormatException('Division by zero');
-        v /= d;
+        v = _binary(v, '÷', d, v / d);
       } else if (_eat('%')) {
         final d = _unary();
         if (d == 0) throw const FormatException('Division by zero');
-        v %= d;
+        v = _binary(v, '%', d, v % d);
       } else {
         return v;
       }
@@ -77,7 +99,10 @@ class _ExprParser {
 
   double _power() {
     final base = _atom();
-    if (_eat('^')) return math.pow(base, _unary()).toDouble();
+    if (_eat('^')) {
+      final exponent = _unary();
+      return _binary(base, '^', exponent, math.pow(base, exponent).toDouble());
+    }
     return base;
   }
 
@@ -105,7 +130,9 @@ class _ExprParser {
       if (!_eat(')')) throw const FormatException('Missing )');
       switch (fn) {
         case 'sqrt':
-          return math.sqrt(arg);
+          return steps == null
+              ? math.sqrt(arg)
+              : _step(math.sqrt(arg), 'sqrt(${formatNumber(arg)})');
         case 'abs':
           return arg.abs();
         case 'round':

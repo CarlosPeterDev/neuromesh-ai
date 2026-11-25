@@ -117,6 +117,7 @@ class DesktopEngine {
     required double temperature,
     String? imagePath,
     bool normalThinking = false,
+    bool rawCompletion = false,
     void Function(String token)? onToken,
   }) async {
     if (_proc == null) return 'ERROR: no model is loaded.';
@@ -149,15 +150,25 @@ class DesktopEngine {
     _http = client;
     final out = StringBuffer();
     try {
-      final req = await client.postUrl(Uri.parse('http://127.0.0.1:$_port/v1/chat/completions'));
+      final endpoint = rawCompletion ? '/completion' : '/v1/chat/completions';
+      final req =
+          await client.postUrl(Uri.parse('http://127.0.0.1:$_port$endpoint'));
       req.headers.contentType = ContentType.json;
-      req.add(utf8.encode(jsonEncode({
-        'messages': messages,
-        'stream': true,
-        'chat_template_kwargs': {'enable_thinking': normalThinking},
-        'max_tokens': maxTokens,
-        'temperature': temperature,
-      })));
+      req.add(utf8.encode(jsonEncode(rawCompletion
+          ? {
+              'prompt': prompt,
+              'stream': true,
+              'n_predict': maxTokens,
+              'temperature': 0.0,
+              'repeat_penalty': 1.0
+            }
+          : {
+              'messages': messages,
+              'stream': true,
+              'chat_template_kwargs': {'enable_thinking': normalThinking},
+              'max_tokens': maxTokens,
+              'temperature': temperature,
+            })));
       final res = await req.close();
       if (res.statusCode != 200) {
         final body = await utf8.decodeStream(res);
@@ -174,7 +185,10 @@ class DesktopEngine {
           if (d == '[DONE]') continue;
           try {
             final j = jsonDecode(d) as Map<String, dynamic>;
-            final delta = (((j['choices'] as List?)?.first as Map?)?['delta'] as Map?)?['content'];
+            final delta = rawCompletion
+                ? j['content']
+                : (((j['choices'] as List?)?.first as Map?)?['delta']
+                    as Map?)?['content'];
             if (delta is String && delta.isNotEmpty) {
               out.write(delta);
               onToken?.call(delta);

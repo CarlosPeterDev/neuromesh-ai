@@ -55,6 +55,11 @@ class ChatToolLoop {
       {'text': 3500},
       {'model_id': 120, 'speaker': 120, 'language': 30, 'voice': 6}
     ),
+    'create_text_file': (
+      'Create a downloadable text file with the requested contents.',
+      {'text': 16000},
+      {'name': 120}
+    ),
     'models_status': (
       'List installed speech models and speakers.',
       <String, int>{},
@@ -93,6 +98,7 @@ class ChatToolLoop {
     'text_to_speech':
         'Create audio. Set voice to male or female. Use only installed IDs.',
     'models_status': 'List installed voices.',
+    'create_text_file': 'Save content to a .txt file.',
     'read_context': 'Read a selected file page.',
     'search_context': 'Find text in selected sources.',
     'list_skill_files': 'List selected skill resources.',
@@ -257,7 +263,7 @@ class ChatToolLoop {
   static Map<String, Object?>? _parse(String value,
       {required bool nativeMarkup}) {
     if (value.length < callPrefix.length + callSuffix.length ||
-        value.length > 16000 ||
+        value.length > 40000 ||
         !value.endsWith(callSuffix)) return null;
     final body = value
         .substring(callPrefix.length, value.length - callSuffix.length)
@@ -445,6 +451,13 @@ class ChatToolLoop {
       });
     }
 
+    String searchEvidence() => [
+          'Search results',
+          for (final (index, source) in sources.values.indexed)
+            if (source.snippet.trim().isNotEmpty)
+              '**[${index + 1}]** ${_escapeMarkdown(_shorten(redactSecrets(source.snippet), 280))}',
+        ].join('\n\n');
+
     ToolLoopResult finish(String answer) {
       final sourceLinks = [
         for (final (index, source) in sources.values.indexed)
@@ -516,8 +529,7 @@ class ChatToolLoop {
           if (sources.isNotEmpty &&
               !RegExp(r'\[([1-5])\]').allMatches(answer).any(
                   (match) => int.parse(match.group(1)!) <= sources.length)) {
-            return finish(
-                'I found the sources below. The model did not produce a sourced answer.');
+            return finish(searchEvidence());
           }
           return finish([
             answer,
@@ -638,9 +650,21 @@ class ChatToolLoop {
                 !RegExp(r'^(error:|the user has blocked|the user denied|no selected|resource missing)',
                         caseSensitive: false)
                     .hasMatch(output);
+            if (name == 'transcribe_attachment' && success) {
+              // The executor emits a trusted link on the first line, then
+              // the verbatim transcript. Audio content cannot add links.
+              final newline = output.indexOf('\n');
+              if (newline < 0) {
+                success = false;
+              } else {
+                attachments.add(output.substring(0, newline));
+                output = output.substring(newline + 1);
+              }
+            }
             if (name == 'generate_image' ||
                 name == 'edit_image' ||
-                name == 'text_to_speech') {
+                name == 'text_to_speech' ||
+                name == 'create_text_file') {
               final link = RegExp(r'!?\[[^\r\n\]]*\]\(nmfile:[^\r\n)]+\)')
                   .firstMatch(output);
               success = success && link != null;
@@ -690,16 +714,17 @@ class ChatToolLoop {
                 : output);
           }
           return finish(switch (name) {
-            'web_search' => [
-                'Search results',
-                for (final (index, source) in sources.values.indexed)
-                  if (source.snippet.trim().isNotEmpty)
-                    '**[${index + 1}]** ${_escapeMarkdown(_shorten(redactSecrets(source.snippet), 280))}',
-              ].join('\n\n'),
-            'calculator' => '`${args['expression']}` = **$output**',
+            'web_search' => searchEvidence(),
+            'calculator' => [
+                '`${args['expression']}` = **$output**',
+                for (final step
+                    in calculatorSteps(args['expression'] as String))
+                  '- `$step`',
+              ].join('\n'),
             'generate_image' => output.split('\n').first,
             'text_to_speech' => 'Audio ready.',
-            'transcribe_attachment' => _escapeMarkdown(output),
+            'create_text_file' => 'Text file ready.',
+            'transcribe_attachment' => _escapeMarkdown(_shorten(output, 2000)),
             _ => output,
           });
         }

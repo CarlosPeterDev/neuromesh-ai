@@ -1,6 +1,14 @@
 # NeuroMesh AI development handoff
 
-## Direct Chat tools for small models
+## Automatic tool selection and text files
+
+The composer has one input with **AI can make mistakes.** below it. The manual tool picker from v1.0.213 was removed. A short, greedy GGUF completion selects a deliverable from examples and the current request alone. Separate short completions extract calculator precision and speech arguments. The allowed tools and arguments still go through the shared validator, and the normal Chat loop can continue with multiple tools. Cloud and LiteRT retain their existing tool paths. No keyword routing was added.
+
+The official Qwen2.5 0.5B Instruct Q4_K_M previously continued the screenshot’s calculation in prose. The host JNI fixture selected Calc for the same request in 194 input tokens, including the request, and confirmed eight-place precision in 83 tokens. It also selected chat, image, search, speech, transcription and a plain text file in the English and Arabic fixture set. Artemis passed the same native fixtures. Calc returns `420436.17803423` with numeric intermediate values from the calculator. The Android packaging smoke test now runs these compact prompts against the packaged JNI libraries and Artemis.
+
+Audio attachments sent without a prompt run transcription independently of the chat model. The response includes a preview and a downloadable UTF-8 transcript. Requests with audio and an instruction still use the relevant Chat tool or a supported multimodal runtime. A plain text file can also be requested in Chat. The output uses the existing private workspace and download sheet. Tests exercise real Whisper Tiny audio, tool arguments, approvals, cancellation and the saved bytes. Physical device interaction remains open. [Device matrix](docs/ANDROID_DEVICE_TESTS.md)
+
+## Historical v1.0.213 direct Chat tools
 
 The Chat composer now offers **Auto**, **Search**, **Calc**, **Image**, **Speak**, and **Transcribe**. Auto uses the existing model-directed tool flow. The other choices send one typed request to the selected tool and add no hidden tokens or language-model passes. Search shows source excerpts and links. Calc accepts a formula, Image sends the description to Pollinations, Speak synthesizes the exact words entered using the selected voice, and Transcribe takes an attached audio file and uses an installed or assigned listening model. The next draft returns to Auto. Regenerating a saved turn keeps its original choice.
 

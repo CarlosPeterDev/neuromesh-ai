@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'chat_tool_loop.dart';
+import 'chat_tool_intent.dart' show toolCompletionSource;
 import 'gguf_metadata.dart';
 import '../utils/thought_parser.dart';
 
@@ -673,13 +674,14 @@ class InferenceService extends GetxService {
         await recordVision('Preparing image and waiting for first token');
       }
       if (!isCurrent()) return '';
-      final temperature = source == toolPlanSource
-          ? 0.0
-          : _hive.getSetting<double>(
-                AppConstants.keyTemperature,
-                defaultValue: AppConstants.defaultTemperature,
-              ) ??
-              AppConstants.defaultTemperature;
+      final temperature =
+          source == toolPlanSource || source == toolCompletionSource
+              ? 0.0
+              : _hive.getSetting<double>(
+                    AppConstants.keyTemperature,
+                    defaultValue: AppConstants.defaultTemperature,
+                  ) ??
+                  AppConstants.defaultTemperature;
 
       final settingMaxTokens = _hive.getSetting<int>(
             AppConstants.keyMaxTokens,

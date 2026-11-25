@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_litert_lm/flutter_litert_lm.dart';
 import 'package:llama_flutter_android/llama_flutter_android.dart';
 import 'inference_desktop.dart';
+import 'chat_tool_intent.dart' show toolCompletionSource;
 
 /// Whether the current platform supports local inference.
 bool get supportsLocalInference =>
@@ -388,6 +389,7 @@ class InferenceEngine {
           temperature: temperature,
           imagePath: imagePath,
           normalThinking: normalThinking,
+          rawCompletion: source == toolCompletionSource,
           onToken: onToken);
     }
     if (_isLiteRt) {
@@ -448,23 +450,37 @@ class InferenceEngine {
     // ── Use generateChat() for native template handling ──
     Stream<String>? stream;
     try {
-      final messages = _buildChatMessages(
-          prompt, conversationHistory, systemPrompt,
-          imagePath: imagePath);
-      stream = _controller!.generateChat(
-        messages: messages,
-        template: normalThinking ? null : 'model-direct',
-        maxTokens: maxTokens,
-        temperature: temperature,
-        topP: 0.9,
-        topK: 40,
-        minP: 0.05,
-        repeatPenalty: 1.1,
-        repeatLastN: 64,
-        onDecodeProgress: onDecodeProgress,
-      );
-      print('[Inference] generateChat() started (${messages.length} messages)');
+      if (source == toolCompletionSource) {
+        stream = _controller!.generate(
+          prompt: prompt,
+          maxTokens: maxTokens,
+          temperature: 0,
+          repeatPenalty: 1,
+          onDecodeProgress: onDecodeProgress,
+        );
+      } else {
+        final messages = _buildChatMessages(
+            prompt, conversationHistory, systemPrompt,
+            imagePath: imagePath);
+        stream = _controller!.generateChat(
+          messages: messages,
+          template: normalThinking ? null : 'model-direct',
+          maxTokens: maxTokens,
+          temperature: temperature,
+          topP: 0.9,
+          topK: 40,
+          minP: 0.05,
+          repeatPenalty: 1.1,
+          repeatLastN: 64,
+          onDecodeProgress: onDecodeProgress,
+        );
+        print(
+            '[Inference] generateChat() started (${messages.length} messages)');
+      }
     } catch (e) {
+      if (source == toolCompletionSource) {
+        return 'ERROR: Could not prepare tool selection.';
+      }
       if (imagePath != null) return 'ERROR: Could not prepare image input.';
       print('[Inference] generateChat() failed: $e — fallback to generate()');
       try {

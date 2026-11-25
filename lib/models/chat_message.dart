@@ -1,4 +1,3 @@
-import 'chat_tool_choice.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -16,6 +15,7 @@ class ChatMessage {
   final String? filePath;
   final String? fileType;
   final int? fileSize;
+  final bool attachmentOnly;
   final String? cmdOutput; // Result of CMD: execution
   final bool isCommand;
   final double? tokensPerSec;
@@ -23,7 +23,6 @@ class ChatMessage {
   final int? imageGenDurationMs; // Time taken to generate image locally
   final DateTime timestamp;
   final List<Map<String, dynamic>> toolSearches;
-  final ChatToolChoice toolChoice;
 
   // Cache decoded bytes to prevent flickering on re-build
   Uint8List? _decodedImageBytes;
@@ -50,13 +49,13 @@ class ChatMessage {
     this.filePath,
     this.fileType,
     this.fileSize,
+    this.attachmentOnly = false,
     this.cmdOutput,
     this.isCommand = false,
     this.tokensPerSec,
     this.thoughtDurationSeconds,
     this.imageGenDurationMs,
     this.toolSearches = const [],
-    this.toolChoice = ChatToolChoice.auto,
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 
@@ -72,10 +71,11 @@ class ChatMessage {
     return start < 0 ? content : content.substring(0, start);
   }
 
-  ChatMessage withUserText(String text) {
+  ChatMessage withUserText(String text, {bool? attachmentOnly}) {
     final start = fileName == null ? -1 : _attachmentStart;
     return ChatMessage.fromMap({
       ...toMap(),
+      'attachmentOnly': attachmentOnly ?? this.attachmentOnly,
       'content': start < 0 ? text : '$text${content.substring(start)}',
     });
   }
@@ -95,6 +95,7 @@ class ChatMessage {
         'filePath': filePath,
         'fileType': fileType,
         'fileSize': fileSize,
+        if (attachmentOnly) 'attachmentOnly': true,
         'cmdOutput': cmdOutput,
         'isCommand': isCommand,
         // Older backups used tokensPerSec for output chunks per second.
@@ -102,7 +103,6 @@ class ChatMessage {
         'thoughtDurationSeconds': thoughtDurationSeconds,
         'imageGenDurationMs': imageGenDurationMs,
         'timestamp': timestamp.toIso8601String(),
-        if (toolChoice.isDirect) 'toolChoice': toolChoice.name,
         if (toolSearches.isNotEmpty) 'toolSearches': toolSearches,
       };
 
@@ -118,6 +118,7 @@ class ChatMessage {
         fileName: map['fileName'],
         fileContent: map['fileContent'],
         filePath: map['filePath'],
+        attachmentOnly: map['attachmentOnly'] == true,
         fileType: map['fileType'],
         fileSize:
             map['fileSize'] != null ? (map['fileSize'] as num).toInt() : null,
@@ -130,7 +131,6 @@ class ChatMessage {
         imageGenDurationMs: map['imageGenDurationMs'] != null
             ? (map['imageGenDurationMs'] as num).toInt()
             : null,
-        toolChoice: ChatToolChoice.fromName(map['toolChoice']),
         toolSearches: [
           for (final item
               in (map['toolSearches'] as List? ?? const []).whereType<Map>())

@@ -13,7 +13,6 @@ import 'package:neuromesh_ai/controllers/chat_controller.dart';
 import 'package:neuromesh_ai/controllers/settings_controller.dart';
 import 'package:neuromesh_ai/core/constants.dart';
 import 'package:neuromesh_ai/models/chat_message.dart';
-import 'package:neuromesh_ai/models/chat_tool_choice.dart';
 import 'package:neuromesh_ai/models/chat_session.dart';
 import 'package:neuromesh_ai/services/chat_tool_service.dart';
 import 'package:neuromesh_ai/services/chat_tool_intent.dart';
@@ -66,42 +65,38 @@ void main() {
     chat.textController.text = 'Read this';
   }
 
-  test('direct search saves links and a trace without waiting for a model',
-      () async {
-    final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
+  void useTestWorkspace() {
+    final previous = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _TestPaths(dir.path);
+    addTearDown(() => PathProviderPlatform.instance = previous);
+  }
+
+  Future<String> outputTextFile() async {
+    final name = RegExp(r'nmfile:([a-zA-Z0-9_-]+\.txt)\)')
+        .firstMatch(chat.messages.last.content)
+        ?.group(1);
+    expect(name, isNotNull, reason: chat.messages.last.content);
+    final file = await agent.workspaceFile(name!);
+    return file!.readAsString();
+  }
+
+  Future<void> useGguf(String route) async {
     await hive.setSetting(AppConstants.keyInferenceMode, 'local');
-    local.isLoadingModel.value = true;
-    chat.toolChoice.value = ChatToolChoice.search;
-    chat.textController.text = 'تاريخ الطباعة';
+    await hive.setSetting('auto_title', false);
+    local.isModelLoaded.value = true;
+    local.loadedModelRuntime.value = 'llama';
+    local.toolCompletions.add(route);
+  }
 
-    await chat.sendMessage();
-
-    expect(web.queries, ['تاريخ الطباعة']);
-    expect(local.calls, 0);
-    expect(cloud.calls, 0);
-    expect(chat.messages.last.content, contains(ToolLoopResult.traceMark));
-    expect(
-        chat.messages.last.content, contains('https://example.com/benchmark'));
-    expect(chat.messages.last.toolSearches.single['query'], 'تاريخ الطباعة');
-    expect(chat.messages.last.tokensPerSec, isNull);
-    expect(chat.toolChoice.value, ChatToolChoice.auto);
-    final session = chat.currentSessionId.value;
-    chat.openChat(session);
-    expect(chat.messages.first.toolChoice, ChatToolChoice.search);
-    await chat.regenerate();
-    expect(web.queries, ['تاريخ الطباعة', 'تاريخ الطباعة']);
-    expect(local.calls, 0);
-  });
-
-  test('direct transcription accepts an audio attachment without a prompt',
+  test('attachment transcription accepts an audio attachment without a prompt',
       () async {
+    useTestWorkspace();
     final voice =
         Get.put<VoiceService>(_TestTranscription()) as _TestTranscription;
     final audio = await File('${dir.path}/note.wav').create();
     chat.selectedFileName.value = 'note.wav';
     chat.selectedFileType.value = 'audio';
     chat.selectedFilePath.value = audio.path;
-    chat.toolChoice.value = ChatToolChoice.transcribe;
 
     await chat.sendMessage();
 
@@ -109,24 +104,27 @@ void main() {
     expect(chat.messages.last.content, contains('A recorded note.'));
     expect(chat.messages.last.content, contains(ToolLoopResult.traceMark));
     expect(chat.messages.first.visibleUserText, 'Transcribe audio');
+    expect(chat.messages.first.attachmentOnly, isTrue);
+    final transcript = await outputTextFile();
+    expect(transcript, isNotEmpty);
     expect(cloud.calls, 0);
     expect(local.calls, 0);
   });
 
   final whisperRoot = Platform.environment['NEUROMESH_TEST_WHISPER_TINY'];
   test(
-      'direct transcription recognizes the Whisper fixture without chat inference',
+      'attachment transcription recognizes the Whisper fixture without chat inference',
       () async {
+    useTestWorkspace();
     Get.put<VoiceModelStore>(_WhisperFixture(whisperRoot!));
     Get.put(VoiceService(player: _UnusedPlayer()));
     chat.selectedFileName.value = '0.wav';
     chat.selectedFileType.value = 'audio';
     chat.selectedFilePath.value = '$whisperRoot/test_wavs/0.wav';
-    chat.toolChoice.value = ChatToolChoice.transcribe;
 
     await chat.sendMessage();
 
-    expect(chat.messages.last.content.toLowerCase(),
+    expect((await outputTextFile()).toLowerCase(),
         contains('the yellow lamps would light up'));
     expect(chat.messages.last.content, contains(ToolLoopResult.traceMark));
     expect(cloud.calls, 0);
@@ -136,50 +134,80 @@ void main() {
           ? 'Set NEUROMESH_TEST_WHISPER_TINY to the extracted model directory'
           : false);
 
-  test('direct transcription requires an audio attachment', () async {
-    chat.toolChoice.value = ChatToolChoice.transcribe;
-    chat.textController.text = 'This is just text';
+  test('local routing plans search and saves citeable results', () async {
+    final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
+    await useGguf('search');
+    local.answer = 'Here is the benchmark [1].';
+    chat.textController.text = 'تاريخ الطباعة';
     await chat.sendMessage();
-    expect(chat.messages.last.content, contains('Attach an audio file'));
+
+    expect(web.queries, ['تاريخ الطباعة']);
+    expect(local.sources.first, toolCompletionSource);
     expect(cloud.calls, 0);
+    expect(chat.messages.last.content, contains(ToolLoopResult.traceMark));
+    expect(
+        chat.messages.last.content, contains('https://example.com/benchmark'));
+    expect(chat.messages.last.toolSearches.single['query'], 'تاريخ الطباعة');
   });
 
-  test('direct Calc uses the expression and direct media uses the draft',
-      () async {
-    chat.toolChoice.value = ChatToolChoice.calculator;
+  test('local routing produces verified Calc results and steps', () async {
+    await useGguf('math');
+    local.toolCompletions.add('8');
     chat.textController.text =
-        '((84729 × 93617) + sqrt(987654321)) / (137.29^2 + 17.83)';
+        'Calculate ((84729 × 93617) + sqrt(987654321)) / (137.29^2 + 17.83), rounded to 8 decimal places.';
     await chat.sendMessage();
     expect(chat.messages.last.content, contains('420436.17803423'));
-    chat.toolChoice.value = ChatToolChoice.image;
+    expect(chat.messages.last.content, contains('7932074793'));
+    expect(local.sources, [toolCompletionSource, toolCompletionSource]);
+  });
+
+  test('local routing produces an image and extracts spoken words', () async {
+    await useGguf('image');
     chat.textController.text = 'A flying car';
     await chat.sendMessage();
     expect(agent.imageCall?.arguments['prompt'], 'A flying car');
     expect(chat.messages.last.content, contains('nmfile:generated.jpg'));
-    chat.toolChoice.value = ChatToolChoice.speak;
-    chat.textController.text = 'Hello, Carlos!';
+
+    local.toolCompletions.addAll(['audio', '["Hello, Carlos!", "male"]']);
+    chat.textController.text =
+        'Make a recording of a male voice saying Hello, Carlos!';
     await chat.sendMessage();
     expect(agent.narration?.arguments['text'], 'Hello, Carlos!');
     expect(chat.messages.last.content, contains('nmfile:research.wav'));
-    expect(cloud.calls, 0);
-    expect(local.calls, 0);
+    expect(agent.narration?.arguments['voice'], 'male');
+    expect(local.sources, [
+      toolCompletionSource,
+      InferenceService.toolPlanSource,
+      toolCompletionSource,
+      toolCompletionSource,
+    ]);
   });
 
-  test('direct search respects the block policy', () async {
-    final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
-    await agent.setPolicy('built-in', 'web_search', 'block');
-    chat.toolChoice.value = ChatToolChoice.search;
-    chat.textController.text = 'printing';
+  test('local routing saves generated text in a downloadable file', () async {
+    useTestWorkspace();
+    await useGguf('file');
+    local.answer = 'سماء زرقاء';
+    chat.textController.text = 'Save this as text: سماء زرقاء';
     await chat.sendMessage();
-    expect(chat.messages.last.content, contains('Search is disabled'));
+    expect(await outputTextFile(), 'سماء زرقاء');
+    expect(chat.messages.last.content, contains('Text file ready.'));
+    expect(local.lastSystem, contains('requested plain-text file contents'));
+  });
+
+  test('automatic search respects the block policy', () async {
+    final web = Get.put<WebSearchService>(_TestWeb()) as _TestWeb;
+    await useGguf('search');
+    local.answer = 'Please try again.';
+    await agent.setPolicy('built-in', 'web_search', 'block');
+    chat.textController.text = 'What is happening in Cairo today?';
+    await chat.sendMessage();
     expect(web.queries, isEmpty);
   });
 
-  test('cancelling direct Search aborts the provider without resuming chat',
-      () async {
+  test('cancelling automatic Search aborts the provider', () async {
     final web = Get.put<WebSearchService>(_PendingSearch()) as _PendingSearch;
-    chat.toolChoice.value = ChatToolChoice.search;
-    chat.textController.text = 'printing';
+    await useGguf('search');
+    chat.textController.text = 'What is happening in Cairo today?';
     final sent = chat.sendMessage();
     await web.started.future;
     chat.stopGenerating();
@@ -187,7 +215,7 @@ void main() {
     await web.aborted.future;
     expect(chat.isLoading.value, isFalse);
     expect(chat.messages.last.content, contains('Cancelled.'));
-    expect(cloud.calls, 0);
+    expect(local.sources, [toolCompletionSource]);
   });
 
   test('a plain reply is shown without forcing a tool call', () async {
@@ -557,6 +585,7 @@ class _TestNarrationInference extends InferenceService {
   String visualDecision = 'text';
   String calculatorOptions = 'none';
   final decisions = <String, String>{};
+  final toolCompletions = <String>[];
   final sources = <String>[];
   Completer<void>? pendingReset;
   int resets = 0;
@@ -586,6 +615,7 @@ class _TestNarrationInference extends InferenceService {
     sources.add(source);
     lastPrompt = prompt;
     lastSystem = systemPrompt;
+    if (source == toolCompletionSource) return toolCompletions.removeAt(0);
     if (source == InferenceService.toolPlanSource) {
       return decisions[systemPrompt] ??
           (systemPrompt == calculatorOptionsInstructions

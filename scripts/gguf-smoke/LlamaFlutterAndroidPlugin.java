@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.Base64;
 import java.util.Locale;
 
 /** Calls the production JNI entry points from a clean process with synthetic input. */
@@ -73,12 +74,27 @@ public final class LlamaFlutterAndroidPlugin {
                 : actual.equals(expected), "tool plan differs for " + request);
     }
 
+    private void checkCompactTools(String path) throws IOException {
+        for (String line : Files.readAllLines(Paths.get(path), StandardCharsets.UTF_8)) {
+            final String[] fields = line.split("\t", 3);
+            final String prompt = new String(Base64.getDecoder().decode(fields[2]), StandardCharsets.UTF_8);
+            final String output = generate("compact-tool", prompt, null, true, Integer.parseInt(fields[1]));
+            final String choice = output.split("\\R", 2)[0].trim();
+            require(choice.equals(fields[0]), "compact tool expected " + fields[0] + ", got " + choice);
+        }
+    }
+
     public static void main(String[] args) throws IOException {
         System.loadLibrary("llama_jni");
         final LlamaFlutterAndroidPlugin smoke = new LlamaFlutterAndroidPlugin();
         smoke.nativeInitBackends(args[0], false);
         smoke.nativeLoadModel(args[1], 2, 1024, 0, new Progress());
         try {
+            if (args.length == 3 && args[2].endsWith(".tsv")) {
+                smoke.checkCompactTools(args[2]);
+                System.out.println("COMPACT_TOOL_SMOKE_OK");
+                return;
+            }
             final String raw = "Hello, my name is";
             final String chat = "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
             require(smoke.nativeCountPromptTokens(raw) == 5, "raw token count differs from reference");
@@ -129,6 +145,9 @@ public final class LlamaFlutterAndroidPlugin {
                 final String system = new String(Files.readAllBytes(Paths.get(args[7])), StandardCharsets.UTF_8);
                 smoke.checkToolPlan(system, "Write a prompt I could give a painter to depict a flying car.", "text");
                 smoke.checkToolPlan(system, "Could you show me what a flying car over a rainy Cairo might look like?", "artwork");
+            }
+            if (args.length >= 9) {
+                smoke.checkCompactTools(args[8]);
             }
         } finally {
             smoke.nativeFreeModel();

@@ -19,8 +19,9 @@ Record Android version, RAM, SoC, ABI, model file and checksum, runtime/backend,
 - Repeat with local model thinking enabled and disabled. Cancel while evaluating the prompt and during a tool call or approval dialog. Send another message immediately, then switch chats and repeat on a different model.
 - Record actual input tokens, prompt evaluation, first visible chunk, final time, native decode rate, and cancellation time from the app log and Android logcat. Record any tool request that failed schema validation or selected the wrong tool.
 
-## Direct Chat tools
+## Automatic Chat tools and text exports
 
-- Unload the chat model, open the composer’s tool picker, and run Search with a non-English query. Confirm sources open, snippets are visible, the step expands, and the next draft defaults to Auto. Retry with no network and cancel a slow request.
-- Choose Transcribe, attach a WAV with **+**, and send with the text field empty. Verify transcription with an installed Whisper model. Repeat with an Android-decoded audio format, a missing listening model, and an assigned speech worker. Check that cancelling leaves a cancelled step.
-- Submit a formula in Calc, an image description in Image, and exact words in Speak. Check the saved traces and media. Block one tool in **Tools & permissions** and verify the same direct choice respects the block.
+- Load Qwen2.5 0.5B and send the full reported fraction including eight-place rounding. Confirm the Calc trace and result `420436.17803423`. Then ask how to write similar arithmetic in code and verify Chat responds in text.
+- Ask a time-sensitive factual question and check sources, cancel, and retry with no network. Request a Pollinations image and a spoken recording without selecting a mode.
+- Unload the Chat model, attach a WAV with **+**, and send with the text field empty. Verify the preview and download the UTF-8 transcript. Repeat with an Android-decoded audio format, a missing listening model, an assigned speech worker, and cancellation. Ask for a plain text file and check its saved contents.
+- Check the disclaimer below the composer, and verify that blocked tools still respect **Tools & permissions**.

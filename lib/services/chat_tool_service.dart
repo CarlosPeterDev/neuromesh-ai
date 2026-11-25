@@ -388,6 +388,19 @@ class ChatToolService extends GetxService {
       evaluateBoundedIntegers,
     ),
     ChatTool(
+      'create_text_file',
+      'Create a downloadable plain text file with the requested contents.',
+      '{"text":"file contents","name":"optional filename"}',
+      (args) async {
+        final text = args['text'];
+        if (text is! String || text.trim().isEmpty || text.length > 16000) {
+          throw const FormatException(
+              'Provide up to 16000 characters of text.');
+        }
+        return saveChatText(text, args['name']?.toString() ?? 'document');
+      },
+    ),
+    ChatTool(
       'text_to_speech',
       'Create a WAV in the workspace. Set voice for a male or female preference. Use models_status for exact model and speaker names. Omit overrides to use the user’s defaults.',
       '{"text":"string","name":"output file name ending in .wav","language":"optional voice language such as en or ar","voice":"male|female","model_id":"optional installed speaking model ID","speaker":"optional exact speaker name"}',
@@ -509,6 +522,19 @@ class ChatToolService extends GetxService {
   }
 
   Future<File> newWorkspaceFile(String name) => _safeFile(name);
+
+  Future<String> saveChatText(String content, String name) async {
+    final label = name
+        .replaceFirst(RegExp(r'\.txt$', caseSensitive: false), '')
+        .replaceAll(RegExp(r'[^A-Za-z0-9_-]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+    final stem = label.isEmpty ? 'document' : label;
+    final safeStem = stem.length > 48 ? stem.substring(0, 48) : stem;
+    final filename = '$safeStem-${DateTime.now().microsecondsSinceEpoch}.txt';
+    final file = await _safeFile(filename);
+    await file.writeAsString(content, flush: true);
+    return '[📎 $filename](nmfile:$filename)';
+  }
 
   List<ChatTool> get catalog => [..._builtIns, ..._extra];
 

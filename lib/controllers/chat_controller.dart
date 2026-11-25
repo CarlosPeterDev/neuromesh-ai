@@ -16,7 +16,6 @@ import '../controllers/settings_controller.dart';
 import '../core/constants.dart';
 import '../core/ui.dart';
 import '../models/chat_message.dart';
-import '../models/chat_tool_choice.dart';
 import '../models/chat_session.dart';
 import '../services/hive_service.dart';
 import '../services/voice_service.dart';
@@ -72,7 +71,6 @@ class ChatController extends GetxController {
   final currentSessionId = ''.obs;
   final isLoading = false.obs;
   final inputText = ''.obs;
-  final toolChoice = ChatToolChoice.auto.obs;
   bool _directToolActive = false;
   final selectedImagePath = Rxn<String>();
   final selectedImageBase64 = Rxn<String>();
@@ -787,7 +785,6 @@ class ChatController extends GetxController {
   }) async {
     if (isLoading.value || isStreaming.value) return;
 
-    final choice = previous?.toolChoice ?? toolChoice.value;
     final draftText = textController.text;
     final text = previous == null
         ? draftText.trim()
@@ -812,11 +809,12 @@ class ChatController extends GetxController {
         fileName == null) {
       return;
     }
-    final visibleText = text.isEmpty
-        ? choice == ChatToolChoice.transcribe
-            ? 'Transcribe audio'
-            : _defaultAttachmentPrompt(fileType)
-        : text;
+    final transcribe = !kIsWeb &&
+        fileType == 'audio' &&
+        (text.isEmpty ||
+            (editedText == null && previous?.attachmentOnly == true));
+    final visibleText =
+        text.isEmpty ? _defaultAttachmentPrompt(fileType) : text;
 
     if (currentSessionId.value.isEmpty) createNewChat();
     final sessionId = currentSessionId.value;
@@ -827,23 +825,22 @@ class ChatController extends GetxController {
             ? Get.find<ChatToolService>().projectForChat(sessionId)
             : '')
         : previous.workspaceProject ?? '';
-    _directToolActive = choice.isDirect;
+    _directToolActive = transcribe;
     isLoading.value = true;
-    responseStage.value =
-        choice.isDirect ? 'Preparing tool' : 'Preparing context';
+    responseStage.value = transcribe ? 'Preparing tool' : 'Preparing context';
     var posted = false;
 
     try {
       final cancellation = Completer<void>();
       _toolCancellation = cancellation;
-      if (previous != null && !choice.isDirect) {
+      if (previous != null && !transcribe) {
         _queueContextTransition(_resetInferenceContext);
       }
       // Copy non-media attachments into the agent workspace so the AI's file
       // tools can read the whole file (not just what fits in the prompt).
       String? workspaceName;
       if (previous == null &&
-          !choice.isDirect &&
+          !transcribe &&
           !kIsWeb &&
           filePath != null &&
           fileName != null &&
@@ -904,12 +901,13 @@ class ChatController extends GetxController {
       }
 
       if (generationId != _generationSerial) return;
-      final userMsg = previous?.withUserText(visibleText) ??
+      final userMsg = previous?.withUserText(visibleText,
+              attachmentOnly: editedText == null && previous.attachmentOnly) ??
           ChatMessage(
             id: _uuid.v4(),
             chatId: sessionId,
             role: 'user',
-            toolChoice: choice,
+            attachmentOnly: text.isEmpty,
             workspaceProject: project,
             workspaceAttachment: workspaceName,
             content: effectiveText,
@@ -923,7 +921,6 @@ class ChatController extends GetxController {
           );
       if (previous == null) {
         messages.add(userMsg);
-        if (choice.isDirect) toolChoice.value = ChatToolChoice.auto;
         // Keep the physical attachment for inference and future retries.
         if (textController.text == draftText) {
           textController.clear();
@@ -960,7 +957,7 @@ class ChatController extends GetxController {
           final title = visibleText.length > 40
               ? '${visibleText.substring(0, 40)}...'
               : visibleText;
-          if (!choice.isDirect) _autoTitleFor[sendingSession.id] = title;
+          if (!transcribe) _autoTitleFor[sendingSession.id] = title;
           _updateSession(
             sendingSession.copyWith(title: title, lastMessage: visibleText),
           );
@@ -970,13 +967,10 @@ class ChatController extends GetxController {
       }
 
       final chatTools = Get.find<ChatToolService>();
-      if (choice.isDirect) {
+      if (transcribe) {
         final result = await chatTools.inProject(
           project,
-          () => _runDirectTool(
-            choice,
-            text,
-            fileType: fileType,
+          () => _transcribeAttachment(
             filePath: filePath,
             chatTools: chatTools,
             cancellation: cancellation,
@@ -1315,12 +1309,16 @@ class ChatController extends GetxController {
                 'Try a larger output limit or turn off local model thinking.';
           }
         } else {
+          final rawToolRouter = const {'llama', 'llama-server'}
+              .contains(inference.loadedModelRuntime.value);
           final canPlanTool = inferenceMode == 'local' &&
               inference.isModelLoaded.value &&
-              (allowed.contains('generate_image') ||
-                  allowed.contains('calculator')) &&
+              (rawToolRouter
+                  ? allowed.isNotEmpty
+                  : (allowed.contains('generate_image') ||
+                      allowed.contains('calculator'))) &&
               imgBase64 == null &&
-              fileName == null &&
+              (fileName == null || (rawToolRouter && fileType == 'audio')) &&
               explicitFiles.isEmpty &&
               visibleText.isNotEmpty &&
               visibleText.length <= 1000;
@@ -1340,6 +1338,84 @@ class ChatController extends GetxController {
             );
           }
 
+          Future<String> completeToolOptions(String sample, int limit) {
+            passes++;
+            return inference.generate(
+              prompt: sample,
+              source: toolCompletionSource,
+              maxTokens: limit,
+              stopSequences: const ['\n'],
+            );
+          }
+
+          Future<ChatToolPlan?> compactPlan() async {
+            final route =
+                (await completeToolOptions(toolRoutingPrompt(visibleText), 5))
+                    .trim();
+            if (!currentPlan()) return null;
+            ChatToolPlan? selected(String tool, Map<String, dynamic> args,
+                    {bool followUp = false}) =>
+                allowed.contains(tool)
+                    ? (
+                        call: ParsedToolCall(tool, args, ''),
+                        needsFollowUp: followUp
+                      )
+                    : null;
+            switch (route) {
+              case 'math':
+                if (!allowed.contains('calculator')) return null;
+                final arithmetic = literalArithmetic(visibleText);
+                if (arithmetic == null) return null;
+                final option = arithmetic.remaining.isEmpty
+                    ? 'none'
+                    : await completeToolOptions(
+                        precisionPayloadPrompt(arithmetic.remaining), 4);
+                if (!currentPlan()) return null;
+                return ChatToolLoop.calculatorPlan(
+                    arithmetic.expression, arithmetic.remaining, option);
+              case 'image':
+                if (fileType != null || !allowed.contains('generate_image')) {
+                  return null;
+                }
+                final followUp =
+                    await toolDecision(visualFollowUpInstructions, visibleText);
+                if (!currentPlan()) return null;
+                return selected('generate_image', {'prompt': visibleText},
+                    followUp:
+                        splitThoughtTags(followUp).answer.trim() == 'mixed');
+              case 'search':
+                if (visibleText.length > 200) return null;
+                return selected('web_search', {'query': visibleText},
+                    followUp: true);
+              case 'audio':
+                if (!allowed.contains('text_to_speech')) return null;
+                final raw = await completeToolOptions(
+                    speechPayloadPrompt(visibleText), 80);
+                if (!currentPlan()) return null;
+                final speech = speechArguments(raw, visibleText);
+                return speech == null
+                    ? null
+                    : selected('text_to_speech', speech);
+              case 'transcribe':
+                return selected('transcribe_attachment', {});
+              case 'file':
+                if (!allowed.contains('create_text_file')) return null;
+                final draft = await generateReply(
+                    'Write only the requested plain-text file contents. '
+                        'Preserve text supplied for saving. Do not add a preamble, '
+                        'Markdown fences, or a tool call.',
+                    '');
+                if (!currentPlan()) return null;
+                final content = splitThoughtTags(draft).answer.trim();
+                if (content.isEmpty ||
+                    draft.startsWith('ERROR:') ||
+                    content.startsWith(ChatToolLoop.callPrefix)) return null;
+                return selected('create_text_file', {'text': content});
+              default:
+                return null;
+            }
+          }
+
           Future<ToolLoopResult> runLoop() => ChatToolLoop(
                 maxSteps: _hive.getSetting<int>('chat_tool_step_limit') ?? 5,
               ).run(
@@ -1349,6 +1425,7 @@ class ChatController extends GetxController {
                     ? () async {
                         if (!currentPlan()) return null;
                         responseStage.value = 'Choosing how to respond';
+                        if (rawToolRouter) return compactPlan();
                         final choice = await toolDecision(
                             toolIntentInstructions, visibleText);
                         if (!currentPlan()) return null;
@@ -1489,7 +1566,7 @@ class ChatController extends GetxController {
         _directToolActive = false;
         isLoading.value = false;
         _scrollToBottom();
-        if (!choice.isDirect && posted) unawaited(_autoTitle(generationId));
+        if (!transcribe && posted) unawaited(_autoTitle(generationId));
       }
     }
   }
@@ -1544,51 +1621,24 @@ class ChatController extends GetxController {
     }
   }
 
-  Future<ToolLoopResult> _runDirectTool(
-    ChatToolChoice choice,
-    String text, {
-    required String? fileType,
+  Future<ToolLoopResult> _transcribeAttachment({
     required String? filePath,
     required ChatToolService chatTools,
     required Completer<void> cancellation,
     required int generationId,
   }) async {
+    const tool = 'transcribe_attachment';
     if (chatTools.mode.value == ChatToolMode.off ||
-        chatTools.policyFor('built-in', choice.tool, needsConfirm: false) ==
-            'block') {
-      return ToolLoopResult(
-          '${choice.label} is disabled. Check Tools & permissions.',
-          const [],
-          false);
+        chatTools.policyFor('built-in', tool, needsConfirm: false) == 'block') {
+      return const ToolLoopResult(
+          'Transcription is disabled. Check Tools & permissions.', [], false);
     }
-    if (choice == ChatToolChoice.transcribe) {
-      if (fileType != 'audio' ||
-          filePath == null ||
-          !await File(filePath).exists()) {
-        return const ToolLoopResult(
-            'Attach an audio file with + and send it to transcribe.',
-            [],
-            false);
-      }
-    } else if (text.isEmpty) {
-      return ToolLoopResult('${choice.hint} and try again.', const [], false);
+    if (filePath == null || !await File(filePath).exists()) {
+      return const ToolLoopResult(
+          'Reattach the audio file and try again.', [], false);
     }
-    final expression =
-        choice == ChatToolChoice.calculator ? literalArithmetic(text) : null;
-    final args = switch (choice) {
-      ChatToolChoice.search => {'query': text},
-      ChatToolChoice.calculator => {
-          'expression': expression != null && expression.remaining.isEmpty
-              ? expression.expression
-              : text,
-        },
-      ChatToolChoice.image => {'prompt': text},
-      ChatToolChoice.speak => {'text': text},
-      ChatToolChoice.transcribe => <String, dynamic>{},
-      ChatToolChoice.auto => throw StateError('No direct tool selected.'),
-    };
     return ChatToolLoop().run(
-      direct: ParsedToolCall(choice.tool, args, ''),
+      direct: const ParsedToolCall(tool, {}, ''),
       reply: (_, __) =>
           throw StateError('Direct tools do not use chat inference.'),
       execute: (call, abort) => _executeTurnTool(call, abort,
@@ -1598,7 +1648,7 @@ class ChatController extends GetxController {
           generationId: generationId),
       search: (query, abort) =>
           _searchTurnTool(query, abort, chatTools, cancellation),
-      allowed: {choice.tool},
+      allowed: const {tool},
       cancellation: cancellation.future,
       onStage: (stage) {
         if (generationId == _generationSerial) responseStage.value = stage;
@@ -1614,7 +1664,7 @@ class ChatController extends GetxController {
       onMetrics: (passes, invalid, tools, ms) {
         Get.find<AppLogService>().info('Direct Chat tool completed',
             details:
-                'tool=${choice.tool} passes=$passes invalidToolCalls=$invalid tools=$tools toolMs=$ms');
+                'tool=$tool passes=$passes invalidToolCalls=$invalid tools=$tools toolMs=$ms');
       },
     );
   }
@@ -1630,14 +1680,26 @@ class ChatController extends GetxController {
     final args = {...call.arguments};
     if (call.name == 'transcribe_attachment') {
       if (filePath == null) return 'Error: attach an audio file.';
-      if (chatTools.policyFor('built-in', call.name, needsConfirm: false) ==
-              'ask' &&
+      final policy =
+          chatTools.policyFor('built-in', call.name, needsConfirm: false);
+      if (policy == 'block') return 'The user has blocked this tool.';
+      if (policy == 'ask' &&
           !await confirmToolCall(call.name, 'built-in', args, abort: abort)) {
         return 'The user denied this tool call.';
       }
+      if (!Get.isRegistered<VoiceService>()) {
+        return 'Error: transcription is unavailable on this device.';
+      }
+      var stopped = cancellation.isCompleted;
+      unawaited(abort.then((_) => stopped = true));
       try {
-        return await Get.find<VoiceService>().transcribeFile(filePath,
-            language: args['language'] as String? ?? '', cancelled: abort);
+        final transcript = await Get.find<VoiceService>().transcribeFile(
+            filePath,
+            language: args['language'] as String? ?? '',
+            cancelled: abort);
+        if (transcript.isEmpty || stopped) return '';
+        final link = await chatTools.saveChatText(transcript, 'transcript');
+        return '$link\n$transcript';
       } on StateError catch (error) {
         return 'Error: ${error.message}';
       }
@@ -1896,7 +1958,7 @@ class ChatController extends GetxController {
       case 'docx':
         return 'Summarize this document.';
       case 'audio':
-        return 'Transcribe or analyze this audio.';
+        return 'Transcribe audio';
       case 'text':
         return 'Review this file.';
       default:
